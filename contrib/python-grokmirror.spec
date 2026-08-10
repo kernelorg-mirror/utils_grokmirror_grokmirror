@@ -28,7 +28,8 @@ mirrors.}
 Summary:       %{summary}
 Requires(pre): shadow-utils
 Requires:      git-core, python3-packaging, python3-requests
-BuildRequires: python3-devel, python3-setuptools
+BuildRequires: python3-devel
+BuildRequires: pyproject-rpm-macros
 BuildRequires: systemd
 Obsoletes:     python-%{srcname} < 2, python2-%{srcname} < 2
 
@@ -38,10 +39,10 @@ Obsoletes:     python-%{srcname} < 2, python2-%{srcname} < 2
 %autosetup -n %{srcname}-%{version}
 
 %build
-%py3_build
+%pyproject_wheel
 
 %install
-%py3_install
+%pyproject_install
 
 %{__mkdir_p} -m 0755 \
     %{buildroot}%{userhome} \

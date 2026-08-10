@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grokmirror"
+description = "Smartly mirror git repositories that use grokmirror"
+readme = { file = "README.rst", content-type = "text/x-rst" }
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE.txt"]
+authors = [
+    { name = "Konstantin Ryabitsev", email = "konstantin@linuxfoundation.org" }
+]
+keywords = ["git", "mirroring", "repositories"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: System :: Archiving :: Mirroring",
+]
+dependencies = [
+    "packaging",
+    "requests",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git"
+Repository = "https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git"
+Tracker = "https://github.com/mricon/grokmirror/issues"
+
+[project.scripts]
+grok-bundle = "grokmirror.bundle:command"
+grok-dumb-pull = "grokmirror.dumb_pull:command"
+grok-fsck = "grokmirror.fsck:command"
+grok-manifest = "grokmirror.manifest:command"
+grok-pi-indexer = "grokmirror.pi_indexer:command"
+grok-pi-piper = "grokmirror.pi_piper:command"
+grok-pull = "grokmirror.pull:command"
+
+[dependency-groups]
+dev = [
+    "build",
+    "mypy",
+    "pyright",
+    "pytest",
+    "ruff",
+    "ty",
+    "types-requests",
+]
+
+[tool.setuptools]
+packages = ["grokmirror"]
+
+[tool.setuptools.dynamic]
+version = { attr = "grokmirror.VERSION" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short"
+
+[tool.mypy]
+# Not yet `strict = true`: grokmirror predates type annotations, so the strict
+# ratchet happens module by module. See the top of ci.sh for the plan.
+python_version = "3.9"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[tool.pyright]
+# pyright automatically ignores virtual environments and other directories, but
+# once we specify `exclude`, we're on our own. The matrix in ci-matrix.sh
+# creates .venv-<version> environments, so match them all. See
+# https://github.com/microsoft/pyright/issues/9057#issuecomment-2366938099.
+exclude = [".venv*"]
+pythonVersion = "3.9"
+typeCheckingMode = "standard"
+
+[tool.ty.rules]
+# `all = "error"` (as in liblore) once the annotation backlog is paid down.
+
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["ARG", "I"]
+
+[tool.ruff.format]
+quote-style = "single"

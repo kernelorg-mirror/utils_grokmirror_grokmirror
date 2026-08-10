@@ -1,3 +1,6 @@
 include LICENSE.txt
 include *.rst
 include *.conf
+include ci.sh ci-matrix.sh
+recursive-include man *.rst *.1
+recursive-include tests *.py

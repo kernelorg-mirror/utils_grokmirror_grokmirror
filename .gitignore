@@ -3,6 +3,13 @@
 *.swp
 *.pdf
 *~
+__pycache__/
 dist
 build
 *.egg-info
+.venv/
+.venv-*/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+uv.lock

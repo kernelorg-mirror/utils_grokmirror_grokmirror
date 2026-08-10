@@ -40,7 +40,7 @@ from requests.packages.urllib3.util.retry import Retry
 from typing import Optional, Tuple, Union
 
 
-VERSION = '2.1.0-dev'
+VERSION = '3.0-dev'
 MANIFEST_LOCKH = None
 REPO_LOCKH = dict()
 GITBIN = '/usr/bin/git'

@@ -1,5 +1,8 @@
-v2.1.0 (TBD)
-------------
+v3.0 (TBD)
+----------
+- Require Python 3.9 or newer
+- Switch to a pyproject.toml-based build (setup.py is gone; downstream
+  packaging should use the PEP 517 interface)
 - Add new hook post_work_complete_hook that fires after all work is
   complete and grokmirror goes idle
 - Add new command grok-pi-indexer for indexing public-inbox mirrored
