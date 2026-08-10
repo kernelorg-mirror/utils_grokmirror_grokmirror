@@ -229,7 +229,7 @@ def get_human_size(kbsize):
         if abs(num) < 1024.0:
             return f'{num:3.2f} {unit}B'
         num /= 1024.0
-    return '{:.2f}{} TiB'.format(*num)
+    return f'{num:.2f} TiB'
 
 
 def set_repo_reclone(fullpath, reason):
