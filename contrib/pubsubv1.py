@@ -40,12 +40,12 @@ class PubsubListener:
     # Signature is dictated by falcon, which passes both positionally.
     def on_get(self, req, resp):  # noqa: ARG002
         resp.status = falcon.HTTP_200
-        resp.body = "We don't serve GETs here\n"
+        resp.text = "We don't serve GETs here\n"
 
     def on_post(self, req, resp):
         if not req.content_length:
             resp.status = falcon.HTTP_500
-            resp.body = 'Payload required\n'
+            resp.text = 'Payload required\n'
             return
 
         try:
@@ -53,7 +53,7 @@ class PubsubListener:
         except ValueError:
             # JSONDecodeError and UnicodeDecodeError are both ValueErrors
             resp.status = falcon.HTTP_500
-            resp.body = 'Failed to parse payload as json\n'
+            resp.text = 'Failed to parse payload as json\n'
             return
 
         try:
@@ -61,42 +61,42 @@ class PubsubListener:
             repo = doc['message']['attributes']['repo']
         except (KeyError, TypeError):
             resp.status = falcon.HTTP_500
-            resp.body = 'Not a pubsub v1 payload\n'
+            resp.text = 'Not a pubsub v1 payload\n'
             return
 
         if len(proj) > MAX_PROJ_LEN or len(repo) > MAX_REPO_LEN:
             resp.status = falcon.HTTP_500
-            resp.body = 'Repo or project value too long\n'
+            resp.text = 'Repo or project value too long\n'
             return
 
         # Proj shouldn't contain slashes or whitespace
         if re.search(r'[\s/]', proj):
             resp.status = falcon.HTTP_500
-            resp.body = 'Invalid characters in project name\n'
+            resp.text = 'Invalid characters in project name\n'
             return
 
         # Repo shouldn't contain whitespace
         if re.search(r'\s', proj):
             resp.status = falcon.HTTP_500
-            resp.body = 'Invalid characters in repo name\n'
+            resp.text = 'Invalid characters in repo name\n'
             return
 
         confdir = os.environ.get('GROKMIRROR_CONFIG_DIR', '/etc/grokmirror')
         cfgfile = os.path.join(confdir, f'{proj}.conf')
         if not os.access(cfgfile, os.R_OK):
             resp.status = falcon.HTTP_500
-            resp.body = 'Invalid project name\n'
+            resp.text = 'Invalid project name\n'
             return
         config = ConfigParser(interpolation=ExtendedInterpolation())
         config.read(cfgfile)
         sockfile = config['pull'].get('socket') if 'pull' in config else None
         if not sockfile:
             resp.status = falcon.HTTP_500
-            resp.body = 'Invalid project configuration (no socket defined)\n'
+            resp.text = 'Invalid project configuration (no socket defined)\n'
             return
         if not os.access(sockfile, os.W_OK):
             resp.status = falcon.HTTP_500
-            resp.body = 'Invalid project configuration (socket does not exist or is not writable)\n'
+            resp.text = 'Invalid project configuration (socket does not exist or is not writable)\n'
             return
 
         try:
@@ -105,12 +105,12 @@ class PubsubListener:
                 client.send(repo.encode())
         except OSError:
             resp.status = falcon.HTTP_500
-            resp.body = 'Unable to communicate with the socket\n'
+            resp.text = 'Unable to communicate with the socket\n'
             return
 
         resp.status = falcon.HTTP_204
 
 
-app = falcon.API()
+app = falcon.App()
 pl = PubsubListener()
 app.add_route('/pubsub_v1', pl)
