@@ -155,7 +155,9 @@ def lock_repo(fullpath, nonblocking=False):
     repolock = _lockname(fullpath)
 
     logger.debug('Attempting to exclusive-lock %s', repolock)
-    lockfh = open(repolock, 'w')
+    # Deliberately not a context manager: the handle is stashed in REPO_LOCKH
+    # and released by unlock_repo().
+    lockfh = open(repolock, 'w')  # noqa: SIM115
 
     if nonblocking:
         flags = LOCK_EX | LOCK_NB
@@ -921,7 +923,8 @@ def manifest_lock(manifile):
         logger.debug('Manifest %s already locked', manifile)
 
     manilock = _lockname(manifile)
-    MANIFEST_LOCKH = open(manilock, 'w')
+    # Deliberately not a context manager: released by manifest_unlock().
+    MANIFEST_LOCKH = open(manilock, 'w')  # noqa: SIM115
     logger.debug('Attempting to lock %s', manilock)
     lockf(MANIFEST_LOCKH, LOCK_EX)
     logger.debug('Manifest lock obtained')
@@ -956,14 +959,11 @@ def read_manifest(manifile, wait=False):
         logger.info(' manifest: no local manifest, assuming initial run')
         return {}
 
-    if manifile.find('.gz') > 0:
-        fh = gzip.open(manifile, 'rb')
-    else:
-        fh = open(manifile, 'rb')
+    opener = gzip.open if manifile.find('.gz') > 0 else open
 
     logger.debug('Reading %s', manifile)
-    jdata = fh.read().decode('utf-8')
-    fh.close()
+    with opener(manifile, 'rb') as fh:
+        jdata = fh.read().decode('utf-8')
 
     # noinspection PyBroadException
     try:

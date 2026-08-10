@@ -515,7 +515,9 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
     # Lock the tree to make sure we only run one instance
     lockfile = os.path.join(st_dir, f'.{os.path.basename(statusfile)}.lock')
     logger.debug('Attempting to obtain lock on %s', lockfile)
-    flockh = open(lockfile, 'w')
+    # Deliberately not a context manager: the lock must stay held for the rest
+    # of the run and is released explicitly further down.
+    flockh = open(lockfile, 'w')  # noqa: SIM115
     try:
         lockf(flockh, LOCK_EX | LOCK_NB)
     except OSError:
@@ -530,7 +532,6 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
 
     if os.path.exists(statusfile):
         logger.info('   status: reading %s', statusfile)
-        stfh = open(statusfile, 'r')
         # noinspection PyBroadException
         try:
             # Format of the status file:
@@ -546,7 +547,8 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
             #    ...
             #  }
 
-            status = json.loads(stfh.read())
+            with open(statusfile) as stfh:
+                status = json.loads(stfh.read())
         except:
             logger.critical('Failed to parse %s', statusfile)
             lockf(flockh, LOCK_UN)
