@@ -177,7 +177,9 @@ def run_git_command(
 def _lockname(fullpath):
     lockpath = os.path.dirname(fullpath)
     lockname = f'.{os.path.basename(fullpath)}.lock'
-    if not os.path.exists(lockpath):
+    # dirname() is empty for a bare filename like "manifest.js.gz", and
+    # makedirs('') raises instead of being a no-op. Lock next to it in the cwd.
+    if lockpath and not os.path.exists(lockpath):
         os.makedirs(lockpath)
     repolock = os.path.join(lockpath, lockname)
     return repolock
