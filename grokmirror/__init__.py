@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (C) 2013-2020 by The Linux Foundation and contributors
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,31 +13,27 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import sys
-
-import time
-import json
+import datetime
 import fnmatch
-import subprocess
-import requests
+import gzip
+import hashlib
+import json
 import logging
 import logging.handlers
-import hashlib
+import os
 import pathlib
-import uuid
-import tempfile
 import shutil
-import gzip
-import datetime
-
-from fcntl import lockf, LOCK_EX, LOCK_UN, LOCK_NB
-
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
-
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
 from typing import Optional, Tuple, Union
 
+import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 VERSION = '3.0-dev'
 MANIFEST_LOCKH = None
@@ -173,7 +168,7 @@ def lock_repo(fullpath, nonblocking=False):
 
 def unlock_repo(fullpath):
     global REPO_LOCKH
-    if fullpath in REPO_LOCKH.keys():
+    if fullpath in REPO_LOCKH:
         logger.debug('Unlocking %s', fullpath)
         lockf(REPO_LOCKH[fullpath], LOCK_UN)
         REPO_LOCKH[fullpath].close()
@@ -250,7 +245,7 @@ def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
             if len(contents) and contents.find(b'edit this file') < 0:
                 # We don't need to tell mirrors to edit this file
                 description = contents.decode(errors='replace')
-    except IOError:
+    except OSError:
         pass
 
     entries = get_config_from_git(fullpath, r'gitweb\..*')
@@ -277,7 +272,7 @@ def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
     try:
         with open(os.path.join(fullpath, 'HEAD')) as fh:
             head = fh.read().strip()
-    except IOError:
+    except OSError:
         pass
 
     forkgroup = None
@@ -318,7 +313,7 @@ def get_altrepo(fullpath):
             contents = fh.read().strip()
             if len(contents) > 8 and contents[-8:] == '/objects':
                 altdir = os.path.realpath(contents[:-8])
-    except IOError:
+    except OSError:
         pass
 
     return altdir
@@ -464,7 +459,7 @@ def remove_from_objstore(obstrepo, fullpath):
     run_git_command(obstrepo, args)
     try:
         os.unlink(os.path.join(obstrepo, 'grokmirror.%s.fingerprint' % virtref))
-    except (IOError, FileNotFoundError):
+    except (OSError, FileNotFoundError):
         pass
     return True
 
@@ -507,7 +502,7 @@ def add_repo_to_objstore(obstrepo, fullpath):
     knownsiblings = set()
     if os.path.exists(telltale):
         with open(telltale) as fh:
-            for line in fh.readlines():
+            for line in fh:
                 line = line.strip()
                 if not len(line) or line[0] == '#':
                     continue
@@ -552,7 +547,7 @@ def _fetch_objstore_repo_using_plumbing(srcrepo, obstrepo, virtref):
         return False
     srcset = set(out.strip().split('\n'))
 
-    dstargs = ['for-each-ref', f'--format=%(objectname) %(refname)', f'refs/virtual/{virtref}']
+    dstargs = ['for-each-ref', '--format=%(objectname) %(refname)', f'refs/virtual/{virtref}']
     ecode, out, err = run_git_command(obstrepo, dstargs)
     if ecode > 0:
         logger.debug('Could not for-each-ref %s: %s', obstrepo, err)
@@ -627,7 +622,7 @@ def fetch_objstore_repo(obstrepo, fullpath=None, pack_refs=False, use_plumbing=F
                     lock_repo(obstrepo, nonblocking=True)
                     run_git_command(obstrepo, ['pack-refs'])
                     unlock_repo(obstrepo)
-                except IOError:
+                except OSError:
                     # Next run will take care of it
                     pass
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (C) 2013-2020 by The Linux Foundation and contributors
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,10 +13,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import datetime
+import logging
 import os
 import sys
-import logging
-import datetime
 
 import grokmirror
 
@@ -379,7 +378,7 @@ def grok_manifest(
                 grokmirror.fetch_objstore_repo(altrepo, gitdir, use_plumbing=objstore_uses_plumbing)
                 grokmirror.unlock_repo(altrepo)
                 fetched.add(altrepo)
-            except IOError:
+            except OSError:
                 # grok-fsck will fetch this one, then
                 pass
 

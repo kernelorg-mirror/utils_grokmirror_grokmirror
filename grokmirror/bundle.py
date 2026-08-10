@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (C) 2013-2020 by The Linux Foundation and contributors
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,13 +13,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
-import os
-import logging
 import fnmatch
-import grokmirror
-
+import logging
+import os
+import sys
 from pathlib import Path
+
+import grokmirror
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)

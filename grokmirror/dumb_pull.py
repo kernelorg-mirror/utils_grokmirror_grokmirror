@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (C) 2013-2018 by The Linux Foundation and contributors
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,12 +13,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import fnmatch
+import logging
 import os
+import subprocess
 
 import grokmirror
-import logging
-import fnmatch
-import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +49,7 @@ def git_remote_update(args, fullpath):
         debug = list()
         warn = list()
         for line in error.split('\n'):
-            if line.find('From ') == 0:
-                debug.append(line)
-            elif line.find('-> ') > 0:
+            if line.find('From ') == 0 or line.find('-> ') > 0:
                 debug.append(line)
             else:
                 warn.append(line)
@@ -69,7 +66,7 @@ def dumb_pull_repo(gitdir, remotes, svn=False):
 
     try:
         grokmirror.lock_repo(gitdir, nonblocking=True)
-    except IOError:
+    except OSError:
         logger.info('Could not obtain exclusive lock on %s', gitdir)
         logger.info('\tAssuming another process is running.')
         return False

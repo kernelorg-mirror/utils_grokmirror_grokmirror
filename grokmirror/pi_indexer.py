@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 #
 # A hook to properly initialize and index mirrored public-inbox repositories.
 
 import logging
 import os
-import sys
+import pathlib
 import re
 import shutil
-import pathlib
-
-import grokmirror
-
+import sys
 from fnmatch import fnmatch
 from typing import Tuple
+
+import grokmirror
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)

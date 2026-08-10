@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (C) 2013-2020 by The Linux Foundation and contributors
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,25 +13,22 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-
-import grokmirror
-import logging
-
-import time
-import json
-import random
 import datetime
-import shutil
-import gc
 import fnmatch
+import gc
 import io
+import json
+import logging
+import os
+import random
+import shutil
 import smtplib
-
+import time
+from email.message import EmailMessage
+from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
 from pathlib import Path
 
-from email.message import EmailMessage
-from fcntl import lockf, LOCK_EX, LOCK_UN, LOCK_NB
+import grokmirror
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
@@ -530,7 +526,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
     flockh = open(lockfile, 'w')
     try:
         lockf(flockh, LOCK_EX | LOCK_NB)
-    except IOError:
+    except OSError:
         logger.info('Could not obtain exclusive lock on %s', lockfile)
         logger.info('Assuming another process is running.')
         return 0
@@ -889,7 +885,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                 grokmirror.lock_repo(fullpath, nonblocking=True)
                 run_git_prune(fullpath, config)
                 grokmirror.unlock_repo(fullpath)
-            except IOError:
+            except OSError:
                 pass
 
         if repack_level and (cfg_precious == 'always' and check_precious_objects(fullpath)):
@@ -1007,7 +1003,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                     r_fp = fh.read().strip()
                 if l_fp == r_fp:
                     fetch = False
-            except IOError:
+            except OSError:
                 pass
 
             gitdir = '/' + os.path.relpath(childpath, toplevel)
@@ -1345,7 +1341,7 @@ def grok_fsck(
         if not subject:
             import platform
 
-            subject = 'grok-fsck errors on {} ({})'.format(platform.node(), cfgfile)
+            subject = f'grok-fsck errors on {platform.node()} ({cfgfile})'
         msg['Subject'] = subject
         from_addr = config['fsck'].get('report_from', 'root')
         msg['From'] = from_addr

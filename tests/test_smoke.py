@@ -46,7 +46,7 @@ def test_module_imports(modname: str) -> None:
 def test_module_has_command_entry_point(modname: str) -> None:
     # Every console script in pyproject.toml points at a `command` callable.
     mod = importlib.import_module(modname)
-    assert callable(getattr(mod, 'command'))
+    assert callable(mod.command)
 
 
 def test_version_is_exported() -> None:

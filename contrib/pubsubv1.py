@@ -22,13 +22,13 @@
 #
 # Any other attributes or the "data" field are ignored.
 
-import falcon
 import json
 import os
-import socket
 import re
-
+import socket
 from configparser import ConfigParser, ExtendedInterpolation
+
+import falcon
 
 # Some sanity defaults
 MAX_PROJ_LEN = 32
@@ -36,7 +36,7 @@ MAX_REPO_LEN = 1024
 
 
 # noinspection PyBroadException
-class PubsubListener(object):
+class PubsubListener:
     def on_get(self, req, resp):
         resp.status = falcon.HTTP_200
         resp.body = "We don't serve GETs here\n"
@@ -80,7 +80,7 @@ class PubsubListener(object):
             return
 
         confdir = os.environ.get('GROKMIRROR_CONFIG_DIR', '/etc/grokmirror')
-        cfgfile = os.path.join(confdir, '{}.conf'.format(proj))
+        cfgfile = os.path.join(confdir, f'{proj}.conf')
         if not os.access(cfgfile, os.R_OK):
             resp.status = falcon.HTTP_500
             resp.body = 'Invalid project name\n'

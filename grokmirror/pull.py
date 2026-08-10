@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Copyright (C) 2013-2020 by The Linux Foundation and contributors
 #
 # This program is free software: you can redistribute it and/or modify
@@ -14,29 +13,27 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import stat
-import sys
-
-import grokmirror
-import logging
-import requests
-import time
+import calendar
+import fnmatch
 import gzip
 import json
-import fnmatch
-import shutil
-import tempfile
-import signal
-import shlex
-
-import calendar
-import uuid
-
+import logging
 import multiprocessing as mp
+import os
 import queue
+import shlex
+import shutil
+import signal
+import stat
+import sys
+import tempfile
+import time
+import uuid
+from socketserver import StreamRequestHandler, ThreadingMixIn, UnixStreamServer
 
-from socketserver import UnixStreamServer, StreamRequestHandler, ThreadingMixIn
+import requests
+
+import grokmirror
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
@@ -193,7 +190,7 @@ def spa_worker(config, q_spa, pauseonload):
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
         try:
             grokmirror.lock_repo(fullpath, nonblocking=True)
-        except IOError:
+        except OSError:
             # We'll get it during grok-fsck
             continue
 
@@ -254,8 +251,7 @@ def objstore_repo_preload(config, obstrepo):
         resp.raise_for_status()
         logger.info(' objstore: downloading %s.bundle', bname)
         with open(bfile, 'wb') as fh:
-            for chunk in resp.iter_content(chunk_size=8192):
-                fh.write(chunk)
+            fh.writelines(resp.iter_content(chunk_size=8192))
         resp.close()
     except:  # noqa
         # Make sure we don't leave .bundle files lying around
@@ -305,7 +301,7 @@ def pull_worker(config, q_pull, q_spa, q_done):
 
         try:
             grokmirror.lock_repo(fullpath, nonblocking=True)
-        except IOError:
+        except OSError:
             # Take a quick nap and put it back into queue
             logger.info('    defer: %s (locked)', gitdir)
             time.sleep(5)
@@ -355,7 +351,7 @@ def pull_worker(config, q_pull, q_spa, q_done):
                 if altrepo:
                     grokmirror.set_altrepo(fullpath, altrepo)
                 action = 'pull'
-            except (PermissionError, IOError) as ex:
+            except (OSError, PermissionError) as ex:
                 logger.critical('Unable to remove %s: %s', fullpath, str(ex))
                 success = False
 
@@ -481,7 +477,7 @@ def cull_manifest(manifest, config):
                 if excluded:
                     continue
 
-                culled[gitdir] = manifest[gitdir]
+                culled[gitdir] = repoinfo
 
     return culled
 
@@ -510,7 +506,7 @@ def fix_remotes(toplevel, gitdir, site, config):
             ffonly = True
             break
     if ffonly:
-        grokmirror.set_git_config(fullpath, 'remote.{}.fetch'.format(remotename), 'refs/*:refs/*')
+        grokmirror.set_git_config(fullpath, f'remote.{remotename}.fetch', 'refs/*:refs/*')
         logger.debug('\tset %s as %s (ff-only)', remotename, url)
     else:
         logger.debug('\tset %s as %s', remotename, url)
@@ -549,7 +545,7 @@ def set_repo_params(fullpath, repoinfo):
         if contents != head:
             logger.debug('Setting %s HEAD to: %s', fullpath, head)
             with open(headfile, 'w') as fh:
-                fh.write('{}\n'.format(head))
+                fh.write(f'{head}\n')
 
 
 def set_agefile(toplevel, gitdir, last_modified):
@@ -639,13 +635,7 @@ def pull_repo(fullpath, remotename):
         debug = list()
         warn = list()
         for line in error.split('\n'):
-            if line.find('From ') == 0:
-                debug.append(line)
-            elif line.find('-> ') > 0:
-                debug.append(line)
-            elif line.find('remote: warning:') == 0:
-                debug.append(line)
-            elif line.find('ControlSocket') >= 0:
+            if line.find('From ') == 0 or line.find('-> ') > 0 or line.find('remote: warning:') == 0 or line.find('ControlSocket') >= 0:
                 debug.append(line)
             elif not success:
                 warn.append(line)
@@ -680,7 +670,7 @@ def write_projects_list(config, manifest):
 
             # Always remove leading slash, otherwise cgit breaks
             pgitdir = pgitdir.lstrip('/')
-            fh.write('{}\n'.format(pgitdir).encode())
+            fh.write(f'{pgitdir}\n'.encode())
 
             if add_symlinks and 'symlinks' in manifest[gitdir]:
                 # Do the same for symlinks
@@ -690,7 +680,7 @@ def write_projects_list(config, manifest):
                         symlink = symlink[len(trimtop) :]
 
                     symlink = symlink.lstrip('/')
-                    fh.write('{}\n'.format(symlink).encode())
+                    fh.write(f'{symlink}\n'.encode())
 
         os.fsync(fd)
         fh.close()
@@ -730,13 +720,13 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             except json.JSONDecodeError as ex:
                 logger.warning('Failed to parse output from %s', r_mani_cmd)
                 logger.warning('Error was: %s', ex)
-                raise IOError('Failed to parse output from %s (%s)' % (r_mani_cmd, ex))
+                raise OSError('Failed to parse output from %s (%s)' % (r_mani_cmd, ex))
         elif ecode == 127:
             logger.info(' manifest: unchanged')
             return
         elif ecode == 1:
             logger.warning('Executing %s failed, exiting', r_mani_cmd, ecode)
-            raise IOError('Failed executing %s' % r_mani_cmd)
+            raise OSError('Failed executing %s' % r_mani_cmd)
         else:
             # Non-fatal errors for all other exit codes
             logger.warning(' manifest: executing %s returned %s', r_mani_cmd, ecode)
@@ -744,14 +734,14 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
 
         if not len(r_manifest):
             logger.warning(' manifest: empty, ignoring')
-            raise IOError('Empty manifest returned by %s' % r_mani_cmd)
+            raise OSError('Empty manifest returned by %s' % r_mani_cmd)
 
     else:
         r_mani_status_path = os.path.join(os.path.dirname(l_mani_path), '.%s.remote' % os.path.basename(l_mani_path))
         try:
             with open(r_mani_status_path, 'r') as fh:
                 r_mani_status = json.loads(fh.read())
-        except (IOError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):
             logger.debug('Could not read %s', r_mani_status_path)
             r_mani_status = dict()
         r_last_fetched = r_mani_status.get('last-fetched', 0)
@@ -764,7 +754,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             r_mani_url = r_mani_url.replace('file://', '')
             if not os.path.exists(r_mani_url):
                 logger.critical('Remote manifest not found in %s! Quitting!', r_mani_url)
-                raise IOError('Remote manifest not found in %s' % r_mani_url)
+                raise OSError('Remote manifest not found in %s' % r_mani_url)
 
             fstat = os.stat(r_mani_url)
             r_last_modified = fstat[8]
@@ -779,7 +769,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             # Don't accept empty manifests -- that indicates something is wrong
             if not len(r_manifest):
                 logger.warning('Remote manifest empty or unparseable! Quitting.')
-                raise IOError('Empty manifest in %s' % r_mani_url)
+                raise OSError('Empty manifest in %s' % r_mani_url)
 
         else:
             session = grokmirror.get_requests_session()
@@ -797,7 +787,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             except requests.exceptions.RequestException as ex:
                 logger.warning('Could not fetch %s', r_mani_url)
                 logger.warning('Server returned: %s', ex)
-                raise IOError('Remote server returned an error: %s' % ex)
+                raise OSError('Remote server returned an error: %s' % ex)
 
             if res.status_code == 304:
                 # No change to the manifest, nothing to do
@@ -807,7 +797,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             if res.status_code > 200:
                 logger.warning('Could not fetch %s', r_mani_url)
                 logger.warning('Server returned status: %s', res.status_code)
-                raise IOError('Remote server returned an error: %s' % res.status_code)
+                raise OSError('Remote server returned an error: %s' % res.status_code)
 
             r_last_modified = res.headers['Last-Modified']
             r_last_modified = time.strptime(r_last_modified, '%a, %d %b %Y %H:%M:%S %Z')
@@ -833,7 +823,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             except Exception as ex:
                 logger.warning('Failed to parse %s', r_mani_url)
                 logger.warning('Error was: %s', ex)
-                raise IOError('Failed to parse %s (%s)' % (r_mani_url, ex))
+                raise OSError('Failed to parse %s (%s)' % (r_mani_url, ex))
 
         # Record for the next run
         with open(r_mani_status_path, 'w') as fh:
@@ -901,9 +891,9 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
                 q_mani.put((gitdir, repoinfo, 'fix_remotes'))
                 continue
 
-            r_desc = r_culled[gitdir].get('description')
-            r_owner = r_culled[gitdir].get('owner')
-            r_head = r_culled[gitdir].get('head')
+            r_desc = repoinfo.get('description')
+            r_owner = repoinfo.get('owner')
+            r_head = repoinfo.get('head')
 
             l_desc = l_manifest[gitdir].get('description')
             l_owner = l_manifest[gitdir].get('owner')
@@ -931,7 +921,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
                 q_mani.put((gitdir, repoinfo, 'pull'))
                 continue
 
-            if my_fingerprint == r_culled[gitdir]['fingerprint']:
+            if my_fingerprint == repoinfo['fingerprint']:
                 logger.debug('Fingerprints match, skipping %s', gitdir)
                 continue
 
@@ -1150,7 +1140,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
             if stat.S_ISSOCK(mode):
                 os.unlink(sockfile)
             else:
-                raise IOError('File exists but is not a socket: %s' % sockfile)
+                raise OSError('File exists but is not a socket: %s' % sockfile)
 
         sw = mp.Process(target=socket_worker, args=(config, q_mani, sockfile))
         sw.daemon = True
@@ -1352,7 +1342,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
 
             try:
                 grokmirror.lock_repo(fullpath, nonblocking=True)
-            except IOError:
+            except OSError:
                 if not runonce:
                     q_todo.put((gitdir, repoinfo, q_action))
                 continue

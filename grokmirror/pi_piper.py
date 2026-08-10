@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 #
 # This is a ready-made post_update_hook script for piping messages from
 # mirrored public-inbox repositories to arbitrary commands (e.g. procmail).
@@ -7,14 +6,14 @@
 
 __author__ = 'Konstantin Ryabitsev <konstantin@linuxfoundation.org>'
 
-import os
-import sys
-import grokmirror
 import fnmatch
 import logging
+import os
 import shlex
-
+import sys
 from typing import Optional
+
+import grokmirror
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
@@ -217,7 +216,7 @@ def command():
     else:
         loglevel = logging.INFO
 
-    shallow = config[section].getboolean('shallow', False)  # noqa
+    shallow = config[section].getboolean('shallow', False)
 
     logger = grokmirror.init_logger('pull', logfile, loglevel, opts.verbose)
 
