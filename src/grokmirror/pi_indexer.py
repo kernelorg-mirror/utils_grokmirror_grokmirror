@@ -1,6 +1,7 @@
 #
 # A hook to properly initialize and index mirrored public-inbox repositories.
 
+import argparse
 import logging
 import os
 import pathlib
@@ -15,7 +16,7 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 
-def get_pi_repos(inboxdir: str) -> list:
+def get_pi_repos(inboxdir: str) -> list[str]:
     members = []
     at = 0
     while True:
@@ -28,7 +29,7 @@ def get_pi_repos(inboxdir: str) -> list:
     return members
 
 
-def index_pi_inbox(fullpath: str, opts) -> bool:
+def index_pi_inbox(fullpath: str, opts: argparse.Namespace) -> bool:
     gdir, pdir = get_git_pi_dir(opts, fullpath)
     logger.info('pi-index %s', gdir)
     success = True
@@ -62,7 +63,7 @@ def index_pi_inbox(fullpath: str, opts) -> bool:
     return success
 
 
-def init_pi_inbox(gdir: str, pdir: str, opts) -> bool:
+def init_pi_inbox(gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
     # for boost values, we look at the number of entries
     boosts = []
     if opts.listid_priority:
@@ -199,7 +200,7 @@ def init_pi_inbox(gdir: str, pdir: str, opts) -> bool:
     return success
 
 
-def get_inboxdirs(repos: list) -> set:
+def get_inboxdirs(repos: list[str]) -> set[str]:
     inboxdirs = set()
     for repo in repos:
         # Check that it's a public-inbox repo -- it should have .../git/N.git at the end
@@ -210,7 +211,7 @@ def get_inboxdirs(repos: list) -> set:
     return inboxdirs
 
 
-def process_inboxdirs(inboxdirs: set, opts, init: bool = False):
+def process_inboxdirs(inboxdirs: set[str], opts: argparse.Namespace, init: bool = False) -> None:
     if not len(inboxdirs):
         logger.info('Nothing to do')
         sys.exit(0)
@@ -237,7 +238,7 @@ def process_inboxdirs(inboxdirs: set, opts, init: bool = False):
             logger.critical('Unable to index %s', inboxdir)
 
 
-def get_git_pi_dir(opts, fullpath: str) -> tuple[str, str]:
+def get_git_pi_dir(opts: argparse.Namespace, fullpath: str) -> tuple[str, str]:
     fullpath = os.path.realpath(fullpath)
     if not opts.pitoplevel:
         # Public-inbox is in the same dir
@@ -249,7 +250,7 @@ def get_git_pi_dir(opts, fullpath: str) -> tuple[str, str]:
     return fullpath, os.path.join(pitop, inboxname)
 
 
-def cmd_init(opts):
+def cmd_init(opts: argparse.Namespace) -> None:
     if opts.inboxdir:
         inboxdirs = get_inboxdirs(opts.inboxdir)
         if opts.forceinit:
@@ -276,12 +277,12 @@ def cmd_init(opts):
     process_inboxdirs(inboxdirs, opts, init=True)
 
 
-def cmd_update(opts):
+def cmd_update(opts: argparse.Namespace) -> None:
     inboxdirs = get_inboxdirs(opts.repo)
     process_inboxdirs(inboxdirs, opts)
 
 
-def cmd_extindex(opts):
+def cmd_extindex(opts: argparse.Namespace) -> None:
     env = {
         'PI_CONFIG': opts.piconfig,
         'PATH': os.getenv('PATH', '/bin:/usr/bin:/usr/local/bin'),
@@ -302,8 +303,7 @@ def cmd_extindex(opts):
         sys.exit(1)
 
 
-def command():
-    import argparse
+def command() -> None:
 
     global logger
 

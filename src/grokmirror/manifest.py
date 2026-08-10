@@ -13,6 +13,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
+import argparse
 import logging
 import os
 import sys
@@ -25,7 +28,7 @@ logger = logging.getLogger(__name__)
 objstore_uses_plumbing = False
 
 
-def update_manifest(manifest, toplevel, fullpath, usenow, ignorerefs):
+def update_manifest(manifest: dict, toplevel: str, fullpath: str, usenow: bool, ignorerefs: list[str] | None) -> None:
     logger.debug('Examining %s', fullpath)
     if not grokmirror.is_bare_git_repo(fullpath):
         logger.critical('Error opening %s.', fullpath)
@@ -75,7 +78,7 @@ def update_manifest(manifest, toplevel, fullpath, usenow, ignorerefs):
     manifest[gitdir]['reference'] = reference
 
 
-def set_symlinks(manifest, toplevel, symlinks):
+def set_symlinks(manifest: dict, toplevel: str, symlinks: list[str]) -> None:
     for symlink in symlinks:
         target = os.path.realpath(symlink)
         if not os.path.exists(target):
@@ -111,17 +114,15 @@ def set_symlinks(manifest, toplevel, symlinks):
                 manifest[gitdir]['reference'] = tgtgitdir
 
 
-def purge_manifest(manifest, toplevel, gitdirs):
+def purge_manifest(manifest: dict, toplevel: str, gitdirs: list[str]) -> None:
     for oldrepo in list(manifest):
         if os.path.join(toplevel, oldrepo.lstrip('/')) not in gitdirs:
             logger.info(' manifest: purged %s (gone)', oldrepo)
             manifest.pop(oldrepo)
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     global objstore_uses_plumbing
-
-    import argparse
 
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
@@ -260,21 +261,21 @@ def parse_args():
 
 
 def grok_manifest(
-    manifile,
-    toplevel,
-    paths=None,
-    logfile=None,
-    usenow=False,
-    check_export_ok=False,
-    purge=False,
-    remove=False,
-    pretty=False,
-    ignore=None,
-    wait=False,
-    verbose=False,
-    fetchobst=False,
-    ignorerefs=None,
-):
+    manifile: str,
+    toplevel: str,
+    paths: list[str] | None = None,
+    logfile: str | None = None,
+    usenow: bool = False,
+    check_export_ok: bool = False,
+    purge: bool = False,
+    remove: bool = False,
+    pretty: bool = False,
+    ignore: list[str] | None = None,
+    wait: bool = False,
+    verbose: bool = False,
+    fetchobst: bool = False,
+    ignorerefs: list[str] | None = None,
+) -> int:
     global logger
     loglevel = logging.INFO
     logger = grokmirror.init_logger('manifest', logfile, loglevel, verbose)
@@ -391,8 +392,10 @@ def grok_manifest(
     else:
         logger.info('Done in %0.2fs', elapsed)
 
+    return 0
 
-def command():
+
+def command() -> int:
     opts = parse_args()
 
     return grok_manifest(
