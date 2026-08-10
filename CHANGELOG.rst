@@ -34,6 +34,11 @@ v3.0 (TBD)
 - grok-pull now reports a clear error when the [remote] section does not
   define "site", or defines neither "manifest" nor "manifest_command",
   instead of failing with a traceback inside a worker
+- Fix grok-pull traceback when the config file has no [pull] section; all
+  of its settings are optional, so leaving it out now works
+- Fix grok-pull burying remote manifest failures (missing manifest,
+  failing or unparseable manifest_command) under a traceback instead of
+  just reporting them and exiting non-zero
 - Fix grok-pi-piper hanging instead of exiting when no pipe was
   configured
 - Report a clear error instead of a traceback when the configuration file
