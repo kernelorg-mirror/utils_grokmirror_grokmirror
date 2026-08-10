@@ -85,7 +85,7 @@ def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
                     continue
 
         logger.debug('checking size of %s', repo)
-        total_size = get_repo_size(fullpath)/1024/1024
+        total_size = get_repo_size(fullpath) / 1024 / 1024
 
         if total_size > maxsize:
             logger.info('  skipped: %s (%s > %s)', repo, total_size, maxsize)
@@ -108,30 +108,22 @@ def parse_args():
     import argparse
 
     # noinspection PyTypeChecker
-    op = argparse.ArgumentParser(prog='grok-bundle',
-                                 description='Generate clone.bundle files for use with "repo"',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    op.add_argument('-v', '--verbose', action='store_true',
-                    default=False,
-                    help='Be verbose and tell us what you are doing')
-    op.add_argument('-c', '--config',
-                    required=True,
-                    help='Location of the configuration file')
-    op.add_argument('-o', '--outdir',
-                    required=True,
-                    help='Location where to store bundle files')
-    op.add_argument('-g', '--gitargs',
-                    default='-c core.compression=9',
-                    help='extra args to pass to git')
-    op.add_argument('-r', '--revlistargs',
-                    default='--branches HEAD',
-                    help='Rev-list args to use')
-    op.add_argument('-s', '--maxsize', type=int,
-                    default=2,
-                    help='Maximum size of git repositories to bundle (in GiB)')
-    op.add_argument('-i', '--include', nargs='*',
-                    default='*',
-                    help='List repositories to bundle (accepts shell globbing)')
+    op = argparse.ArgumentParser(
+        prog='grok-bundle',
+        description='Generate clone.bundle files for use with "repo"',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    op.add_argument(
+        '-v', '--verbose', action='store_true', default=False, help='Be verbose and tell us what you are doing'
+    )
+    op.add_argument('-c', '--config', required=True, help='Location of the configuration file')
+    op.add_argument('-o', '--outdir', required=True, help='Location where to store bundle files')
+    op.add_argument('-g', '--gitargs', default='-c core.compression=9', help='extra args to pass to git')
+    op.add_argument('-r', '--revlistargs', default='--branches HEAD', help='Rev-list args to use')
+    op.add_argument('-s', '--maxsize', type=int, default=2, help='Maximum size of git repositories to bundle (in GiB)')
+    op.add_argument(
+        '-i', '--include', nargs='*', default='*', help='List repositories to bundle (accepts shell globbing)'
+    )
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
 
     opts = op.parse_args()
@@ -159,7 +151,8 @@ def command():
     opts = parse_args()
 
     retval = grok_bundle(
-        opts.config, opts.outdir, opts.gitargs, opts.revlistargs, opts.maxsize, opts.include, verbose=opts.verbose)
+        opts.config, opts.outdir, opts.gitargs, opts.revlistargs, opts.maxsize, opts.include, verbose=opts.verbose
+    )
 
     sys.exit(retval)
 

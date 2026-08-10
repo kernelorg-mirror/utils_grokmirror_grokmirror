@@ -43,7 +43,6 @@ logger = logging.getLogger(__name__)
 
 
 class SignalHandler:
-
     def __init__(self, config, sw, dws, pws, done):
         self.config = config
         self.sw = sw
@@ -87,7 +86,6 @@ class SignalHandler:
 
 
 class Handler(StreamRequestHandler):
-
     def handle(self):
         config = self.server.config
         manifile = config['core'].get('manifest')
@@ -259,7 +257,7 @@ def objstore_repo_preload(config, obstrepo):
             for chunk in resp.iter_content(chunk_size=8192):
                 fh.write(chunk)
         resp.close()
-    except: # noqa
+    except:  # noqa
         # Make sure we don't leave .bundle files lying around
         # Should we add logic to resume downloads here in the future?
         if os.path.exists(bfile):
@@ -676,7 +674,7 @@ def write_projects_list(config, manifest):
         fh = os.fdopen(fd, 'wb', 0)
         for gitdir in manifest:
             if trimtop and gitdir.startswith(trimtop):
-                pgitdir = gitdir[len(trimtop):]
+                pgitdir = gitdir[len(trimtop) :]
             else:
                 pgitdir = gitdir
 
@@ -689,7 +687,7 @@ def write_projects_list(config, manifest):
                 # XXX: Should make this configurable, perhaps
                 for symlink in manifest[gitdir]['symlinks']:
                     if trimtop and symlink.startswith(trimtop):
-                        symlink = symlink[len(trimtop):]
+                        symlink = symlink[len(trimtop) :]
 
                     symlink = symlink.lstrip('/')
                     fh.write('{}\n'.format(symlink).encode())
@@ -821,6 +819,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             try:
                 if r_mani_url.rfind('.gz') > 0:
                     import io
+
                     fh = gzip.GzipFile(fileobj=io.BytesIO(res.content))
                     jdata = fh.read().decode()
                 else:
@@ -1397,29 +1396,54 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
 
 def parse_args():
     import argparse
-    # noinspection PyTypeChecker
-    op = argparse.ArgumentParser(prog='grok-pull',
-                                 description='Create or update a git repository collection mirror',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    op.add_argument('-v', '--verbose', dest='verbose', action='store_true',
-                    default=False,
-                    help='Be verbose and tell us what you are doing')
-    op.add_argument('-n', '--no-mtime-check', dest='nomtime',
-                    action='store_true', default=False,
-                    help='Run without checking manifest mtime')
-    op.add_argument('-p', '--purge', dest='purge',
-                    action='store_true', default=False,
-                    help='Remove any git trees that are no longer in manifest')
-    op.add_argument('--force-purge', dest='forcepurge',
-                    action='store_true', default=False,
-                    help='Force purge despite significant repo deletions')
-    op.add_argument('-o', '--continuous', dest='runonce',
-                    action='store_false', default=True,
-                    help='Run continuously (no effect if refresh is not set in config)')
-    op.add_argument('-c', '--config', dest='config',
-                    required=True,
-                    help='Location of the configuration file')
+    # noinspection PyTypeChecker
+    op = argparse.ArgumentParser(
+        prog='grok-pull',
+        description='Create or update a git repository collection mirror',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    op.add_argument(
+        '-v',
+        '--verbose',
+        dest='verbose',
+        action='store_true',
+        default=False,
+        help='Be verbose and tell us what you are doing',
+    )
+    op.add_argument(
+        '-n',
+        '--no-mtime-check',
+        dest='nomtime',
+        action='store_true',
+        default=False,
+        help='Run without checking manifest mtime',
+    )
+    op.add_argument(
+        '-p',
+        '--purge',
+        dest='purge',
+        action='store_true',
+        default=False,
+        help='Remove any git trees that are no longer in manifest',
+    )
+    op.add_argument(
+        '--force-purge',
+        dest='forcepurge',
+        action='store_true',
+        default=False,
+        help='Force purge despite significant repo deletions',
+    )
+    op.add_argument(
+        '-o',
+        '--continuous',
+        dest='runonce',
+        action='store_false',
+        default=True,
+        help='Run continuously (no effect if refresh is not set in config)',
+    )
+    op.add_argument('-c', '--config', dest='config', required=True, help='Location of the configuration file')
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
 
     return op.parse_args()
@@ -1450,8 +1474,7 @@ def grok_pull(cfgfile, verbose=False, nomtime=False, purge=False, forcepurge=Fal
 def command():
     opts = parse_args()
 
-    retval = grok_pull(
-        opts.config, opts.verbose, opts.nomtime, opts.purge, opts.forcepurge, opts.runonce)
+    retval = grok_pull(opts.config, opts.verbose, opts.nomtime, opts.purge, opts.forcepurge, opts.runonce)
 
     sys.exit(retval)
 

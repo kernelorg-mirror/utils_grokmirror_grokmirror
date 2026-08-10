@@ -142,26 +142,42 @@ def run_post_update_hook(hookscript, gitdir):
 
 def parse_args():
     import argparse
-    # noinspection PyTypeChecker
-    op = argparse.ArgumentParser(prog='grok-dumb-pull',
-                                 description='Fetch remotes in repositories not managed by grokmirror',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    op.add_argument('-v', '--verbose', dest='verbose', action='store_true',
-                    default=False,
-                    help='Be verbose and tell us what you are doing')
-    op.add_argument('-s', '--svn', dest='svn', action='store_true',
-                    default=False,
-                    help='The remotes for these repositories are Subversion')
-    op.add_argument('-r', '--remote-names', dest='remotes', action='append',
-                    default=None,
-                    help='Only fetch remotes matching this name (accepts shell globbing)')
-    op.add_argument('-u', '--post-update-hook', dest='posthook',
-                    default='',
-                    help='Run this hook after each repository is updated.')
-    op.add_argument('-l', '--logfile', dest='logfile',
-                    default=None,
-                    help='Put debug logs into this file')
+    # noinspection PyTypeChecker
+    op = argparse.ArgumentParser(
+        prog='grok-dumb-pull',
+        description='Fetch remotes in repositories not managed by grokmirror',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    op.add_argument(
+        '-v',
+        '--verbose',
+        dest='verbose',
+        action='store_true',
+        default=False,
+        help='Be verbose and tell us what you are doing',
+    )
+    op.add_argument(
+        '-s',
+        '--svn',
+        dest='svn',
+        action='store_true',
+        default=False,
+        help='The remotes for these repositories are Subversion',
+    )
+    op.add_argument(
+        '-r',
+        '--remote-names',
+        dest='remotes',
+        action='append',
+        default=None,
+        help='Only fetch remotes matching this name (accepts shell globbing)',
+    )
+    op.add_argument(
+        '-u', '--post-update-hook', dest='posthook', default='', help='Run this hook after each repository is updated.'
+    )
+    op.add_argument('-l', '--logfile', dest='logfile', default=None, help='Put debug logs into this file')
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
     op.add_argument('paths', nargs='+', help='Full path(s) of the repos to pull')
 
@@ -206,8 +222,13 @@ def command():
     opts = parse_args()
 
     return dumb_pull(
-        opts.paths, verbose=opts.verbose, svn=opts.svn, remotes=opts.remotes,
-        posthook=opts.posthook, logfile=opts.logfile)
+        opts.paths,
+        verbose=opts.verbose,
+        svn=opts.svn,
+        remotes=opts.remotes,
+        posthook=opts.posthook,
+        logfile=opts.logfile,
+    )
 
 
 if __name__ == '__main__':

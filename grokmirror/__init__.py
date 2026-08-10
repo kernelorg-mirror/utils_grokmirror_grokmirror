@@ -53,9 +53,11 @@ _alt_repo_map = None
 # Used to store our requests session
 REQSESSION = None
 
-OBST_PREAMBULE = ('# WARNING: This is a grokmirror object storage repository.\n'
-                  '# Deleting or moving it will cause corruption in the following repositories\n'
-                  '# (caution, this list may be incomplete):\n')
+OBST_PREAMBULE = (
+    '# WARNING: This is a grokmirror object storage repository.\n'
+    '# Deleting or moving it will cause corruption in the following repositories\n'
+    '# (caution, this list may be incomplete):\n'
+)
 
 
 def get_requests_session():
@@ -101,13 +103,15 @@ def set_git_config(fullpath, param, value, operation='--replace-all'):
 
 def git_newer_than(minver: str) -> bool:
     from packaging import version
+
     (retcode, output, error) = run_git_command(None, ['--version'])
     ver = output.split()[-1]
     return version.parse(ver) >= version.parse(minver)
 
 
-def run_shell_command(cmdargs: list, stdin: Optional[bytes] = None, decode: bool = True,
-                      env: Optional[dict] = None) -> Tuple[int, Union[str, bytes], Union[str, bytes]]:
+def run_shell_command(
+    cmdargs: list, stdin: Optional[bytes] = None, decode: bool = True, env: Optional[dict] = None
+) -> Tuple[int, Union[str, bytes], Union[str, bytes]]:
     if not env:
         env = dict()
     logger.debug('Running: %s', ' '.join(cmdargs))
@@ -122,8 +126,9 @@ def run_shell_command(cmdargs: list, stdin: Optional[bytes] = None, decode: bool
     return child.returncode, output, error
 
 
-def run_git_command(fullpath: Optional[str], args: list, stdin: Optional[bytes] = None,
-                    decode: bool = True) -> Tuple[int, Union[str, bytes], Union[str, bytes]]:
+def run_git_command(
+    fullpath: Optional[str], args: list, stdin: Optional[bytes] = None, decode: bool = True
+) -> Tuple[int, Union[str, bytes], Union[str, bytes]]:
     if 'GITBIN' in os.environ:
         _git = os.environ['GITBIN']
     else:
@@ -182,9 +187,11 @@ def is_bare_git_repo(path):
     itself).
     """
     logger.debug('Checking if %s is a git repository', path)
-    if (os.path.isdir(os.path.join(path, 'objects')) and
-            os.path.isdir(os.path.join(path, 'refs')) and
-            os.path.isfile(os.path.join(path, 'HEAD'))):
+    if (
+        os.path.isdir(os.path.join(path, 'objects'))
+        and os.path.isdir(os.path.join(path, 'refs'))
+        and os.path.isfile(os.path.join(path, 'HEAD'))
+    ):
         return True
 
     logger.debug('Skipping %s: not a git repository', path)
@@ -602,7 +609,7 @@ def fetch_objstore_repo(obstrepo, fullpath=None, pack_refs=False, use_plumbing=F
         remotes = my_remotes
 
     success = True
-    for (virtref, url) in remotes:
+    for virtref, url in remotes:
         if use_plumbing:
             success = _fetch_objstore_repo_using_plumbing(url, obstrepo, virtref)
         else:
@@ -1021,6 +1028,7 @@ def write_manifest(manifile, manifest, mtime=None, pretty=False):
 
 def load_config_file(cfgfile):
     from configparser import ConfigParser, ExtendedInterpolation
+
     if not os.path.exists(cfgfile):
         sys.stderr.write('ERORR: File does not exist: %s\n' % cfgfile)
         sys.exit(1)

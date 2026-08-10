@@ -69,7 +69,7 @@ def get_blob_set(fullpath):
     blobcache = os.path.join(fullpath, 'grokmirror.blobs')
     if os.path.exists(blobcache):
         # Did it age out? Hardcode to 30 days.
-        expage = time.time() - 86400*30
+        expage = time.time() - 86400 * 30
         st = os.stat(blobcache)
         if st.st_mtime < expage:
             os.unlink(blobcache)
@@ -178,8 +178,9 @@ def merge_siblings(siblings, amap):
             logger.info('         : fetching into %s', os.path.basename(mdest))
             success = grokmirror.fetch_objstore_repo(mdest, childpath)
             if not success:
-                logger.critical('Failed to fetch %s from %s to %s', childpath, os.path.basename(sibling),
-                                os.path.basename(mdest))
+                logger.critical(
+                    'Failed to fetch %s from %s to %s', childpath, os.path.basename(sibling), os.path.basename(mdest)
+                )
                 continue
             logger.info('         : repointing alternates')
             grokmirror.set_altrepo(childpath, mdest)
@@ -232,9 +233,9 @@ def get_human_size(kbsize):
     num = kbsize
     for unit in ['Ki', 'Mi', 'Gi']:
         if abs(num) < 1024.0:
-            return "%3.2f %sB" % (num, unit)
+            return '%3.2f %sB' % (num, unit)
         num /= 1024.0
-    return "%.2f%s TiB" % num
+    return '%.2f%s TiB' % num
 
 
 def set_repo_reclone(fullpath, reason):
@@ -508,8 +509,7 @@ def check_precious_objects(fullpath):
     return grokmirror.is_precious(fullpath)
 
 
-def fsck_mirror(config, force=False, repack_only=False, conn_only=False,
-                repack_all_quick=False, repack_all_full=False):
+def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_all_quick=False, repack_all_full=False):
 
     if repack_all_quick or repack_all_full:
         force = True
@@ -873,8 +873,11 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False,
             repack_level = None
 
         # trigger a level-1 repack if it's regular check time and the fingerprint has changed
-        if (not repack_level and schedcheck <= today
-                and status[fullpath].get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir)):
+        if (
+            not repack_level
+            and schedcheck <= today
+            and status[fullpath].get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir)
+        ):
             status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
             logger.info('     aged: %s (forcing repack)', fullpath)
             repack_level = 1
@@ -1196,7 +1199,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False,
         status[fullpath]['fingerprint'] = grokmirror.get_repo_fingerprint(toplevel, gitdir)
 
         # noinspection PyTypeChecker
-        elapsed = int(time.time()-startt)
+        elapsed = int(time.time() - startt)
         status[fullpath]['s_elapsed'] = elapsed
 
         # We're done with the repo now
@@ -1210,10 +1213,14 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False,
         else:
             logger.info('     done: %ss', elapsed)
         if space_saved > 0:
-            logger.info('      ---: %s done, %s queued, %s saved', total_checked,
-                        len(to_process)-total_checked, get_human_size(space_saved))
+            logger.info(
+                '      ---: %s done, %s queued, %s saved',
+                total_checked,
+                len(to_process) - total_checked,
+                get_human_size(space_saved),
+            )
         else:
-            logger.info('      ---: %s done, %s queued', total_checked, len(to_process)-total_checked)
+            logger.info('      ---: %s done, %s queued', total_checked, len(to_process) - total_checked)
 
         # Write status file after each check, so if the process dies, we won't
         # have to recheck all the repos we've already checked
@@ -1232,32 +1239,59 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False,
 
 def parse_args():
     import argparse
-    # noinspection PyTypeChecker
-    op = argparse.ArgumentParser(prog='grok-fsck',
-                                 description='Optimize and check mirrored repositories',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    op.add_argument('-v', '--verbose', dest='verbose', action='store_true',
-                    default=False,
-                    help='Be verbose and tell us what you are doing')
-    op.add_argument('-f', '--force', dest='force',
-                    action='store_true', default=False,
-                    help='Force immediate run on all repositories')
-    op.add_argument('-c', '--config', dest='config',
-                    required=True,
-                    help='Location of the configuration file')
-    op.add_argument('--repack-only', dest='repack_only',
-                    action='store_true', default=False,
-                    help='Only find and repack repositories that need optimizing')
-    op.add_argument('--connectivity-only', dest='conn_only',
-                    action='store_true', default=False,
-                    help='Only check connectivity when running fsck checks')
-    op.add_argument('--repack-all-quick', dest='repack_all_quick',
-                    action='store_true', default=False,
-                    help='(Assumes --force): Do a quick repack of all repos')
-    op.add_argument('--repack-all-full', dest='repack_all_full',
-                    action='store_true', default=False,
-                    help='(Assumes --force): Do a full repack of all repos')
+    # noinspection PyTypeChecker
+    op = argparse.ArgumentParser(
+        prog='grok-fsck',
+        description='Optimize and check mirrored repositories',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    op.add_argument(
+        '-v',
+        '--verbose',
+        dest='verbose',
+        action='store_true',
+        default=False,
+        help='Be verbose and tell us what you are doing',
+    )
+    op.add_argument(
+        '-f',
+        '--force',
+        dest='force',
+        action='store_true',
+        default=False,
+        help='Force immediate run on all repositories',
+    )
+    op.add_argument('-c', '--config', dest='config', required=True, help='Location of the configuration file')
+    op.add_argument(
+        '--repack-only',
+        dest='repack_only',
+        action='store_true',
+        default=False,
+        help='Only find and repack repositories that need optimizing',
+    )
+    op.add_argument(
+        '--connectivity-only',
+        dest='conn_only',
+        action='store_true',
+        default=False,
+        help='Only check connectivity when running fsck checks',
+    )
+    op.add_argument(
+        '--repack-all-quick',
+        dest='repack_all_quick',
+        action='store_true',
+        default=False,
+        help='(Assumes --force): Do a quick repack of all repos',
+    )
+    op.add_argument(
+        '--repack-all-full',
+        dest='repack_all_full',
+        action='store_true',
+        default=False,
+        help='(Assumes --force): Do a full repack of all repos',
+    )
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
 
     opts = op.parse_args()
@@ -1268,8 +1302,15 @@ def parse_args():
     return opts
 
 
-def grok_fsck(cfgfile, verbose=False, force=False, repack_only=False, conn_only=False,
-              repack_all_quick=False, repack_all_full=False):
+def grok_fsck(
+    cfgfile,
+    verbose=False,
+    force=False,
+    repack_only=False,
+    conn_only=False,
+    repack_all_quick=False,
+    repack_all_full=False,
+):
     global logger
 
     config = grokmirror.load_config_file(cfgfile)
@@ -1303,6 +1344,7 @@ def grok_fsck(cfgfile, verbose=False, force=False, repack_only=False, conn_only=
         subject = config['fsck'].get('report_subject')
         if not subject:
             import platform
+
             subject = 'grok-fsck errors on {} ({})'.format(platform.node(), cfgfile)
         msg['Subject'] = subject
         from_addr = config['fsck'].get('report_from', 'root')
@@ -1318,8 +1360,15 @@ def grok_fsck(cfgfile, verbose=False, force=False, repack_only=False, conn_only=
 def command():
     opts = parse_args()
 
-    return grok_fsck(opts.config, opts.verbose, opts.force, opts.repack_only, opts.conn_only,
-                     opts.repack_all_quick, opts.repack_all_full)
+    return grok_fsck(
+        opts.config,
+        opts.verbose,
+        opts.force,
+        opts.repack_only,
+        opts.conn_only,
+        opts.repack_all_quick,
+        opts.repack_all_full,
+    )
 
 
 if __name__ == '__main__':

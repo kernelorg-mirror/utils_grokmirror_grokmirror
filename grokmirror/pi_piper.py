@@ -81,8 +81,9 @@ def init_piper_tracking(repo: str, shallow: bool) -> bool:
     return True
 
 
-def run_pi_repo(repo: str, pipedef: str, dryrun: bool = False, shallow: bool = False,
-                pipelast: Optional[int] = None) -> None:
+def run_pi_repo(
+    repo: str, pipedef: str, dryrun: bool = False, shallow: bool = False, pipelast: Optional[int] = None
+) -> None:
     logger.info('Checking %s', repo)
     sp = shlex.shlex(pipedef, posix=True)
     sp.whitespace_split = True
@@ -162,21 +163,32 @@ def command():
     global logger
 
     # noinspection PyTypeChecker
-    op = argparse.ArgumentParser(prog='grok-pi-piper',
-                                 description='Pipe new messages from public-inbox repositories to arbitrary commands',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    op.add_argument('-v', '--verbose', action='store_true',
-                    default=False,
-                    help='Be verbose and tell us what you are doing')
-    op.add_argument('-d', '--dry-run', dest='dryrun', action='store_true',
-                    default=False,
-                    help='Do a dry-run and just show what would be done')
-    op.add_argument('-c', '--config', required=True,
-                    help='Location of the configuration file')
-    op.add_argument('-l', '--pipe-last', dest='pipelast', type=int, default=None,
-                    help='Force pipe last NN messages in the list, regardless of tracking')
-    op.add_argument('repo',
-                    help='Full path to foo/git/N.git public-inbox repository')
+    op = argparse.ArgumentParser(
+        prog='grok-pi-piper',
+        description='Pipe new messages from public-inbox repositories to arbitrary commands',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    op.add_argument(
+        '-v', '--verbose', action='store_true', default=False, help='Be verbose and tell us what you are doing'
+    )
+    op.add_argument(
+        '-d',
+        '--dry-run',
+        dest='dryrun',
+        action='store_true',
+        default=False,
+        help='Do a dry-run and just show what would be done',
+    )
+    op.add_argument('-c', '--config', required=True, help='Location of the configuration file')
+    op.add_argument(
+        '-l',
+        '--pipe-last',
+        dest='pipelast',
+        type=int,
+        default=None,
+        help='Force pipe last NN messages in the list, regardless of tracking',
+    )
+    op.add_argument('repo', help='Full path to foo/git/N.git public-inbox repository')
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
 
     opts = op.parse_args()
@@ -205,7 +217,7 @@ def command():
     else:
         loglevel = logging.INFO
 
-    shallow = config[section].getboolean('shallow', False) # noqa
+    shallow = config[section].getboolean('shallow', False)  # noqa
 
     logger = grokmirror.init_logger('pull', logfile, loglevel, opts.verbose)
 

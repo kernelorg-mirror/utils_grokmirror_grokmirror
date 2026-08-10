@@ -34,9 +34,9 @@ from configparser import ConfigParser, ExtendedInterpolation
 MAX_PROJ_LEN = 32
 MAX_REPO_LEN = 1024
 
+
 # noinspection PyBroadException
 class PubsubListener(object):
-
     def on_get(self, req, resp):
         resp.status = falcon.HTTP_200
         resp.body = "We don't serve GETs here\n"
@@ -53,7 +53,7 @@ class PubsubListener(object):
             resp.status = falcon.HTTP_500
             resp.body = 'Failed to parse payload as json\n'
             return
-         
+
         try:
             proj = doc['message']['attributes']['proj']
             repo = doc['message']['attributes']['repo']

@@ -95,7 +95,7 @@ def init_pi_inbox(gdir: str, pdir: str, opts) -> bool:
             res = ses.get(rconfig)
             res.raise_for_status()
             origins = res.text
-        except: # noqa
+        except:  # noqa
             logger.critical('ERROR: Not able to get origins info for %s, skipping', gdir)
             success = False
 
@@ -188,7 +188,7 @@ def init_pi_inbox(gdir: str, pdir: str, opts) -> bool:
                 if ec > 0:
                     logger.critical('Unable to init public-inbox repo %s: %s', pdir, err)
                     success = False
-            except Exception as ex: # noqa
+            except Exception as ex:  # noqa
                 logger.critical('Unable to init public-inbox repo %s: %s', pdir, ex)
                 success = False
 
@@ -306,53 +306,75 @@ def cmd_extindex(opts):
 
 def command():
     import argparse
+
     global logger
 
     # noinspection PyTypeChecker
-    ap = argparse.ArgumentParser(prog='grok-pi-indexer',
-                                 description='Properly initialize and update mirrored public-inbox repositories',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument('-v', '--verbose', action='store_true',
-                    default=False,
-                    help='Be verbose and tell us what you are doing')
-    ap.add_argument('-c', '--pi-config', dest='piconfig', required=True,
-                    help='Location of the public-inbox configuration file')
-    ap.add_argument('-t', '--toplevel', dest='toplevel', required=True,
-                    help='Path to git repository mirror toplevel')
-    ap.add_argument('-p', '--pi-toplevel', dest='pitoplevel',
-                    help='Path to public-inbox toplevel, if separate')
-    ap.add_argument('-l', '--logfile',
-                    help='Log activity in this log file')
-    ap.add_argument('-L', '--indexlevel', default='full',
-                    help='Indexlevel to use with public-inbox (full, medium, basic)')
-    ap.add_argument('-j', '--jobs', type=int,
-                    help='The --jobs parameter to pass to public-inbox')
-    ap.add_argument('--no-fsync', dest='nofsync', action='store_true', default=False,
-                    help='Use --no-fsync when invoking public-inbox')
+    ap = argparse.ArgumentParser(
+        prog='grok-pi-indexer',
+        description='Properly initialize and update mirrored public-inbox repositories',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    ap.add_argument(
+        '-v', '--verbose', action='store_true', default=False, help='Be verbose and tell us what you are doing'
+    )
+    ap.add_argument(
+        '-c', '--pi-config', dest='piconfig', required=True, help='Location of the public-inbox configuration file'
+    )
+    ap.add_argument('-t', '--toplevel', dest='toplevel', required=True, help='Path to git repository mirror toplevel')
+    ap.add_argument('-p', '--pi-toplevel', dest='pitoplevel', help='Path to public-inbox toplevel, if separate')
+    ap.add_argument('-l', '--logfile', help='Log activity in this log file')
+    ap.add_argument(
+        '-L', '--indexlevel', default='full', help='Indexlevel to use with public-inbox (full, medium, basic)'
+    )
+    ap.add_argument('-j', '--jobs', type=int, help='The --jobs parameter to pass to public-inbox')
+    ap.add_argument(
+        '--no-fsync',
+        dest='nofsync',
+        action='store_true',
+        default=False,
+        help='Use --no-fsync when invoking public-inbox',
+    )
 
     sp = ap.add_subparsers(help='sub-command help', dest='subcmd')
     sp_init = sp.add_parser('init', help='Run public-inbox-init+index on repositories passed via stdin')
 
-    sp_init.add_argument('--local-toplevel', dest='local_toplevel', default='',
-                         help='URL of the local mirror toplevel (omit if serving from /)')
-    sp_init.add_argument('--origin-hostname', dest='origin_host',
-                         default='https://lore.kernel.org/',
-                         help='URL of the origin toplevel serving config files')
-    sp_init.add_argument('--listid-priority', dest='listid_priority',
-                         default='*.linux.dev,*.kernel.org',
-                         help='List-Ids priority order (comma-separated, can use shell globbing)')
-    sp_init.add_argument('--extra-cfgopts', dest='extra_cfgopts',
-                         default='indexheader,replyto',
-                         help='Extra config options to accept from remote (comma-separated)')
-    sp_init.add_argument('--force-reinit', dest='forceinit', action='store_true', default=False,
-                         help='Force a full (re-)init of an inboxdir')
-    sp_init.add_argument('inboxdir', nargs='?',
-                         help='Path to toplevel inboxdir (non-hook mode)')
+    sp_init.add_argument(
+        '--local-toplevel',
+        dest='local_toplevel',
+        default='',
+        help='URL of the local mirror toplevel (omit if serving from /)',
+    )
+    sp_init.add_argument(
+        '--origin-hostname',
+        dest='origin_host',
+        default='https://lore.kernel.org/',
+        help='URL of the origin toplevel serving config files',
+    )
+    sp_init.add_argument(
+        '--listid-priority',
+        dest='listid_priority',
+        default='*.linux.dev,*.kernel.org',
+        help='List-Ids priority order (comma-separated, can use shell globbing)',
+    )
+    sp_init.add_argument(
+        '--extra-cfgopts',
+        dest='extra_cfgopts',
+        default='indexheader,replyto',
+        help='Extra config options to accept from remote (comma-separated)',
+    )
+    sp_init.add_argument(
+        '--force-reinit',
+        dest='forceinit',
+        action='store_true',
+        default=False,
+        help='Force a full (re-)init of an inboxdir',
+    )
+    sp_init.add_argument('inboxdir', nargs='?', help='Path to toplevel inboxdir (non-hook mode)')
     sp_init.set_defaults(func=cmd_init)
 
     sp_update = sp.add_parser('update', help='Run public-inbox-index on passed repository path')
-    sp_update.add_argument('repo', nargs=1,
-                           help='Full path to foo/git/N.git public-inbox repository')
+    sp_update.add_argument('repo', nargs=1, help='Full path to foo/git/N.git public-inbox repository')
     sp_update.set_defaults(func=cmd_update)
 
     sp_extindex = sp.add_parser('extindex', help='Run extindex on all inboxes')
