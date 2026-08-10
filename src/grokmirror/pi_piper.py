@@ -87,7 +87,7 @@ def run_pi_repo(
     sp = shlex.shlex(pipedef, posix=True)
     sp.whitespace_split = True
     args = list(sp)
-    if not os.access(args[0], os.EX_OK):
+    if not os.access(args[0], os.X_OK):
         logger.critical('Cannot execute %s', pipedef)
         sys.exit(1)
 

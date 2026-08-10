@@ -41,6 +41,8 @@ v3.0 (TBD)
   just reporting them and exiting non-zero
 - Fix grok-pi-piper hanging instead of exiting when no pipe was
   configured
+- Fix grok-pi-piper not actually checking that the configured pipe
+  command is executable, reporting a confusing error when it was not
 - Report a clear error instead of a traceback when the configuration file
   has no "toplevel" defined in the [core] section
 - Interrupting any of the commands with Ctrl-C is now reliable; several
