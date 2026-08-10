@@ -104,7 +104,9 @@ class Handler(StreamRequestHandler):
                     return
                 else:
                     return
-            except:
+            except Exception:  # noqa: BLE001
+                # Anything at all going wrong on this connection (a short read,
+                # undecodable input, an unreadable manifest) just drops it.
                 return
 
 

@@ -965,10 +965,9 @@ def read_manifest(manifile, wait=False):
     with opener(manifile, 'rb') as fh:
         jdata = fh.read().decode('utf-8')
 
-    # noinspection PyBroadException
     try:
         manifest = json.loads(jdata)
-    except:
+    except ValueError:
         # We'll regenerate the file entirely on failure to parse
         logger.critical('Unable to parse %s, will regenerate', manifile)
         manifest = {}

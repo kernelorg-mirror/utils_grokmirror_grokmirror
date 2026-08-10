@@ -532,7 +532,6 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
 
     if os.path.exists(statusfile):
         logger.info('   status: reading %s', statusfile)
-        # noinspection PyBroadException
         try:
             # Format of the status file:
             #  {
@@ -549,7 +548,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
 
             with open(statusfile) as stfh:
                 status = json.loads(stfh.read())
-        except:
+        except (OSError, ValueError):
             logger.critical('Failed to parse %s', statusfile)
             lockf(flockh, LOCK_UN)
             flockh.close()

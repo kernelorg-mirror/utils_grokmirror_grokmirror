@@ -50,7 +50,8 @@ class PubsubListener:
 
         try:
             doc = json.load(req.stream)
-        except:
+        except ValueError:
+            # JSONDecodeError and UnicodeDecodeError are both ValueErrors
             resp.status = falcon.HTTP_500
             resp.body = 'Failed to parse payload as json\n'
             return
@@ -102,7 +103,7 @@ class PubsubListener:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                 client.connect(sockfile)
                 client.send(repo.encode())
-        except:
+        except OSError:
             resp.status = falcon.HTTP_500
             resp.body = 'Unable to communicate with the socket\n'
             return
