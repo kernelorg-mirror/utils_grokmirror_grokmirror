@@ -71,8 +71,8 @@ testpaths = ["tests"]
 addopts = "--tb=short"
 
 [tool.mypy]
-# Not yet `strict = true`: grokmirror predates type annotations, so the strict
-# ratchet happens module by module. See the top of ci.sh for the plan.
+# Not yet `strict = true`, but every function in the tree is annotated now, so
+# disallow_untyped_defs applies to all of it. See the top of ci.sh for the plan.
 # python_version is deliberately unset: mypy no longer accepts a 3.9 target, so
 # it checks against whatever interpreter it runs under. ruff, pyright and ty are
 # all still pinned to py39, and ci-matrix.sh actually runs the tests on 3.9.
@@ -86,12 +86,6 @@ warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
-
-[[tool.mypy.overrides]]
-# Per-module ratchet towards disallow_untyped_defs for the whole package. Add
-# modules here as they gain annotations; once the list is complete, hoist the
-# setting into [tool.mypy] above and drop this section.
-module = ["grokmirror", "grokmirror.bundle", "grokmirror.manifest", "grokmirror.pi_indexer", "grokmirror.dumb_pull", "grokmirror.pi_piper", "grokmirror.fsck", "grokmirror.pull"]
 disallow_untyped_defs = true
 
 [tool.pyright]

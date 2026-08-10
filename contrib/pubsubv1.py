@@ -38,11 +38,11 @@ MAX_REPO_LEN = 1024
 # noinspection PyBroadException
 class PubsubListener:
     # Signature is dictated by falcon, which passes both positionally.
-    def on_get(self, req, resp):  # noqa: ARG002
+    def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:  # noqa: ARG002
         resp.status = falcon.HTTP_200
         resp.text = "We don't serve GETs here\n"
 
-    def on_post(self, req, resp):
+    def on_post(self, req: falcon.Request, resp: falcon.Response) -> None:
         if not req.content_length:
             resp.status = falcon.HTTP_500
             resp.text = 'Payload required\n'

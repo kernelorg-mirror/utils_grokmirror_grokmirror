@@ -7,12 +7,12 @@ set -eu
 #
 # Ratchet status: all of these are green and should stay that way. grokmirror
 # predates type annotations, so the type checkers are not yet at the `strict`
-# used elsewhere: mypy runs with check_untyped_defs (so it checks function
-# bodies, not just annotated signatures), pyright at `standard`, and ty at its
-# default rules. Tighten in pyproject.toml as modules gain annotations; the goal
-# is `mypy --strict` / pyright `strict` / ty `all = "error"`. Prefer real
-# annotations over suppressions when tightening: annotating a single parameter
-# is what turned up the last two crashes fixed in this tree.
+# used elsewhere: mypy now requires annotations on every function
+# (disallow_untyped_defs) but not yet the rest of `strict`, pyright runs at
+# `standard`, and ty at its default rules. Keep tightening in pyproject.toml;
+# the goal is `mypy --strict` / pyright `strict` / ty `all = "error"`. Prefer
+# real annotations over suppressions when tightening: annotating a single
+# parameter is what turned up several of the crashes fixed in this tree.
 
 uv run ruff format --check
 uv run ruff check
