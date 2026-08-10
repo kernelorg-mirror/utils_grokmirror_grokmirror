@@ -115,7 +115,7 @@ def purge_manifest(manifest, toplevel, gitdirs):
     for oldrepo in list(manifest):
         if os.path.join(toplevel, oldrepo.lstrip('/')) not in gitdirs:
             logger.info(' manifest: purged %s (gone)', oldrepo)
-            manifest.remove(oldrepo)
+            manifest.pop(oldrepo)
 
 
 def parse_args():
