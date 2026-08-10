@@ -40,7 +40,7 @@ def git_get_new_revs(fullpath: str, pipelast: Optional[int] = None) -> list:
             rev_range = f'{latest}..'
 
     args = ['rev-list', '--pretty=oneline', '--reverse', rev_range, 'master']
-    ecode, out, err = grokmirror.run_git_command(fullpath, args)
+    ecode, out, _err = grokmirror.run_git_command(fullpath, args)
     if ecode > 0:
         raise KeyError('Could not iterate %s in %s' % (rev_range, fullpath))
 
@@ -59,14 +59,14 @@ def reshallow(repo: str, commit_id: str) -> int:
         fh.write(commit_id)
         fh.write('\n')
     logger.info('   prune: %s ', repo)
-    ecode, out, err = grokmirror.run_git_command(repo, ['gc', '--prune=now'])
+    ecode, _out, _err = grokmirror.run_git_command(repo, ['gc', '--prune=now'])
     return ecode
 
 
 def init_piper_tracking(repo: str, shallow: bool) -> bool:
     logger.info('Initial setup for %s', repo)
     args = ['rev-list', '-n', '1', 'master']
-    ecode, out, err = grokmirror.run_git_command(repo, args)
+    ecode, out, _err = grokmirror.run_git_command(repo, args)
     if ecode > 0 or not out:
         logger.info('Could not list revs in %s', repo)
         return False
@@ -136,7 +136,7 @@ def run_pi_repo(
             else:
                 logger.info('  piping: %s (%s b)', commit_id, len(msgbytes))
                 logger.debug(' subject: %s', subject)
-                ecode, out, err = grokmirror.run_shell_command(args, stdin=msgbytes)
+                ecode, _out, err = grokmirror.run_shell_command(args, stdin=msgbytes)
                 if ecode > 0:
                     logger.info('Error running %s', pipedef)
                     logger.info(err)

@@ -93,7 +93,7 @@ def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
         fullargs = gitargs + ['bundle', 'create', bfile] + revlistargs
         logger.debug('Full git args: %s', fullargs)
         logger.info(' generate: %s', bfile)
-        ecode, out, err = grokmirror.run_git_command(fullpath, fullargs)
+        ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs)
 
         if ecode == 0:
             with open(bfprfile, 'w') as fh:

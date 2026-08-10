@@ -53,7 +53,7 @@ def index_pi_inbox(fullpath: str, opts) -> bool:
         'PATH': os.getenv('PATH', '/bin:/usr/bin:/usr/local/bin'),
     }
     try:
-        ec, out, err = grokmirror.run_shell_command(piargs, env=env)
+        ec, _out, err = grokmirror.run_shell_command(piargs, env=env)
         if ec > 0:
             logger.critical('Unable to index public-inbox repo %s: %s', pdir, err)
             success = False
@@ -254,7 +254,7 @@ def cmd_init(opts):
         inboxdirs = get_inboxdirs(opts.inboxdir)
         if opts.forceinit:
             inboxdir = inboxdirs.pop()
-            gdir, pdir = get_git_pi_dir(opts, inboxdir)
+            _gdir, pdir = get_git_pi_dir(opts, inboxdir)
             msgmapdbf = os.path.join(pdir, 'msgmap.sqlite3')
             # Delete msgmap and xap15 if present and reinitialize
             if os.path.exists(msgmapdbf):
@@ -293,7 +293,7 @@ def cmd_extindex(opts):
     if opts.nofsync:
         piargs += ['--no-fsync']
     try:
-        ec, out, err = grokmirror.run_shell_command(piargs, env=env)
+        ec, _out, err = grokmirror.run_shell_command(piargs, env=env)
         if ec > 0:
             logger.critical('Unable to run public-inbox-extindex: %s', err)
             sys.exit(1)

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def git_rev_parse_all(gitdir):
     args = ['rev-parse', '--all']
-    retcode, output, error = grokmirror.run_git_command(gitdir, args)
+    _retcode, output, error = grokmirror.run_git_command(gitdir, args)
 
     if error:
         # Nothing from this command is recognized as harmless yet, so it all
@@ -36,7 +36,7 @@ def git_rev_parse_all(gitdir):
 
 
 def git_remote_update(args, fullpath):
-    retcode, output, error = grokmirror.run_git_command(fullpath, args)
+    _retcode, _output, error = grokmirror.run_git_command(fullpath, args)
 
     if error:
         # Put things we recognize into debug

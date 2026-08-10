@@ -217,19 +217,19 @@ def spa_worker(config, q_spa, pauseonload):
                     extraflags = config['fsck'].get('extra_repack_flags', '').split()
                     if len(extraflags):
                         args += extraflags
-                ecode, out, err = grokmirror.run_git_command(fullpath, args)
+                ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
                 if ecode > 0:
                     logger.debug('Could not repack %s', fullpath)
 
             elif action == 'packrefs':
                 args = ['pack-refs']
-                ecode, out, err = grokmirror.run_git_command(fullpath, args)
+                ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
                 if ecode > 0:
                     logger.debug('Could not pack-refs %s', fullpath)
 
             elif action == 'packrefs-all':
                 args = ['pack-refs', '--all']
-                ecode, out, err = grokmirror.run_git_command(fullpath, args)
+                ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
                 if ecode > 0:
                     logger.debug('Could not pack-refs %s', fullpath)
 
@@ -261,11 +261,11 @@ def objstore_repo_preload(config, obstrepo):
         return
 
     # Now we clone from it into the objstore repo
-    ecode, out, err = grokmirror.run_git_command(obstrepo, ['remote', 'add', '--mirror=fetch', '_preload', bfile])
+    ecode, _out, _err = grokmirror.run_git_command(obstrepo, ['remote', 'add', '--mirror=fetch', '_preload', bfile])
     if ecode == 0:
         logger.info(' objstore: preloading %s.bundle', bname)
         args = ['remote', 'update', '_preload']
-        ecode, out, err = grokmirror.run_git_command(obstrepo, args)
+        ecode, _out, _err = grokmirror.run_git_command(obstrepo, args)
         if ecode > 0:
             logger.info(' objstore: failed to preload from %s.bundle', bname)
         else:
@@ -488,14 +488,14 @@ def fix_remotes(toplevel, gitdir, site, config):
     # Set our remote
     if remotename in grokmirror.list_repo_remotes(fullpath):
         logger.debug('\tremoving remote: %s', remotename)
-        ecode, out, err = grokmirror.run_git_command(fullpath, ['remote', 'remove', remotename])
+        ecode, _out, _err = grokmirror.run_git_command(fullpath, ['remote', 'remove', remotename])
         if ecode > 0:
             logger.critical('FATAL: Could not remove remote %s from %s', remotename, fullpath)
             return False
 
     # set my remote URL
     url = os.path.join(site, gitdir.lstrip('/'))
-    ecode, out, err = grokmirror.run_git_command(fullpath, ['remote', 'add', '--mirror=fetch', remotename, url])
+    ecode, _out, _err = grokmirror.run_git_command(fullpath, ['remote', 'add', '--mirror=fetch', remotename, url])
     if ecode > 0:
         logger.critical('FATAL: Could not set %s to %s in %s', remotename, url, fullpath)
         return False
@@ -589,7 +589,7 @@ def run_post_clone_complete_hook(config, clones):
         logger.debug('Stdin: ---start---')
         logger.debug(stdin)
         logger.debug('Stdin: ---end---')
-        ecode, output, error = grokmirror.run_shell_command(args, stdin=stdin.encode())
+        _ecode, output, error = grokmirror.run_shell_command(args, stdin=stdin.encode())
         if error:
             logger.warning('Hook Stderr: %s', error)
         if output:
@@ -601,7 +601,7 @@ def run_post_work_complete_hook(config):
     for args in hookscripts:
         logger.info(' workhook: %s', ' '.join(args))
         logger.debug('Running: %s', ' '.join(args))
-        ecode, output, error = grokmirror.run_shell_command(args)
+        _ecode, output, error = grokmirror.run_shell_command(args)
         if error:
             logger.warning('Hook Stderr: %s', error)
         if output:
@@ -614,7 +614,7 @@ def run_post_update_hook(config, fullpath):
         logger.info('     hook: %s', ' '.join(args))
         args.append(fullpath)
         logger.debug('Running: %s', ' '.join(args))
-        ecode, output, error = grokmirror.run_shell_command(args)
+        _ecode, output, error = grokmirror.run_shell_command(args)
         if error:
             logger.warning('Hook Stderr (%s): %s', fullpath, error)
         if output:
@@ -624,7 +624,7 @@ def run_post_update_hook(config, fullpath):
 def pull_repo(fullpath, remotename):
     args = ['remote', 'update', remotename, '--prune']
 
-    retcode, output, error = grokmirror.run_git_command(fullpath, args)
+    retcode, _output, error = grokmirror.run_git_command(fullpath, args)
 
     success = False
     if retcode == 0:
@@ -718,7 +718,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
         logger.info(' manifest: executing %s', r_mani_cmd)
         if nomtime:
             cmdargs += ['--force']
-        (ecode, output, error) = grokmirror.run_shell_command(cmdargs)
+        (ecode, output, _error) = grokmirror.run_shell_command(cmdargs)
         if ecode == 0:
             try:
                 r_manifest = json.loads(output)

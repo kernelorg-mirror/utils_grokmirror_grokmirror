@@ -69,7 +69,7 @@ def get_requests_session():
 
 def get_config_from_git(fullpath, regexp, defaults=None):
     args = ['config', '-z', '--get-regexp', regexp]
-    ecode, out, err = run_git_command(fullpath, args)
+    _ecode, out, _err = run_git_command(fullpath, args)
     gitconfig = defaults
     if not gitconfig:
         gitconfig = {}
@@ -92,14 +92,14 @@ def get_config_from_git(fullpath, regexp, defaults=None):
 
 def set_git_config(fullpath, param, value, operation='--replace-all'):
     args = ['config', operation, param, value]
-    ecode, out, err = run_git_command(fullpath, args)
+    ecode, _out, _err = run_git_command(fullpath, args)
     return ecode
 
 
 def git_newer_than(minver: str) -> bool:
     from packaging import version
 
-    (retcode, output, error) = run_git_command(None, ['--version'])
+    (_retcode, output, _error) = run_git_command(None, ['--version'])
     ver = output.split()[-1]
     return version.parse(ver) >= version.parse(minver)
 
@@ -222,7 +222,7 @@ def set_repo_timestamp(toplevel, gitdir, ts):
 
 def get_repo_obj_info(fullpath):
     args = ['count-objects', '-v']
-    retcode, output, error = run_git_command(fullpath, args)
+    _retcode, output, _error = run_git_command(fullpath, args)
     obj_info = {}
 
     if output:
@@ -253,7 +253,7 @@ def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
 
     if not usenow:
         args = ['for-each-ref', '--sort=-committerdate', '--format=%(committerdate:iso-strict)', '--count=1']
-        ecode, out, err = run_git_command(fullpath, args)
+        _ecode, out, _err = run_git_command(fullpath, args)
         if len(out):
             try:
                 modified = datetime.datetime.fromisoformat(out)
@@ -359,7 +359,7 @@ def get_repo_roots(fullpath, force=False):
             roots = set(content.split('\n'))
     else:
         logger.debug('Generating roots for %s', fullpath)
-        ecode, out, err = run_git_command(fullpath, ['rev-list', '--max-parents=0', '--all'])
+        ecode, out, _err = run_git_command(fullpath, ['rev-list', '--max-parents=0', '--all'])
         if ecode > 0:
             logger.debug('Error listing roots in %s', fullpath)
             return None
@@ -379,7 +379,7 @@ def get_repo_roots(fullpath, force=False):
 
 def setup_bare_repo(fullpath):
     args = ['init', '--bare', fullpath]
-    ecode, out, err = run_git_command(None, args)
+    ecode, _out, _err = run_git_command(None, args)
     if ecode > 0:
         logger.critical('Unable to bare-init %s', fullpath)
         return False
@@ -431,7 +431,7 @@ def objstore_virtref(fullpath):
 
 def objstore_trim_virtref(obstrepo, virtref):
     args = ['for-each-ref', '--format', 'delete %(refname)', f'refs/virtual/{virtref}']
-    ecode, out, err = run_git_command(obstrepo, args)
+    ecode, out, _err = run_git_command(obstrepo, args)
     if ecode == 0 and len(out):
         out += '\n'
         args = ['update-ref', '--stdin']
@@ -444,7 +444,7 @@ def remove_from_objstore(obstrepo, fullpath):
     if altrepo and os.path.realpath(obstrepo) == os.path.realpath(altrepo):
         # Repack the child first, using minimal flags
         args = ['repack', '-abq']
-        ecode, out, err = run_git_command(fullpath, args)
+        ecode, _out, _err = run_git_command(fullpath, args)
         if ecode > 0:
             logger.debug('Could not repack child repo %s for removal from %s', fullpath, obstrepo)
             return False
@@ -467,7 +467,7 @@ def list_repo_remotes(fullpath, withurl=False):
     if withurl:
         args.append('-v')
 
-    ecode, out, err = run_git_command(fullpath, args)
+    _ecode, out, _err = run_git_command(fullpath, args)
     if not len(out):
         logger.debug('Could not list remotes in %s', fullpath)
         return []
@@ -491,7 +491,7 @@ def add_repo_to_objstore(obstrepo, fullpath):
         return False
 
     args = ['remote', 'add', virtref, fullpath, '--no-tags']
-    ecode, out, err = run_git_command(obstrepo, args)
+    ecode, _out, _err = run_git_command(obstrepo, args)
     if ecode > 0:
         logger.critical('Could not add remote to %s', obstrepo)
         sys.exit(1)
@@ -606,7 +606,7 @@ def fetch_objstore_repo(obstrepo, fullpath=None, pack_refs=False, use_plumbing=F
         if use_plumbing:
             success = _fetch_objstore_repo_using_plumbing(url, obstrepo, virtref)
         else:
-            ecode, out, err = run_git_command(obstrepo, ['fetch', virtref, '--prune'])
+            ecode, _out, _err = run_git_command(obstrepo, ['fetch', virtref, '--prune'])
             if ecode > 0:
                 success = False
 
@@ -710,7 +710,7 @@ def get_obstrepo_mapping(obstdir):
     for child in pathlib.Path(obstdir).iterdir():
         if child.is_dir() and child.suffix == '.git':
             obstrepo = child.as_posix()
-            ecode, out, err = run_git_command(obstrepo, ['remote', '-v'])
+            ecode, out, _err = run_git_command(obstrepo, ['remote', '-v'])
             if ecode > 0:
                 # weird
                 continue
@@ -719,7 +719,7 @@ def get_obstrepo_mapping(obstdir):
                 chunks = line.split()
                 if len(chunks) < 2:
                     continue
-                name, url = chunks[:2]
+                _name, url = chunks[:2]
                 if url in mapping:
                     continue
                 # Does it still exist?
@@ -777,7 +777,7 @@ def get_repo_fingerprint(toplevel, gitdir, force=False, ignorerefs=None):
         logger.debug('Fingerprint for %s: %s', gitdir, fingerprint)
     else:
         logger.debug('Generating fingerprint for %s', gitdir)
-        ecode, out, err = run_git_command(fullpath, ['show-ref'])
+        ecode, out, _err = run_git_command(fullpath, ['show-ref'])
         if ecode > 0 or not len(out):
             logger.debug('No heads in %s, nothing to fingerprint.', fullpath)
             return None
@@ -785,7 +785,7 @@ def get_repo_fingerprint(toplevel, gitdir, force=False, ignorerefs=None):
         if ignorerefs:
             hasher = hashlib.sha1()
             for line in out.split('\n'):
-                rhash, rname = line.split(maxsplit=1)
+                _rhash, rname = line.split(maxsplit=1)
                 ignored = False
                 for ignoreref in ignorerefs:
                     if fnmatch.fnmatch(rname, ignoreref):
@@ -1060,7 +1060,7 @@ def load_config_file(cfgfile):
 
 def is_precious(fullpath):
     args = ['config', '--get', 'extensions.preciousObjects']
-    retcode, output, error = run_git_command(fullpath, args)
+    _retcode, output, _error = run_git_command(fullpath, args)
     if output.strip().lower() in ('yes', 'true', '1'):
         return True
     return False

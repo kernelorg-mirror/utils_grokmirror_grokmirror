@@ -87,7 +87,7 @@ def get_blob_set(fullpath):
     # This only makes sense for repos not using alternates, so make sure you check first
     logger.info(' bloblist: %s', fullpath)
     gitargs = ['cat-file', '--batch-all-objects', '--batch-check', '--unordered']
-    retcode, output, error = grokmirror.run_git_command(fullpath, gitargs)
+    retcode, output, _error = grokmirror.run_git_command(fullpath, gitargs)
     if retcode == 0:
         with open(blobcache, 'w') as fh:
             fh.write('# Blobs and sizes used for sibling calculation\n')
@@ -255,7 +255,7 @@ def run_git_prune(fullpath, config):
     # running the prune job.
     args = ['prune', '--expire=yesterday']
     logger.info('    prune: pruning')
-    retcode, output, error = grokmirror.run_git_command(fullpath, args)
+    _retcode, _output, error = grokmirror.run_git_command(fullpath, args)
 
     if error:
         warn = remove_ignored_errors(error, config)
@@ -401,7 +401,7 @@ def run_git_repack(fullpath, config, level=1, prune=True):
     # We always tack on -q
     args.append('-q')
 
-    retcode, output, error = grokmirror.run_git_command(fullpath, args)
+    _retcode, _output, error = grokmirror.run_git_command(fullpath, args)
 
     # With newer versions of git, repack may return warnings that are safe to ignore
     # so use the same strategy to weed out things we aren't interested in seeing
@@ -429,7 +429,7 @@ def run_git_repack(fullpath, config, level=1, prune=True):
         args.append('--all')
     else:
         logger.info(' packrefs: repacking refs')
-    retcode, output, error = grokmirror.run_git_command(fullpath, args)
+    _retcode, _output, error = grokmirror.run_git_command(fullpath, args)
 
     # pack-refs shouldn't return anything, but use the same ignore_errors block
     # to weed out any future potential benign warnings
@@ -463,7 +463,7 @@ def run_git_fsck(fullpath, config, conn_only=False):
     else:
         logger.info('     fsck: running full checks')
 
-    retcode, output, error = grokmirror.run_git_command(fullpath, args)
+    _retcode, output, error = grokmirror.run_git_command(fullpath, args)
     output = output + '\n' + error
 
     if output:
@@ -481,7 +481,7 @@ def run_git_commit_graph(fullpath, extraflags=None):
     args = ['commit-graph', 'write']
     if extraflags:
         args += extraflags
-    retcode, output, error = grokmirror.run_git_command(fullpath, args)
+    retcode, _output, _error = grokmirror.run_git_command(fullpath, args)
     if retcode == 0:
         return True
 
@@ -1070,7 +1070,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         # Go through all our refs and find all stale virtrefs
         args = ['for-each-ref', '--format=%(refname)', 'refs/virtual/']
         trimmed_virtrefs = set()
-        ecode, out, err = grokmirror.run_git_command(obstrepo, args)
+        ecode, out, _err = grokmirror.run_git_command(obstrepo, args)
         if ecode == 0 and out:
             for line in out.split('\n'):
                 chunks = line.split('/')
