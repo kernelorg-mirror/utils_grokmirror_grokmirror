@@ -27,6 +27,9 @@ v3.0 (TBD)
   usable root commits
 - Fix grok-fsck writing the literal string "None" as the fingerprint of a
   repository with no refs, which every reader then accepted as valid
+- Fix grok-fsck dying with a traceback, and losing the error report
+  entirely, when the mail host could not be reached; the report is now
+  written to the log instead
 - Fix grok-bundle traceback when passed an empty --gitargs or
   --revlistargs
 - Fix grok-pull error message on remote manifest command failure, which

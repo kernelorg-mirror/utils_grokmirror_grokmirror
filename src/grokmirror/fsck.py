@@ -1388,9 +1388,16 @@ def grok_fsck(
         report_to = config['fsck'].get('report_to', 'root')
         msg['To'] = report_to
         mailhost = config['fsck'].get('report_mailhost', 'localhost')
-        s = smtplib.SMTP(mailhost)
-        s.send_message(msg)
-        s.quit()
+        try:
+            s = smtplib.SMTP(mailhost)
+            s.send_message(msg)
+            s.quit()
+        except (OSError, smtplib.SMTPException) as ex:
+            # Plenty of hosts have no local MTA, and losing the report entirely
+            # (plus a traceback in the cron mail) is the worst possible outcome,
+            # since by definition we only get here when something went wrong.
+            logger.critical('Could not send the report to %s: %s', mailhost, ex)
+            logger.critical('Report follows:\n%s', report)
 
 
 def command() -> None:
