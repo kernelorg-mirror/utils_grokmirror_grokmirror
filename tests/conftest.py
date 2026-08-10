@@ -112,4 +112,8 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope='session', autouse=True)
 def _require_git() -> None:
     if shutil.which('git') is None:  # pragma: no cover - environment sanity
-        pytest.skip('git is not installed', allow_module_level=True)
+        # ty reads pytest's decorator-wrapped skip() as taking no arguments at
+        # all, so it rejects the reason whether it is passed positionally or by
+        # keyword. Everything else in the tree is checked, so pin the ignore to
+        # this one line rather than turning the rule off.
+        pytest.skip('git is not installed')  # ty: ignore[too-many-positional-arguments]

@@ -17,7 +17,7 @@ import shutil
 
 import pytest
 
-from support import DECOY_URL, GrokTree, git
+from support import BASE_TIMESTAMP, DECOY_URL, GrokTree, git
 
 
 def test_walks_the_toplevel(tree: GrokTree) -> None:
@@ -31,6 +31,19 @@ def test_walks_the_toplevel(tree: GrokTree) -> None:
         assert entry['fingerprint']
         assert entry['head'] == 'ref: refs/heads/master'
         assert entry['reference'] is None
+
+
+def test_modified_is_the_latest_commit_timestamp(tree: GrokTree) -> None:
+    # The timestamp comes from `git for-each-ref --format=%(committerdate:iso-strict)`,
+    # which recent git versions render with a trailing 'Z' for UTC. Python's
+    # fromisoformat() only accepts that from 3.11 on, so on everything older
+    # grok-manifest raised ValueError on every single repository -- and the
+    # fallback it had was written for Python 3.6 and caught AttributeError.
+    source = tree.source('source', commits=3)
+    tree.add_repo('test/one.git', source=source)
+    tree.run_manifest()
+
+    assert tree.read_manifest()['/test/one.git']['modified'] == BASE_TIMESTAMP + 3 * 60
 
 
 def test_records_description_and_owner(tree: GrokTree) -> None:
