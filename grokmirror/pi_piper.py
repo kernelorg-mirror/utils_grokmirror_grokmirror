@@ -206,8 +206,9 @@ def command():
             section = sectname
 
     pipe = config[section].get('pipe')
-    if pipe == 'None':
-        # Quick exit
+    if not pipe or pipe == 'None':
+        # Quick exit. Also covers a config with no pipe defined at all, which
+        # would otherwise have shlex read the pipe command from stdin.
         sys.exit(0)
 
     logfile = config[section].get('log')

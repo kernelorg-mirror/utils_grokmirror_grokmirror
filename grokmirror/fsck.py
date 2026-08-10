@@ -148,6 +148,11 @@ def merge_siblings(siblings, amap):
             mdest = sibling
             rcount = len(s_remotes)
 
+    if mdest is None:
+        # Every sibling turned out to be orphaned, so there is nothing to merge
+        # into. They will get cleaned up separately.
+        return None
+
     # Migrate all siblings into the repo with most remotes
     siblings.remove(mdest)
     for sibling in siblings:
