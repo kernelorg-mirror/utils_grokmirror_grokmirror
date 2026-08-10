@@ -30,6 +30,7 @@ import sys
 import tempfile
 import time
 import uuid
+from configparser import ConfigParser, ExtendedInterpolation
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
 from typing import IO, Literal, overload
 
@@ -45,7 +46,7 @@ GITBIN = '/usr/bin/git'
 # default logger. Will be overridden.
 logger = logging.getLogger(__name__)
 
-_alt_repo_map = None
+_alt_repo_map: dict[str, set[str]] | None = None
 
 # Used to store our requests session
 REQSESSION = None
@@ -284,7 +285,7 @@ def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
     entries = get_config_from_git(fullpath, r'gitweb\..*')
     owner = entries.get('owner', None)
 
-    modified = 0
+    modified: datetime.datetime | None = None
 
     if not usenow:
         args = ['for-each-ref', '--sort=-committerdate', '--format=%(committerdate:iso-strict)', '--count=1']
@@ -298,7 +299,7 @@ def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
                 out = out[:-3] + out[-2:]
                 modified = datetime.datetime.strptime(out, '%Y-%m-%dT%H:%M:%S%z')
 
-    if not modified:
+    if modified is None:
         # Timezone-aware, to match what the committerdate branch above returns.
         # The epoch value we record below is the same either way.
         modified = datetime.datetime.now(tz=datetime.timezone.utc)
@@ -710,7 +711,7 @@ def find_best_obstrepo(mypath, obst_roots, toplevel, baselines, minratio=0.2):
     if not myroots:
         return None
     obstrepo = None
-    bestratio = 0
+    bestratio = 0.0
     for path, roots in obst_roots.items():
         if path == mypath or not roots:
             continue
@@ -741,7 +742,7 @@ def find_best_obstrepo(mypath, obst_roots, toplevel, baselines, minratio=0.2):
 
 
 def get_obstrepo_mapping(obstdir):
-    mapping = {}
+    mapping: dict[str, str] = {}
     if not os.path.isdir(obstdir):
         return mapping
     for child in pathlib.Path(obstdir).iterdir():
@@ -785,7 +786,7 @@ def find_objstore_repo_for(obstdir, fullpath):
 
 
 def get_forkgroups(obstdir, toplevel):
-    forkgroups = {}
+    forkgroups: dict[str, set[str]] = {}
     if not os.path.exists(obstdir):
         return forkgroups
     for child in pathlib.Path(obstdir).iterdir():
@@ -1024,13 +1025,13 @@ def write_manifest(manifile, manifest, mtime=None, pretty=False):
         else:
             jdata = json.dumps(manifest)
 
-        jdata = jdata.encode('utf-8')
+        jbytes = jdata.encode('utf-8')
         if manifile.endswith('.gz'):
             gfh = gzip.GzipFile(fileobj=fh, mode='wb')
-            gfh.write(jdata)
+            gfh.write(jbytes)
             gfh.close()
         else:
-            fh.write(jdata)
+            fh.write(jbytes)
 
         os.fsync(fd)
         fh.close()
@@ -1051,13 +1052,16 @@ def write_manifest(manifile, manifest, mtime=None, pretty=False):
             os.unlink(tmpfile)
 
 
-def load_config_file(cfgfile):
-    from configparser import ConfigParser, ExtendedInterpolation
+class GrokConfigParser(ConfigParser):
+    # Carries the config file's mtime, so we can notice when it changes
+    last_modified: int = 0
 
+
+def load_config_file(cfgfile):
     if not os.path.exists(cfgfile):
         sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
         sys.exit(1)
-    config = ConfigParser(interpolation=ExtendedInterpolation())
+    config = GrokConfigParser(interpolation=ExtendedInterpolation())
     config.read(cfgfile)
 
     if 'core' not in config:
@@ -1065,7 +1069,12 @@ def load_config_file(cfgfile):
         sys.stderr.write('       Perhaps this is a grokmirror-1.x config file?\n')
         sys.exit(1)
 
-    toplevel = os.path.realpath(os.path.expanduser(config['core'].get('toplevel')))
+    cfgtoplevel = config['core'].get('toplevel')
+    if not cfgtoplevel:
+        sys.stderr.write(f'ERROR: Section [core] must define "toplevel" in: {cfgfile}\n')
+        sys.exit(1)
+
+    toplevel = os.path.realpath(os.path.expanduser(cfgtoplevel))
     if not os.access(toplevel, os.W_OK):
         logger.critical('Toplevel %s does not exist or is not writable', toplevel)
         sys.exit(1)
@@ -1084,8 +1093,10 @@ def load_config_file(cfgfile):
 
     fstat = os.stat(cfgfile)
     # stick last config file modification date into the config object,
-    # so we can catch config file updates
-    config.last_modified = fstat[8]
+    # so we can catch config file updates. Whole seconds, same as the old
+    # fstat[8] indexing gave us -- it goes into the manifest status file and
+    # gets compared for equality, so it must stay an int.
+    config.last_modified = int(fstat.st_mtime)
 
     return config
 
@@ -1147,11 +1158,11 @@ def init_logger(subcommand, logfile, loglevel, verbose):
     logger.setLevel(logging.DEBUG)
 
     if logfile:
-        ch = logging.handlers.WatchedFileHandler(os.path.expanduser(logfile))
+        fh = logging.handlers.WatchedFileHandler(os.path.expanduser(logfile))
         formatter = logging.Formatter(subcommand + '[%(process)d] %(asctime)s - %(levelname)s - %(message)s')
-        ch.setFormatter(formatter)
-        ch.setLevel(loglevel)
-        logger.addHandler(ch)
+        fh.setFormatter(formatter)
+        fh.setLevel(loglevel)
+        logger.addHandler(fh)
 
     ch = logging.StreamHandler()
     formatter = logging.Formatter('%(message)s')

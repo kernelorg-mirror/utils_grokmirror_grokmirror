@@ -13,6 +13,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 import datetime
 import fnmatch
 import gc
@@ -604,17 +606,17 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                 # Randomize next check between now and frequency
                 delay = random.randint(0, frequency)
                 nextdate = today + datetime.timedelta(days=delay)
-                nextcheck = nextdate.strftime('%F')
+                nextcheckiso = nextdate.strftime('%F')
             else:
-                nextcheck = todayiso
+                nextcheckiso = todayiso
 
             status[fullpath] = {
                 'lastcheck': 'never',
-                'nextcheck': nextcheck,
+                'nextcheck': nextcheckiso,
                 'fingerprint': grokmirror.get_repo_fingerprint(toplevel, gitdir),
             }
             logger.info('%s:', fullpath)
-            logger.info('    added: next check on %s', nextcheck)
+            logger.info('    added: next check on %s', nextcheckiso)
 
     if 'manifest' in config:
         pretty = config['manifest'].getboolean('pretty', False)
@@ -632,7 +634,8 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         stfh.write(json.dumps(status, indent=2))
 
     # Go through status and find all repos that need work done on them.
-    to_process = set()
+    # Entries are (fullpath, action, repack_level), with no level for fsck runs.
+    to_process: set[tuple[str, str, int | None]] = set()
 
     total_checked = 0
     total_elapsed = 0
@@ -1168,7 +1171,9 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         if action == 'repack':
             if run_git_repack(fullpath, config, repack_level):
                 status[fullpath]['lastrepack'] = todayiso
-                if repack_level > 1:
+                # to_process only ever queues repacks with a level, but spell the
+                # check out so this doesn't blow up if that ever stops being true
+                if repack_level and repack_level > 1:
                     try:
                         os.unlink(os.path.join(fullpath, 'grokmirror.repack'))
                     except FileNotFoundError:

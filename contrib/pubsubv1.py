@@ -28,7 +28,9 @@ import re
 import socket
 from configparser import ConfigParser, ExtendedInterpolation
 
-import falcon
+# falcon is only needed to run this optional listener frontend, so it is not a
+# grokmirror dependency and the type checkers won't find it
+import falcon  # ty: ignore[unresolved-import]
 
 # Some sanity defaults
 MAX_PROJ_LEN = 32
@@ -89,11 +91,11 @@ class PubsubListener:
             return
         config = ConfigParser(interpolation=ExtendedInterpolation())
         config.read(cfgfile)
-        if 'pull' not in config or not config['pull'].get('socket'):
+        sockfile = config['pull'].get('socket') if 'pull' in config else None
+        if not sockfile:
             resp.status = falcon.HTTP_500
             resp.body = 'Invalid project configuration (no socket defined)\n'
             return
-        sockfile = config['pull'].get('socket')
         if not os.access(sockfile, os.W_OK):
             resp.status = falcon.HTTP_500
             resp.body = 'Invalid project configuration (socket does not exist or is not writable)\n'

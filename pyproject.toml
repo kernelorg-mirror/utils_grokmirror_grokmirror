@@ -71,10 +71,20 @@ addopts = "--tb=short"
 # python_version is deliberately unset: mypy no longer accepts a 3.9 target, so
 # it checks against whatever interpreter it runs under. ruff, pyright and ty are
 # all still pinned to py39, and ci-matrix.sh actually runs the tests on 3.9.
+# Otherwise a leftover build/ tree from `python -m build` collides with the
+# real package and mypy refuses to check anything at all.
+exclude = ['^build/']
+check_untyped_defs = true
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# falcon is only needed by contrib/pubsubv1.py, which is an optional listener
+# frontend and not part of the installed package.
+module = ["falcon"]
+ignore_missing_imports = true
 
 [tool.pyright]
 # pyright automatically ignores virtual environments and other directories, but

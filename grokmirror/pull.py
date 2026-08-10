@@ -13,6 +13,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 import calendar
 import fnmatch
 import gzip
@@ -30,6 +32,7 @@ import tempfile
 import time
 import uuid
 from socketserver import StreamRequestHandler, ThreadingMixIn, UnixStreamServer
+from typing import cast
 
 import requests
 
@@ -82,9 +85,18 @@ class SignalHandler:
         signal.signal(signal.SIGTERM, self.old_sigterm)
 
 
+class ThreadedUnixStreamServer(ThreadingMixIn, UnixStreamServer):
+    # socket_worker() sticks these onto the instance for Handler to pick up
+    q_mani: mp.Queue
+    config: grokmirror.GrokConfigParser
+
+
 class Handler(StreamRequestHandler):
     def handle(self):
-        config = self.server.config
+        # socketserver types self.server as the base class, so narrow it to the
+        # one socket_worker() actually hands us
+        server = cast('ThreadedUnixStreamServer', self.server)
+        config = server.config
         manifile = config['core'].get('manifest')
         while True:
             # noinspection PyBroadException
@@ -98,7 +110,7 @@ class Handler(StreamRequestHandler):
                     # Set fingerprint to None to force a run
                     repoinfo['fingerprint'] = None
                     repoinfo['modified'] = int(time.time())
-                    self.server.q_mani.put((gitdir, repoinfo, 'pull'))
+                    server.q_mani.put((gitdir, repoinfo, 'pull'))
                 elif gitdir:
                     logger.info(' listener: %s (not known, ignored)', gitdir)
                     return
@@ -110,12 +122,8 @@ class Handler(StreamRequestHandler):
                 return
 
 
-class ThreadedUnixStreamServer(ThreadingMixIn, UnixStreamServer):
-    pass
-
-
 def build_optimal_forkgroups(l_manifest, r_manifest, toplevel, obstdir):
-    r_forkgroups = {}
+    r_forkgroups: dict[str, set[str]] = {}
     for gitdir in set(r_manifest.keys()):
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
         # our forkgroup info wins, because our own grok-fcsk may have found better siblings
@@ -806,19 +814,19 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
                 logger.warning('Server returned status: %s', res.status_code)
                 raise OSError(f'Remote server returned an error: {res.status_code}')
 
-            r_last_modified = res.headers['Last-Modified']
-            r_last_modified = time.strptime(r_last_modified, '%a, %d %b %Y %H:%M:%S %Z')
-            r_last_modified = calendar.timegm(r_last_modified)
+            r_mtime = time.strptime(res.headers['Last-Modified'], '%a, %d %b %Y %H:%M:%S %Z')
+            r_last_modified = calendar.timegm(r_mtime)
 
             # We don't use read_manifest for the remote manifest, as it can be
             # anything, really. For now, blindly open it with gzipfile if it ends
             # with .gz. XXX: some http servers will auto-deflate such files.
+            jdata: str | bytes
             try:
                 if r_mani_url.rfind('.gz') > 0:
                     import io
 
-                    fh = gzip.GzipFile(fileobj=io.BytesIO(res.content))
-                    jdata = fh.read().decode()
+                    with gzip.GzipFile(fileobj=io.BytesIO(res.content)) as gzfh:
+                        jdata = gzfh.read().decode()
                 else:
                     jdata = res.content
 
@@ -1135,11 +1143,11 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
     obstdir = os.path.realpath(config['core'].get('objstore'))
     refresh = config['pull'].getint('refresh', 300)
 
-    q_mani = mp.Queue()
-    q_todo = mp.Queue()
-    q_pull = mp.Queue()
-    q_done = mp.Queue()
-    q_spa = mp.Queue()
+    q_mani: mp.Queue = mp.Queue()
+    q_todo: mp.Queue = mp.Queue()
+    q_pull: mp.Queue = mp.Queue()
+    q_done: mp.Queue = mp.Queue()
+    q_spa: mp.Queue = mp.Queue()
 
     sw = None
     sockfile = config['pull'].get('socket')
@@ -1155,10 +1163,10 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
         sw.daemon = True
         sw.start()
 
-    pws = []
-    dws = []
-    mws = []
-    actions = set()
+    pws: list[mp.Process] = []
+    dws: list[mp.Process] = []
+    mws: list[mp.Process] = []
+    actions: set[tuple[str, str]] = set()
     # Run in the main thread if we have runonce
     if runonce:
         fill_todo_from_manifest(config, q_mani, nomtime=nomtime, forcepurge=forcepurge)
@@ -1176,8 +1184,8 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
     elif pull_threads < 1:
         pull_threads = 1
 
-    busy = set()
-    done = []
+    busy: set[str] = set()
+    done: list = []
     cloned = []
     good = 0
     bad = 0

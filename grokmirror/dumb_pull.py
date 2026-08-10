@@ -119,10 +119,10 @@ def run_post_update_hook(hookscript, gitdir):
 
     args = [hookscript, gitdir]
     logger.debug('Running: %s', ' '.join(args))
-    (output, error) = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+    (outb, errb) = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
 
-    error = error.decode().strip()
-    output = output.decode().strip()
+    error = errb.decode().strip()
+    output = outb.decode().strip()
     if error:
         # Put hook stderror into warning
         logger.warning('Hook Stderr: %s', error)
