@@ -847,9 +847,7 @@ def is_alt_repo(toplevel, refrepo):
     amap = get_altrepo_map(toplevel)
 
     looking_for = os.path.realpath(os.path.join(toplevel, refrepo.strip('/')))
-    if looking_for in amap:
-        return True
-    return False
+    return looking_for in amap
 
 
 def is_obstrepo(fullpath, obstdir=None):
@@ -1062,9 +1060,7 @@ def load_config_file(cfgfile):
 def is_precious(fullpath):
     args = ['config', '--get', 'extensions.preciousObjects']
     _retcode, output, _error = run_git_command(fullpath, args)
-    if output.strip().lower() in ('yes', 'true', '1'):
-        return True
-    return False
+    return output.strip().lower() in ('yes', 'true', '1')
 
 
 def get_repack_level(obj_info, max_loose_objects=1200, max_packs=20, pc_loose_objects=10, pc_loose_size=10):

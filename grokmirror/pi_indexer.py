@@ -224,7 +224,9 @@ def process_inboxdirs(inboxdirs: set, opts, init: bool = False):
         # Check if msgmap.sqlite3 is there -- it can be a clone of a new epoch,
         # so no initialization is necessary
         msgmapdbf = os.path.join(pdir, 'msgmap.sqlite3')
-        if init and not os.path.exists(msgmapdbf):
+        # Kept nested on purpose: collapsing this would move the side-effecting
+        # init_pi_inbox() call into a boolean chain.
+        if init and not os.path.exists(msgmapdbf):  # noqa: SIM102
             # Initialize this public-inbox repo
             if not init_pi_inbox(gdir, pdir, opts):
                 logger.critical('Could not init %s', inboxdir)

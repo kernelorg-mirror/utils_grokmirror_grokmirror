@@ -116,10 +116,7 @@ def check_sibling_repos_by_blobs(bset1, bsize1, bset2, bsize2, ratio):
     logger.debug('isize=%s, bsize1=%s, ratio1=%s', isize, bsize1, ratio1)
     ratio2 = int(isize / bsize2 * 100)
     logger.debug('isize=%s, bsize2=%s ratio2=%s', isize, bsize2, ratio1)
-    if ratio1 >= ratio and ratio2 >= ratio:
-        return True
-
-    return False
+    return ratio1 >= ratio and ratio2 >= ratio
 
 
 def find_siblings_by_blobs(obstrepo, obstdir, ratio=75):
@@ -482,10 +479,7 @@ def run_git_commit_graph(fullpath, extraflags=None):
     if extraflags:
         args += extraflags
     retcode, _output, _error = grokmirror.run_git_command(fullpath, args)
-    if retcode == 0:
-        return True
-
-    return False
+    return retcode == 0
 
 
 def set_precious_objects(fullpath, enabled=True):
@@ -595,7 +589,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
             changed = True
             continue
 
-        if fullpath not in status.keys():
+        if fullpath not in status:
             # Newly added repository
             if not force:
                 # Randomize next check between now and frequency

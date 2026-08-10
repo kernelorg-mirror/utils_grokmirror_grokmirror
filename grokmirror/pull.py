@@ -1295,19 +1295,18 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
                 logger.debug('main_thread: got %s/%s from q_todo', gitdir, q_action)
             except queue.Empty:
                 if q_mani.empty() and q_done.empty():
-                    if not len(pws):
-                        if done:
-                            update_manifest(config, done)
-                            if post_work_hook:
-                                run_post_work_complete_hook(config)
-                            if runonce:
-                                # Wait till spa is done
-                                while True:
-                                    if q_spa.empty():
-                                        for dw in dws:
-                                            dw.join()
-                                        return 0
-                                    time.sleep(1)
+                    if not len(pws) and done:
+                        update_manifest(config, done)
+                        if post_work_hook:
+                            run_post_work_complete_hook(config)
+                        if runonce:
+                            # Wait till spa is done
+                            while True:
+                                if q_spa.empty():
+                                    for dw in dws:
+                                        dw.join()
+                                    return 0
+                                time.sleep(1)
                     if len(pws):
                         # Don't run a hot loop waiting on results
                         time.sleep(5)

@@ -47,7 +47,7 @@ def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
     if revlistargs:
         revlistargs = revlistargs.split()
 
-    for repo in manifest.keys():
+    for repo in manifest:
         logger.debug('Checking %s', repo)
         # Does it match our globbing pattern?
         found = False
