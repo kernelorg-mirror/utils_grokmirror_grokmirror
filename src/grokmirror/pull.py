@@ -300,7 +300,8 @@ def pull_worker(config, q_pull, q_spa, q_done):
     toplevel = os.path.realpath(config['core'].get('toplevel'))
     obstdir = os.path.realpath(config['core'].get('objstore'))
     maxretries = config['pull'].getint('retries', 3)
-    site = config['remote'].get('site')
+    # pull_mirror() checked these before starting us up
+    site = config['remote']['site']
     remotename = config['pull'].get('remotename', '_grokmirror')
     # Should we use plumbing for objstore operations?
     objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
@@ -770,7 +771,8 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
         config_last_modified = r_mani_status.get('config-last-modified', 0)
         if config_last_modified != config.last_modified:
             nomtime = True
-        r_mani_url = config['remote'].get('manifest')
+        # No manifest_command, so pull_mirror() made sure we have a manifest URL
+        r_mani_url = config['remote']['manifest']
         logger.info(' manifest: fetching %s', r_mani_url)
         if r_mani_url.find('file:///') == 0:
             r_mani_url = r_mani_url.replace('file://', '')
@@ -1146,6 +1148,19 @@ def manifest_worker(config, q_mani, nomtime=False):
 
 
 def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
+    # We can't mirror anything without knowing where to pull from, and every
+    # worker we start below assumes these are set. Say so plainly here, instead
+    # of crashing much later inside a worker with a TypeError.
+    if 'remote' not in config:
+        logger.critical('Section [remote] must exist in the config file')
+        return 1
+    if not config['remote'].get('site'):
+        logger.critical('Section [remote] must define "site"')
+        return 1
+    if not (config['remote'].get('manifest') or config['remote'].get('manifest_command')):
+        logger.critical('Section [remote] must define "manifest" or "manifest_command"')
+        return 1
+
     toplevel = os.path.realpath(config['core'].get('toplevel'))
     obstdir = os.path.realpath(config['core'].get('objstore'))
     refresh = config['pull'].getint('refresh', 300)
@@ -1375,7 +1390,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
                 q_done.put((gitdir, repoinfo, q_action, False))
                 continue
 
-            fix_remotes(toplevel, gitdir, config['remote'].get('site'), config)
+            fix_remotes(toplevel, gitdir, config['remote']['site'], config)
             set_repo_params(fullpath, repoinfo)
             grokmirror.unlock_repo(fullpath)
 
