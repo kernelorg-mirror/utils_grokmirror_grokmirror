@@ -43,10 +43,10 @@ def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
     # load_config_file() guarantees both of these are set
     manifest = grokmirror.read_manifest(config['core']['manifest'])
     toplevel = os.path.realpath(config['core']['toplevel'])
-    if gitargs:
-        gitargs = gitargs.split()
-    if revlistargs:
-        revlistargs = revlistargs.split()
+    # An empty string means "no extra arguments", and str.split() already
+    # returns an empty list for it -- but only if we don't skip the split.
+    git_args = gitargs.split()
+    revlist_args = revlistargs.split()
 
     for repo in manifest:
         logger.debug('Checking %s', repo)
@@ -96,7 +96,7 @@ def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
             logger.info('  skipped: %s (%s > %s)', repo, total_size, maxsize)
             continue
 
-        fullargs = gitargs + ['bundle', 'create', bfile] + revlistargs
+        fullargs = git_args + ['bundle', 'create', bfile] + revlist_args
         logger.debug('Full git args: %s', fullargs)
         logger.info(' generate: %s', bfile)
         ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs)
