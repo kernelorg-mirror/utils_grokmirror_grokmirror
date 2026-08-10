@@ -294,13 +294,12 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
         args = ['for-each-ref', '--sort=-committerdate', '--format=%(committerdate:iso-strict)', '--count=1']
         _ecode, out, _err = run_git_command(fullpath, args)
         if len(out):
-            try:
-                modified = datetime.datetime.fromisoformat(out)
-            except AttributeError:
-                # Python 3.6 doesn't have fromisoformat
-                # remove : from the TZ info
-                out = out[:-3] + out[-2:]
-                modified = datetime.datetime.strptime(out, '%Y-%m-%dT%H:%M:%S%z')
+            # Recent git versions render a UTC offset as a trailing 'Z', and
+            # datetime.fromisoformat() only understands that from Python 3.11 on,
+            # so translate it into the offset spelling every version accepts.
+            if out.endswith('Z'):
+                out = out[:-1] + '+00:00'
+            modified = datetime.datetime.fromisoformat(out)
 
     if modified is None:
         # Timezone-aware, to match what the committerdate branch above returns.

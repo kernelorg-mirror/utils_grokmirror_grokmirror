@@ -17,6 +17,9 @@ v3.0 (TBD)
   had alternates
 - Fix grok-manifest traceback when the manifest path has no directory
   component (e.g. "-m manifest.js.gz")
+- Fix grok-manifest failing on every repository with recent versions of
+  git on Python older than 3.11: git renders a UTC committer date with a
+  trailing "Z", which datetime.fromisoformat() did not accept until 3.11
 - Fix grok-manifest reporting a nonsensical runtime if the system clock
   was adjusted mid-run
 - Fix grok-fsck traceback when reporting repository sizes of 1 TiB and
