@@ -47,6 +47,9 @@ grok-pull = "grokmirror.pull:command"
 [dependency-groups]
 dev = [
     "build",
+    # Only needed so the type checkers can see contrib/pubsubv1.py, which is an
+    # optional listener frontend and not a grokmirror runtime dependency.
+    "falcon",
     "mypy",
     "pyright",
     "pytest",
@@ -83,12 +86,6 @@ warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
-
-[[tool.mypy.overrides]]
-# falcon is only needed by contrib/pubsubv1.py, which is an optional listener
-# frontend and not part of the installed package.
-module = ["falcon"]
-ignore_missing_imports = true
 
 [tool.pyright]
 # pyright automatically ignores virtual environments and other directories, but

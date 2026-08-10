@@ -28,9 +28,7 @@ import re
 import socket
 from configparser import ConfigParser, ExtendedInterpolation
 
-# falcon is only needed to run this optional listener frontend, so it is not a
-# grokmirror dependency and the type checkers won't find it
-import falcon  # ty: ignore[unresolved-import]
+import falcon
 
 # Some sanity defaults
 MAX_PROJ_LEN = 32

@@ -981,7 +981,7 @@ def manifest_unlock(manifile):
         MANIFEST_LOCKH = None
 
 
-def read_manifest(manifile, wait=False):
+def read_manifest(manifile: str, wait: bool = False) -> dict:
     while True:
         if not wait or os.path.exists(manifile):
             break

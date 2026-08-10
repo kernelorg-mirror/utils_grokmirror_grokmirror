@@ -227,7 +227,8 @@ def parse_args():
         if not opts.manifile:
             opts.manifile = config['core'].get('manifest')
         if not opts.toplevel:
-            opts.toplevel = os.path.realpath(config['core'].get('toplevel'))
+            # load_config_file() guarantees [core]toplevel is set
+            opts.toplevel = os.path.realpath(config['core']['toplevel'])
         if not opts.logfile:
             opts.logfile = config['core'].get('logfile')
 

@@ -40,8 +40,9 @@ def get_repo_size(fullpath):
 
 def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
     # uses advisory lock, so its safe even if we die unexpectedly
-    manifest = grokmirror.read_manifest(config['core'].get('manifest'))
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
+    # load_config_file() guarantees both of these are set
+    manifest = grokmirror.read_manifest(config['core']['manifest'])
+    toplevel = os.path.realpath(config['core']['toplevel'])
     if gitargs:
         gitargs = gitargs.split()
     if revlistargs:

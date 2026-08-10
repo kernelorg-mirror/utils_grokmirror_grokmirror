@@ -1175,11 +1175,13 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         # in the middle of fsck or repack.
         grokmirror.lock_repo(fullpath, nonblocking=False)
         if action == 'repack':
-            if run_git_repack(fullpath, config, repack_level):
+            # to_process only ever queues repacks with a level, so pin it down
+            # here rather than treating it as optional throughout. Falling back
+            # to a quick repack keeps this working if that ever stops being true.
+            level = repack_level or 1
+            if run_git_repack(fullpath, config, level):
                 status[fullpath]['lastrepack'] = todayiso
-                # to_process only ever queues repacks with a level, but spell the
-                # check out so this doesn't blow up if that ever stops being true
-                if repack_level and repack_level > 1:
+                if level > 1:
                     try:
                         os.unlink(os.path.join(fullpath, 'grokmirror.repack'))
                     except FileNotFoundError:
@@ -1325,7 +1327,8 @@ def grok_fsck(
 
     obstdir = config['core'].get('objstore', None)
     if obstdir is None:
-        obstdir = os.path.join(config['core'].get('toplevel'), 'objstore')
+        # load_config_file() guarantees [core]toplevel is set
+        obstdir = os.path.join(config['core']['toplevel'], 'objstore')
         config['core']['objstore'] = obstdir
 
     logfile = config['core'].get('log', None)

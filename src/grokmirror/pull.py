@@ -97,7 +97,8 @@ class Handler(StreamRequestHandler):
         # one socket_worker() actually hands us
         server = cast('ThreadedUnixStreamServer', self.server)
         config = server.config
-        manifile = config['core'].get('manifest')
+        # load_config_file() guarantees [core]manifest is set
+        manifile = config['core']['manifest']
         while True:
             # noinspection PyBroadException
             try:
