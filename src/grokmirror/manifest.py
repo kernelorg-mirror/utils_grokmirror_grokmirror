@@ -55,8 +55,10 @@ def update_manifest(manifest, toplevel, fullpath, usenow, ignorerefs):
     reference = None
     if manifest[gitdir].get('forkgroup', None) != repoinfo.get('forkgroup', None):
         # Use the first remote listed in the forkgroup as our reference, just so
-        # grokmirror-1.x clients continue to work without doing full clones
-        remotes = grokmirror.list_repo_remotes(altrepo, withurl=True)
+        # grokmirror-1.x clients continue to work without doing full clones.
+        # Without alternates there is no forkgroup to look in, and asking git for
+        # the remotes of no repo at all just returns whatever is in the cwd.
+        remotes = grokmirror.list_repo_remotes(altrepo, withurl=True) if altrepo else []
         if len(remotes):
             urls = [x[1] for x in remotes]
             urls.sort()

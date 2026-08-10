@@ -217,6 +217,12 @@ def spa_worker(config, q_spa, pauseonload):
             done.append(action)
             if action == 'objstore':
                 altrepo = grokmirror.get_altrepo(fullpath)
+                if not altrepo:
+                    # Whatever queued this action expected us to have alternates,
+                    # and we don't. Passing None along would make git look at the
+                    # cwd instead of at an objstore repo.
+                    logger.debug('%s: no alternates, skipping objstore fetch', gitdir)
+                    continue
                 # Should we use plumbing for this?
                 use_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
                 grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=use_plumbing)
