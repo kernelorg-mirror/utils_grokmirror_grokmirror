@@ -37,10 +37,10 @@ logger = logging.getLogger(__name__)
 def log_errors(fullpath, cmdargs, lines):
     logger.critical('%s reports errors:', fullpath)
     with open(os.path.join(fullpath, 'grokmirror.fsck.err'), 'w') as fh:
-        fh.write('# Date: %s\n' % datetime.datetime.today().strftime('%F'))
-        fh.write('# Cmd : git %s\n' % ' '.join(cmdargs))
+        fh.write('# Date: {}\n'.format(datetime.datetime.today().strftime('%F')))
+        fh.write('# Cmd : git {}\n'.format(' '.join(cmdargs)))
         for count, line in enumerate(lines, start=1):
-            fh.write('%s\n' % line)
+            fh.write(f'{line}\n')
             logger.critical('\t%s', line)
             if count > 10:
                 logger.critical('\t [ %s more lines skipped ]', len(lines) - 10)
@@ -51,7 +51,7 @@ def log_errors(fullpath, cmdargs, lines):
 def gen_preload_bundle(fullpath, config):
     outdir = config['fsck'].get('preload_bundle_outdir')
     Path(outdir).mkdir(parents=True, exist_ok=True)
-    bname = '%s.bundle' % os.path.basename(fullpath)[:-4]
+    bname = f'{os.path.basename(fullpath)[:-4]}.bundle'
     args = ['bundle', 'create', os.path.join(outdir, bname), '--all']
     logger.info(' bundling: %s', bname)
     grokmirror.run_git_command(fullpath, args)
@@ -227,9 +227,9 @@ def get_human_size(kbsize):
     num = kbsize
     for unit in ['Ki', 'Mi', 'Gi']:
         if abs(num) < 1024.0:
-            return '%3.2f %sB' % (num, unit)
+            return f'{num:3.2f} {unit}B'
         num /= 1024.0
-    return '%.2f%s TiB' % num
+    return '{:.2f}{} TiB'.format(*num)
 
 
 def set_repo_reclone(fullpath, reason):
@@ -240,7 +240,7 @@ def set_repo_reclone(fullpath, reason):
         return
 
     with open(rfile, 'w') as rfh:
-        rfh.write('Requested by grok-fsck due to error: %s' % reason)
+        rfh.write(f'Requested by grok-fsck due to error: {reason}')
 
 
 def run_git_prune(fullpath, config):
@@ -519,7 +519,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         return 1
 
     # Lock the tree to make sure we only run one instance
-    lockfile = os.path.join(st_dir, '.%s.lock' % os.path.basename(statusfile))
+    lockfile = os.path.join(st_dir, f'.{os.path.basename(statusfile)}.lock')
     logger.debug('Attempting to obtain lock on %s', lockfile)
     flockh = open(lockfile, 'w')
     try:
@@ -844,7 +844,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
             packs = int(obj_info['packs'])
             count_loose = int(obj_info['count'])
         except KeyError:
-            logger.warning('Unable to count objects in %s, skipping' % fullpath)
+            logger.warning('Unable to count objects in %s, skipping', fullpath)
             continue
 
         schedcheck = datetime.datetime.strptime(status[fullpath]['nextcheck'], '%Y-%m-%d')
@@ -992,7 +992,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
 
             # Does it need fetching?
             fetch = True
-            l_fpf = os.path.join(obstrepo, 'grokmirror.%s.fingerprint' % virtref)
+            l_fpf = os.path.join(obstrepo, f'grokmirror.{virtref}.fingerprint')
             r_fpf = os.path.join(childpath, 'grokmirror.fingerprint')
             try:
                 with open(l_fpf) as fh:
@@ -1021,7 +1021,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
             for baseline in baselines:
                 # Does this repo match a baseline
                 if fnmatch.fnmatch(gitdir, baseline):
-                    baseline_refs.add('refs/virtual/%s/heads/' % virtref)
+                    baseline_refs.add(f'refs/virtual/{virtref}/heads/')
                     break
 
             # Do we need to set islandCore?

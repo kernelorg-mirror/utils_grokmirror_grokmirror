@@ -21,7 +21,7 @@ def get_pi_repos(inboxdir: str) -> list:
     members = []
     at = 0
     while True:
-        repodir = os.path.join(inboxdir, 'git', '%d.git' % at)
+        repodir = os.path.join(inboxdir, 'git', f'{at}.git')
         if not os.path.isdir(repodir):
             break
         members.append(repodir)

@@ -63,7 +63,7 @@ def get_requests_session():
         adapter = HTTPAdapter(max_retries=retry)
         REQSESSION.mount('http://', adapter)
         REQSESSION.mount('https://', adapter)
-        REQSESSION.headers.update({'User-Agent': 'grokmirror/%s' % VERSION})
+        REQSESSION.headers.update({'User-Agent': f'grokmirror/{VERSION}'})
     return REQSESSION
 
 
@@ -143,7 +143,7 @@ def run_git_command(
 
 def _lockname(fullpath):
     lockpath = os.path.dirname(fullpath)
-    lockname = '.%s.lock' % os.path.basename(fullpath)
+    lockname = f'.{os.path.basename(fullpath)}.lock'
     if not os.path.exists(lockpath):
         os.makedirs(lockpath)
     repolock = os.path.join(lockpath, lockname)
@@ -215,7 +215,8 @@ def set_repo_timestamp(toplevel, gitdir, ts):
     tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
 
     with open(tsfile, 'wt') as tsfh:
-        tsfh.write('%d' % ts)
+        # int() keeps the truncating behaviour the old '%d' formatting had
+        tsfh.write(f'{int(ts)}')
 
     logger.debug('Recorded timestamp for %s: %s', gitdir, ts)
 
@@ -401,7 +402,7 @@ def setup_objstore_repo(obstdir, name=None):
     if name is None:
         name = str(uuid.uuid4())
     pathlib.Path(obstdir).mkdir(parents=True, exist_ok=True)
-    obstrepo = os.path.join(obstdir, '%s.git' % name)
+    obstrepo = os.path.join(obstdir, f'{name}.git')
     logger.debug('Creating objstore repo in %s', obstrepo)
     lock_repo(obstrepo)
     if not setup_bare_repo(obstrepo):
@@ -456,7 +457,7 @@ def remove_from_objstore(obstrepo, fullpath):
     args = ['remote', 'remove', virtref]
     run_git_command(obstrepo, args)
     try:
-        os.unlink(os.path.join(obstrepo, 'grokmirror.%s.fingerprint' % virtref))
+        os.unlink(os.path.join(obstrepo, f'grokmirror.{virtref}.fingerprint'))
     except (OSError, FileNotFoundError):
         pass
     return True
@@ -495,7 +496,7 @@ def add_repo_to_objstore(obstrepo, fullpath):
     if ecode > 0:
         logger.critical('Could not add remote to %s', obstrepo)
         sys.exit(1)
-    set_git_config(obstrepo, 'remote.%s.fetch' % virtref, '+refs/*:refs/virtual/%s/*' % virtref)
+    set_git_config(obstrepo, f'remote.{virtref}.fetch', f'+refs/*:refs/virtual/{virtref}/*')
     telltale = os.path.join(obstrepo, 'grokmirror.objstore')
     knownsiblings = set()
     if os.path.exists(telltale):
@@ -613,7 +614,7 @@ def fetch_objstore_repo(obstrepo, fullpath=None, pack_refs=False, use_plumbing=F
         if success:
             r_fp = os.path.join(url, 'grokmirror.fingerprint')
             if os.path.exists(r_fp):
-                l_fp = os.path.join(obstrepo, 'grokmirror.%s.fingerprint' % virtref)
+                l_fp = os.path.join(obstrepo, f'grokmirror.{virtref}.fingerprint')
                 shutil.copy(r_fp, l_fp)
             if pack_refs:
                 try:
@@ -816,7 +817,7 @@ def set_repo_fingerprint(toplevel, gitdir, fingerprint=None):
         fingerprint = get_repo_fingerprint(toplevel, gitdir, force=True)
 
     with open(fpfile, 'wt') as fpfh:
-        fpfh.write('%s' % fingerprint)
+        fpfh.write(f'{fingerprint}')
 
     logger.debug('Recorded fingerprint for %s: %s', gitdir, fingerprint)
     return fingerprint
@@ -1023,13 +1024,13 @@ def load_config_file(cfgfile):
     from configparser import ConfigParser, ExtendedInterpolation
 
     if not os.path.exists(cfgfile):
-        sys.stderr.write('ERORR: File does not exist: %s\n' % cfgfile)
+        sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
         sys.exit(1)
     config = ConfigParser(interpolation=ExtendedInterpolation())
     config.read(cfgfile)
 
     if 'core' not in config:
-        sys.stderr.write('ERROR: Section [core] must exist in: %s\n' % cfgfile)
+        sys.stderr.write(f'ERROR: Section [core] must exist in: {cfgfile}\n')
         sys.stderr.write('       Perhaps this is a grokmirror-1.x config file?\n')
         sys.exit(1)
 

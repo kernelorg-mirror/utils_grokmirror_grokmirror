@@ -243,8 +243,8 @@ def objstore_repo_preload(config, obstrepo):
         return
     bname = os.path.basename(obstrepo)[:-4]
     obstdir = os.path.realpath(config['core'].get('objstore'))
-    burl = '%s/%s.bundle' % (purl.rstrip('/'), bname)
-    bfile = os.path.join(obstdir, '%s.bundle' % bname)
+    burl = '{}/{}.bundle'.format(purl.rstrip('/'), bname)
+    bfile = os.path.join(obstdir, f'{bname}.bundle')
     try:
         sess = grokmirror.get_requests_session()
         resp = sess.get(burl, stream=True)
@@ -343,8 +343,8 @@ def pull_worker(config, q_pull, q_spa, q_done):
             logger.info('  reclone: %s', gitdir)
             try:
                 altrepo = grokmirror.get_altrepo(fullpath)
-                shutil.move(fullpath, '%s.reclone' % fullpath)
-                shutil.rmtree('%s.reclone' % fullpath)
+                shutil.move(fullpath, f'{fullpath}.reclone')
+                shutil.rmtree(f'{fullpath}.reclone')
                 grokmirror.setup_bare_repo(fullpath)
                 fix_remotes(toplevel, gitdir, site, config)
                 set_repo_params(fullpath, repoinfo)
@@ -439,7 +439,7 @@ def pull_worker(config, q_pull, q_spa, q_done):
                         logger.debug('Removed existing wrong symlink %s', target)
                         os.unlink(target)
                 elif os.path.exists(target):
-                    logger.warning('Deleted repo %s, because it is now a symlink to %s' % (target, fullpath))
+                    logger.warning(f'Deleted repo {target}, because it is now a symlink to {fullpath}')
                     shutil.rmtree(target)
 
                 # Here we re-check if we still need to do anything
@@ -558,7 +558,7 @@ def set_agefile(toplevel, gitdir, last_modified):
     if not os.path.exists(os.path.dirname(agefile)):
         os.makedirs(os.path.dirname(agefile))
     with open(agefile, 'wt') as fh:
-        fh.write('%s\n' % cgit_fmt)
+        fh.write(f'{cgit_fmt}\n')
     logger.debug('Wrote "%s" into %s', cgit_fmt, agefile)
 
 
@@ -725,13 +725,13 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             except json.JSONDecodeError as ex:
                 logger.warning('Failed to parse output from %s', r_mani_cmd)
                 logger.warning('Error was: %s', ex)
-                raise OSError('Failed to parse output from %s (%s)' % (r_mani_cmd, ex))
+                raise OSError(f'Failed to parse output from {r_mani_cmd} ({ex})')
         elif ecode == 127:
             logger.info(' manifest: unchanged')
             return
         elif ecode == 1:
             logger.warning('Executing %s failed with exit code %s, exiting', r_mani_cmd, ecode)
-            raise OSError('Failed executing %s' % r_mani_cmd)
+            raise OSError(f'Failed executing {r_mani_cmd}')
         else:
             # Non-fatal errors for all other exit codes
             logger.warning(' manifest: executing %s returned %s', r_mani_cmd, ecode)
@@ -739,10 +739,10 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
 
         if not len(r_manifest):
             logger.warning(' manifest: empty, ignoring')
-            raise OSError('Empty manifest returned by %s' % r_mani_cmd)
+            raise OSError(f'Empty manifest returned by {r_mani_cmd}')
 
     else:
-        r_mani_status_path = os.path.join(os.path.dirname(l_mani_path), '.%s.remote' % os.path.basename(l_mani_path))
+        r_mani_status_path = os.path.join(os.path.dirname(l_mani_path), f'.{os.path.basename(l_mani_path)}.remote')
         try:
             with open(r_mani_status_path, 'r') as fh:
                 r_mani_status = json.loads(fh.read())
@@ -759,7 +759,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             r_mani_url = r_mani_url.replace('file://', '')
             if not os.path.exists(r_mani_url):
                 logger.critical('Remote manifest not found in %s! Quitting!', r_mani_url)
-                raise OSError('Remote manifest not found in %s' % r_mani_url)
+                raise OSError(f'Remote manifest not found in {r_mani_url}')
 
             fstat = os.stat(r_mani_url)
             r_last_modified = fstat[8]
@@ -774,7 +774,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             # Don't accept empty manifests -- that indicates something is wrong
             if not len(r_manifest):
                 logger.warning('Remote manifest empty or unparseable! Quitting.')
-                raise OSError('Empty manifest in %s' % r_mani_url)
+                raise OSError(f'Empty manifest in {r_mani_url}')
 
         else:
             session = grokmirror.get_requests_session()
@@ -792,7 +792,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             except requests.exceptions.RequestException as ex:
                 logger.warning('Could not fetch %s', r_mani_url)
                 logger.warning('Server returned: %s', ex)
-                raise OSError('Remote server returned an error: %s' % ex)
+                raise OSError(f'Remote server returned an error: {ex}')
 
             if res.status_code == 304:
                 # No change to the manifest, nothing to do
@@ -802,7 +802,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             if res.status_code > 200:
                 logger.warning('Could not fetch %s', r_mani_url)
                 logger.warning('Server returned status: %s', res.status_code)
-                raise OSError('Remote server returned an error: %s' % res.status_code)
+                raise OSError(f'Remote server returned an error: {res.status_code}')
 
             r_last_modified = res.headers['Last-Modified']
             r_last_modified = time.strptime(r_last_modified, '%a, %d %b %Y %H:%M:%S %Z')
@@ -830,7 +830,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             except Exception as ex:  # noqa: BLE001
                 logger.warning('Failed to parse %s', r_mani_url)
                 logger.warning('Error was: %s', ex)
-                raise OSError('Failed to parse %s (%s)' % (r_mani_url, ex))
+                raise OSError(f'Failed to parse {r_mani_url} ({ex})')
 
         # Record for the next run
         with open(r_mani_status_path, 'w') as fh:
@@ -941,7 +941,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             q_mani.put((gitdir, repoinfo, 'init'))
             continue
 
-        obstrepo = os.path.join(obstdir, '%s.git' % forkgroup)
+        obstrepo = os.path.join(obstdir, f'{forkgroup}.git')
         if os.path.isdir(obstrepo):
             # Init with an existing obstrepo, easy case
             q_mani.put((gitdir, repoinfo, 'init'))
@@ -1104,17 +1104,17 @@ def socket_worker(config, q_mani, sockfile):
 def showstats(q_todo, q_pull, q_spa, good, bad, pws, dws):
     stats = []
     if good:
-        stats.append('%s fetched' % good)
+        stats.append(f'{good} fetched')
     if pws:
-        stats.append('%s active' % len(pws))
+        stats.append(f'{len(pws)} active')
     if not q_pull.empty():
-        stats.append('%s queued' % q_pull.qsize())
+        stats.append(f'{q_pull.qsize()} queued')
     if not q_todo.empty():
-        stats.append('%s waiting' % q_todo.qsize())
+        stats.append(f'{q_todo.qsize()} waiting')
     if len(dws) or not q_spa.empty():
         stats.append('%s in spa' % (q_spa.qsize() + len(dws)))
     if bad:
-        stats.append('%s errors' % bad)
+        stats.append(f'{bad} errors')
 
     logger.info('      ---:  %s', ', '.join(stats))
 
@@ -1147,7 +1147,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
             if stat.S_ISSOCK(mode):
                 os.unlink(sockfile)
             else:
-                raise OSError('File exists but is not a socket: %s' % sockfile)
+                raise OSError(f'File exists but is not a socket: {sockfile}')
 
         sw = mp.Process(target=socket_worker, args=(config, q_mani, sockfile))
         sw.daemon = True
@@ -1369,7 +1369,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
                 q_pull.put((gitdir, repoinfo, 'pull', q_action))
                 continue
 
-            obstrepo = os.path.join(obstdir, '%s.git' % forkgroup)
+            obstrepo = os.path.join(obstdir, f'{forkgroup}.git')
             if os.path.isdir(obstrepo):
                 logger.debug('clone %s with existing obstrepo %s', gitdir, obstrepo)
                 grokmirror.set_altrepo(fullpath, obstrepo)

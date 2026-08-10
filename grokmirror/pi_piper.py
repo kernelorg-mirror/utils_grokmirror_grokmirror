@@ -26,14 +26,14 @@ def git_get_message_from_pi(fullpath: str, commit_id: str) -> bytes:
     if ecode > 0:
         logger.debug('Could not get the message, error below')
         logger.debug(err.decode())
-        raise KeyError('Could not find %s in %s' % (commit_id, fullpath))
+        raise KeyError(f'Could not find {commit_id} in {fullpath}')
     return out
 
 
 def git_get_new_revs(fullpath: str, pipelast: Optional[int] = None) -> list:
     statf = os.path.join(fullpath, 'pi-piper.latest')
     if pipelast:
-        rev_range = '-n %d' % pipelast
+        rev_range = f'-n {pipelast}'
     else:
         with open(statf, 'r') as fh:
             latest = fh.read().strip()
@@ -42,7 +42,7 @@ def git_get_new_revs(fullpath: str, pipelast: Optional[int] = None) -> list:
     args = ['rev-list', '--pretty=oneline', '--reverse', rev_range, 'master']
     ecode, out, _err = grokmirror.run_git_command(fullpath, args)
     if ecode > 0:
-        raise KeyError('Could not iterate %s in %s' % (rev_range, fullpath))
+        raise KeyError(f'Could not iterate {rev_range} in {fullpath}')
 
     newrevs = []
     if out:
@@ -194,7 +194,7 @@ def command():
 
     cfgfile = os.path.expanduser(opts.config)
     if not cfgfile:
-        sys.stderr.write('ERORR: File does not exist: %s\n' % cfgfile)
+        sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
         sys.exit(1)
     config = ConfigParser(interpolation=ExtendedInterpolation())
     config.read(os.path.expanduser(cfgfile))
