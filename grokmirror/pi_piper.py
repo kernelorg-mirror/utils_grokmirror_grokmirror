@@ -4,6 +4,8 @@
 # mirrored public-inbox repositories to arbitrary commands (e.g. procmail).
 #
 
+from __future__ import annotations
+
 __author__ = 'Konstantin Ryabitsev <konstantin@linuxfoundation.org>'
 
 import fnmatch
@@ -11,7 +13,6 @@ import logging
 import os
 import shlex
 import sys
-from typing import Optional
 
 import grokmirror
 
@@ -30,7 +31,7 @@ def git_get_message_from_pi(fullpath: str, commit_id: str) -> bytes:
     return out
 
 
-def git_get_new_revs(fullpath: str, pipelast: Optional[int] = None) -> list:
+def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list:
     statf = os.path.join(fullpath, 'pi-piper.latest')
     if pipelast:
         rev_range = f'-n {pipelast}'
@@ -81,7 +82,7 @@ def init_piper_tracking(repo: str, shallow: bool) -> bool:
 
 
 def run_pi_repo(
-    repo: str, pipedef: str, dryrun: bool = False, shallow: bool = False, pipelast: Optional[int] = None
+    repo: str, pipedef: str, dryrun: bool = False, shallow: bool = False, pipelast: int | None = None
 ) -> None:
     logger.info('Checking %s', repo)
     sp = shlex.shlex(pipedef, posix=True)

@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
 import datetime
 import fnmatch
 import gzip
@@ -29,7 +30,6 @@ import tempfile
 import time
 import uuid
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
-from typing import Optional, Tuple, Union
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -105,8 +105,8 @@ def git_newer_than(minver: str) -> bool:
 
 
 def run_shell_command(
-    cmdargs: list, stdin: Optional[bytes] = None, decode: bool = True, env: Optional[dict] = None
-) -> Tuple[int, Union[str, bytes], Union[str, bytes]]:
+    cmdargs: list, stdin: bytes | None = None, decode: bool = True, env: dict | None = None
+) -> tuple[int, str | bytes, str | bytes]:
     if not env:
         env = {}
     logger.debug('Running: %s', ' '.join(cmdargs))
@@ -122,8 +122,8 @@ def run_shell_command(
 
 
 def run_git_command(
-    fullpath: Optional[str], args: list, stdin: Optional[bytes] = None, decode: bool = True
-) -> Tuple[int, Union[str, bytes], Union[str, bytes]]:
+    fullpath: str | None, args: list, stdin: bytes | None = None, decode: bool = True
+) -> tuple[int, str | bytes, str | bytes]:
     if 'GITBIN' in os.environ:
         _git = os.environ['GITBIN']
     else:

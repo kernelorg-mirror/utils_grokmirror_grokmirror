@@ -9,7 +9,6 @@ import re
 import shutil
 import sys
 from fnmatch import fnmatch
-from typing import Tuple
 
 import grokmirror
 
@@ -239,7 +238,7 @@ def process_inboxdirs(inboxdirs: set, opts, init: bool = False):
             logger.critical('Unable to index %s', inboxdir)
 
 
-def get_git_pi_dir(opts, fullpath: str) -> Tuple[str, str]:
+def get_git_pi_dir(opts, fullpath: str) -> tuple[str, str]:
     fullpath = os.path.realpath(fullpath)
     if not opts.pitoplevel:
         # Public-inbox is in the same dir
