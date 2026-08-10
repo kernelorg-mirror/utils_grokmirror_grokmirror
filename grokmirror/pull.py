@@ -725,7 +725,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             logger.info(' manifest: unchanged')
             return
         elif ecode == 1:
-            logger.warning('Executing %s failed, exiting', r_mani_cmd, ecode)
+            logger.warning('Executing %s failed with exit code %s, exiting', r_mani_cmd, ecode)
             raise OSError('Failed executing %s' % r_mani_cmd)
         else:
             # Non-fatal errors for all other exit codes
