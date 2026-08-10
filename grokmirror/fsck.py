@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 def log_errors(fullpath, cmdargs, lines):
     logger.critical('%s reports errors:', fullpath)
     with open(os.path.join(fullpath, 'grokmirror.fsck.err'), 'w') as fh:
-        fh.write('# Date: {}\n'.format(datetime.datetime.today().strftime('%F')))
+        fh.write('# Date: {}\n'.format(datetime.datetime.today().strftime('%F')))  # noqa: DTZ002
         fh.write('# Cmd : git {}\n'.format(' '.join(cmdargs)))
         for count, line in enumerate(lines, start=1):
             fh.write(f'{line}\n')
@@ -558,7 +558,10 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
 
     frequency = config['fsck'].getint('frequency', 30)
 
-    today = datetime.datetime.today()
+    # Naive local dates throughout: fsck scheduling is in whole calendar days
+    # in the admin's own timezone, and the dates in the status file are stored
+    # the same way.
+    today = datetime.datetime.today()  # noqa: DTZ002
     todayiso = today.strftime('%F')
 
     if force:
@@ -842,7 +845,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
             logger.warning('Unable to count objects in %s, skipping', fullpath)
             continue
 
-        schedcheck = datetime.datetime.strptime(status[fullpath]['nextcheck'], '%Y-%m-%d')
+        schedcheck = datetime.datetime.strptime(status[fullpath]['nextcheck'], '%Y-%m-%d')  # noqa: DTZ007
         nextcheck = today + datetime.timedelta(days=checkdelay)
 
         if not cfg_repack:
@@ -1092,7 +1095,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
             obj_info = grokmirror.get_repo_obj_info(obstrepo)
             repack_level = grokmirror.get_repack_level(obj_info)
 
-        nextcheck = datetime.datetime.strptime(status[obstrepo]['nextcheck'], '%Y-%m-%d')
+        nextcheck = datetime.datetime.strptime(status[obstrepo]['nextcheck'], '%Y-%m-%d')  # noqa: DTZ007
         if repack_level > 1 and nextcheck > today:
             # Don't do full repacks outside of schedule
             repack_level = 1

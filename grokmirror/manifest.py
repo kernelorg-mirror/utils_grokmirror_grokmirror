@@ -13,10 +13,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import datetime
 import logging
 import os
 import sys
+import time
 
 import grokmirror
 
@@ -276,7 +276,8 @@ def grok_manifest(
     loglevel = logging.INFO
     logger = grokmirror.init_logger('manifest', logfile, loglevel, verbose)
 
-    startt = datetime.datetime.now()
+    # Monotonic, so a clock adjustment mid-run can't produce a silly duration
+    startt = time.monotonic()
     if paths is None:
         paths = []
     if ignore is None:
@@ -381,11 +382,11 @@ def grok_manifest(
                 # grok-fsck will fetch this one, then
                 pass
 
-    elapsed = datetime.datetime.now() - startt
+    elapsed = time.monotonic() - startt
     if len(gitdirs) > 1:
-        logger.info('Updated %s records in %ds', len(gitdirs), elapsed.total_seconds())
+        logger.info('Updated %s records in %ds', len(gitdirs), elapsed)
     else:
-        logger.info('Done in %0.2fs', elapsed.total_seconds())
+        logger.info('Done in %0.2fs', elapsed)
 
 
 def command():

@@ -268,7 +268,9 @@ def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
                 modified = datetime.datetime.strptime(out, '%Y-%m-%dT%H:%M:%S%z')
 
     if not modified:
-        modified = datetime.datetime.now()
+        # Timezone-aware, to match what the committerdate branch above returns.
+        # The epoch value we record below is the same either way.
+        modified = datetime.datetime.now(tz=datetime.timezone.utc)
 
     head = None
     try:
