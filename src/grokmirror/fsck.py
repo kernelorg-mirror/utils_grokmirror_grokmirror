@@ -698,7 +698,13 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         else:
             m_prune = True
 
-        if not altdir and not os.path.exists(os.path.join(fullpath, 'grokmirror.do-not-objstore')):
+        if not altdir and os.path.exists(os.path.join(fullpath, 'grokmirror.do-not-objstore')):
+            # The admin excluded this repo from object sharing and it has no
+            # alternates, so there is nothing to migrate. Every branch below
+            # assumes altdir is set, so don't fall through into them.
+            logger.debug('%s: excluded from objstore and has no alternates', gitdir)
+
+        elif not altdir:
             # Do we match any obstdir repos?
             obstrepo = grokmirror.find_best_obstrepo(fullpath, obst_roots, toplevel, baselines)
             if obstrepo:
