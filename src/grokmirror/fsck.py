@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import fnmatch
 import gc
@@ -36,7 +37,7 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 
-def log_errors(fullpath, cmdargs, lines):
+def log_errors(fullpath: str, cmdargs: list[str], lines: list[str]) -> None:
     logger.critical('%s reports errors:', fullpath)
     with open(os.path.join(fullpath, 'grokmirror.fsck.err'), 'w') as fh:
         fh.write('# Date: {}\n'.format(datetime.datetime.today().strftime('%F')))  # noqa: DTZ002
@@ -50,8 +51,9 @@ def log_errors(fullpath, cmdargs, lines):
                 break
 
 
-def gen_preload_bundle(fullpath, config):
-    outdir = config['fsck'].get('preload_bundle_outdir')
+def gen_preload_bundle(fullpath: str, config: grokmirror.GrokConfigParser) -> None:
+    # Only called when the caller has already checked this is set
+    outdir = config['fsck']['preload_bundle_outdir']
     Path(outdir).mkdir(parents=True, exist_ok=True)
     bname = f'{os.path.basename(fullpath)[:-4]}.bundle'
     args = ['bundle', 'create', os.path.join(outdir, bname), '--all']
@@ -59,7 +61,7 @@ def gen_preload_bundle(fullpath, config):
     grokmirror.run_git_command(fullpath, args)
 
 
-def get_blob_set(fullpath):
+def get_blob_set(fullpath: str) -> tuple[set[tuple[str, int]], int]:
     bset = set()
     size = 0
     blobcache = os.path.join(fullpath, 'grokmirror.blobs')
@@ -106,7 +108,9 @@ def get_blob_set(fullpath):
     return bset, size
 
 
-def check_sibling_repos_by_blobs(bset1, bsize1, bset2, bsize2, ratio):
+def check_sibling_repos_by_blobs(
+    bset1: set[tuple[str, int]], bsize1: int, bset2: set[tuple[str, int]], bsize2: int, ratio: int
+) -> bool:
     iset = bset1.intersection(bset2)
     if not len(iset):
         return False
@@ -121,7 +125,7 @@ def check_sibling_repos_by_blobs(bset1, bsize1, bset2, bsize2, ratio):
     return ratio1 >= ratio and ratio2 >= ratio
 
 
-def find_siblings_by_blobs(obstrepo, obstdir, ratio=75):
+def find_siblings_by_blobs(obstrepo: str, obstdir: str, ratio: int = 75) -> set[str]:
     siblings = set()
     oset, osize = get_blob_set(obstrepo)
     for srepo in grokmirror.find_all_gitdirs(obstdir, normalize=True, exclude_objstore=False):
@@ -136,7 +140,7 @@ def find_siblings_by_blobs(obstrepo, obstdir, ratio=75):
     return siblings
 
 
-def merge_siblings(siblings, amap):
+def merge_siblings(siblings: set[str], amap: dict[str, set[str]]) -> str | None:
     mdest = None
     rcount = 0
     # Who has the most remotes?
@@ -191,9 +195,9 @@ def merge_siblings(siblings, amap):
     return mdest
 
 
-def check_reclone_error(fullpath, config, errors):
+def check_reclone_error(fullpath: str, config: grokmirror.GrokConfigParser, errors: list[str]) -> None:
     reclone = None
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
+    toplevel = os.path.realpath(config['core']['toplevel'])
     errlist = config['fsck'].get('reclone_on_errors', '').split('\n')
     for line in errors:
         for estring in errlist:
@@ -215,7 +219,7 @@ def check_reclone_error(fullpath, config, errors):
     set_repo_reclone(fullpath, reclone)
 
 
-def get_repo_size(fullpath):
+def get_repo_size(fullpath: str) -> int:
     oi = grokmirror.get_repo_obj_info(fullpath)
     kbsize = 0
     for field in ['size', 'size-pack', 'size-garbage']:
@@ -227,8 +231,8 @@ def get_repo_size(fullpath):
     return kbsize
 
 
-def get_human_size(kbsize):
-    num = kbsize
+def get_human_size(kbsize: int) -> str:
+    num = float(kbsize)
     for unit in ['Ki', 'Mi', 'Gi']:
         if abs(num) < 1024.0:
             return f'{num:3.2f} {unit}B'
@@ -236,7 +240,7 @@ def get_human_size(kbsize):
     return f'{num:.2f} TiB'
 
 
-def set_repo_reclone(fullpath, reason):
+def set_repo_reclone(fullpath: str, reason: str) -> None:
     rfile = os.path.join(fullpath, 'grokmirror.reclone')
     # Have we already requested a reclone?
     if os.path.exists(rfile):
@@ -247,7 +251,7 @@ def set_repo_reclone(fullpath, reason):
         rfh.write(f'Requested by grok-fsck due to error: {reason}')
 
 
-def run_git_prune(fullpath, config):
+def run_git_prune(fullpath: str, config: grokmirror.GrokConfigParser) -> bool:
     # WARNING: We assume you've already verified that it's safe to do so
     prune_ok = True
     isprecious = grokmirror.is_precious(fullpath)
@@ -274,12 +278,12 @@ def run_git_prune(fullpath, config):
     return prune_ok
 
 
-def is_safe_to_prune(fullpath, config):
+def is_safe_to_prune(fullpath: str, config: grokmirror.GrokConfigParser) -> bool:
     if config['fsck'].get('prune', 'yes') != 'yes':
         logger.debug('Pruning disabled in config file')
         return False
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
-    obstdir = os.path.realpath(config['core'].get('objstore'))
+    toplevel = os.path.realpath(config['core']['toplevel'])
+    obstdir = os.path.realpath(config['core']['objstore'])
     gitdir = '/' + os.path.relpath(fullpath, toplevel).lstrip('/')
     if grokmirror.is_obstrepo(fullpath, obstdir):
         # We only prune if all repos pointing to us are public
@@ -297,7 +301,7 @@ def is_safe_to_prune(fullpath, config):
     return True
 
 
-def remove_ignored_errors(output, config):
+def remove_ignored_errors(output: str, config: grokmirror.GrokConfigParser) -> list[str]:
     ierrors = {x.strip() for x in config['fsck'].get('ignore_errors', '').split('\n')}
     debug = []
     warn = []
@@ -320,11 +324,11 @@ def remove_ignored_errors(output, config):
     return warn
 
 
-def run_git_repack(fullpath, config, level=1, prune=True):
+def run_git_repack(fullpath: str, config: grokmirror.GrokConfigParser, level: int = 1, prune: bool = True) -> bool:
     # Returns false if we hit any errors on the way
     repack_ok = True
-    obstdir = os.path.realpath(config['core'].get('objstore'))
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
+    obstdir = os.path.realpath(config['core']['objstore'])
+    toplevel = os.path.realpath(config['core']['toplevel'])
     gitdir = '/' + os.path.relpath(fullpath, toplevel).lstrip('/')
 
     if prune:
@@ -453,9 +457,9 @@ def run_git_repack(fullpath, config, level=1, prune=True):
     return repack_ok
 
 
-def run_git_fsck(fullpath, config, conn_only=False):
+def run_git_fsck(fullpath: str, config: grokmirror.GrokConfigParser, conn_only: bool = False) -> None:
     args = ['fsck', '--no-progress', '--no-dangling', '--no-reflogs']
-    obstdir = os.path.realpath(config['core'].get('objstore'))
+    obstdir = os.path.realpath(config['core']['objstore'])
     # If it's got an obstrepo, always run as connectivity-only
     altrepo = grokmirror.get_altrepo(fullpath)
     if altrepo and grokmirror.is_obstrepo(altrepo, obstdir):
@@ -477,10 +481,11 @@ def run_git_fsck(fullpath, config, conn_only=False):
             check_reclone_error(fullpath, config, warn)
 
 
-def run_git_commit_graph(fullpath, extraflags=None):
+def run_git_commit_graph(fullpath: str, extraflags: list[str] | None = None) -> bool:
     # Does our version of git support commit-graph?
     if not grokmirror.git_newer_than('2.18.0'):
         logger.debug('Git version too old, not generating commit-graph')
+        return False
     logger.info('    graph: generating commit-graph')
     args = ['commit-graph', 'write']
     if extraflags:
@@ -489,7 +494,7 @@ def run_git_commit_graph(fullpath, extraflags=None):
     return retcode == 0
 
 
-def set_precious_objects(fullpath, enabled=True):
+def set_precious_objects(fullpath: str, enabled: bool = True) -> None:
     # It's better to just set it blindly without checking first,
     # as this results in one fewer shell-out.
     logger.debug('Setting preciousObjects for %s', fullpath)
@@ -500,7 +505,7 @@ def set_precious_objects(fullpath, enabled=True):
     grokmirror.set_git_config(fullpath, 'extensions.preciousObjects', poval)
 
 
-def check_precious_objects(fullpath):
+def check_precious_objects(fullpath: str) -> bool:
     return grokmirror.is_precious(fullpath)
 
 
@@ -517,7 +522,14 @@ def refresh_obst_roots(obst_roots: dict[str, set[str]], obstrepo: str) -> set[st
     return roots
 
 
-def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_all_quick=False, repack_all_full=False):
+def fsck_mirror(
+    config: grokmirror.GrokConfigParser,
+    force: bool = False,
+    repack_only: bool = False,
+    conn_only: bool = False,
+    repack_all_quick: bool = False,
+    repack_all_full: bool = False,
+) -> int:
 
     if repack_all_quick or repack_all_full:
         force = True
@@ -545,7 +557,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         logger.info('Assuming another process is running.')
         return 0
 
-    manifile = config['core'].get('manifest')
+    manifile = config['core']['manifest']
     logger.info('Analyzing %s', manifile)
     grokmirror.manifest_lock(manifile)
     manifest = grokmirror.read_manifest(manifile)
@@ -598,7 +610,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         config['fsck']['commitgraph'] = 'no'
 
     # Go through the manifest and compare with status
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
+    toplevel = os.path.realpath(config['core']['toplevel'])
     changed = False
     for gitdir in list(manifest):
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
@@ -658,7 +670,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
     # Can be "always", which is why we don't getboolean
     cfg_precious = config['fsck'].get('precious', 'yes')
 
-    obstdir = os.path.realpath(config['core'].get('objstore'))
+    obstdir = os.path.realpath(config['core']['objstore'])
     logger.info('   search: getting parent commit info from all repos, may take a while')
     top_roots, obst_roots = grokmirror.get_rootsets(toplevel, obstdir)
     amap = grokmirror.get_altrepo_map(toplevel)
@@ -1163,7 +1175,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
 
     if not len(to_process):
         logger.info('No repos need attention.')
-        return
+        return 0
 
     # Delete some vars that are huge for large repo sets -- we no longer need them and the
     # next step will likely eat lots of ram.
@@ -1258,9 +1270,10 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
     lockf(flockh, LOCK_UN)
     flockh.close()
 
+    return 0
 
-def parse_args():
-    import argparse
+
+def parse_args() -> argparse.Namespace:
 
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
@@ -1325,14 +1338,14 @@ def parse_args():
 
 
 def grok_fsck(
-    cfgfile,
-    verbose=False,
-    force=False,
-    repack_only=False,
-    conn_only=False,
-    repack_all_quick=False,
-    repack_all_full=False,
-):
+    cfgfile: str,
+    verbose: bool = False,
+    force: bool = False,
+    repack_only: bool = False,
+    conn_only: bool = False,
+    repack_all_quick: bool = False,
+    repack_all_full: bool = False,
+) -> None:
     global logger
 
     config = grokmirror.load_config_file(cfgfile)
@@ -1380,7 +1393,7 @@ def grok_fsck(
         s.quit()
 
 
-def command():
+def command() -> None:
     opts = parse_args()
 
     return grok_fsck(
