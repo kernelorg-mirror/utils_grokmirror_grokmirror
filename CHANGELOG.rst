@@ -7,6 +7,43 @@ v3.0 (TBD)
   complete and grokmirror goes idle
 - Add new command grok-pi-indexer for indexing public-inbox mirrored
   repositories
+- Fix grok-manifest traceback when purging repositories that no longer
+  exist on disk (broken since v2.0.0)
+- Fix grok-manifest not removing a repository from the manifest when it
+  was replaced by a symlink; it remained listed as a real repository in
+  addition to showing up in the target's symlinks
+- Fix grok-manifest recording a "reference" harvested from the current
+  working directory when a repository listed a forkgroup but no longer
+  had alternates
+- Fix grok-manifest traceback when the manifest path has no directory
+  component (e.g. "-m manifest.js.gz")
+- Fix grok-manifest reporting a nonsensical runtime if the system clock
+  was adjusted mid-run
+- Fix grok-fsck traceback when reporting repository sizes of 1 TiB and
+  above
+- Fix grok-fsck traceback on repositories excluded from object storage
+  with the grokmirror.do-not-objstore setting
+- Fix grok-fsck traceback when merging siblings and none of them had
+  usable root commits
+- Fix grok-fsck writing the literal string "None" as the fingerprint of a
+  repository with no refs, which every reader then accepted as valid
+- Fix grok-bundle traceback when passed an empty --gitargs or
+  --revlistargs
+- Fix grok-pull error message on remote manifest command failure, which
+  itself raised an exception while reporting the error
+- grok-pull now reports a clear error when the [remote] section does not
+  define "site", or defines neither "manifest" nor "manifest_command",
+  instead of failing with a traceback inside a worker
+- Fix grok-pi-piper hanging instead of exiting when no pipe was
+  configured
+- Report a clear error instead of a traceback when the configuration file
+  has no "toplevel" defined in the [core] section
+- Interrupting any of the commands with Ctrl-C is now reliable; several
+  code paths used bare except clauses that swallowed KeyboardInterrupt
+- The contrib pubsub v1 listener works again, and now requires falcon
+  3.0 or newer
+- Development: the tree is checked with ruff, mypy, ty and pyright; run
+  ./ci.sh before committing and ./ci-matrix.sh before releases
 
 v2.0.9 (2021-07-13)
 -------------------
