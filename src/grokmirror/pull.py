@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import argparse
 import calendar
 import fnmatch
 import gzip
@@ -32,6 +33,7 @@ import tempfile
 import time
 import uuid
 from socketserver import StreamRequestHandler, ThreadingMixIn, UnixStreamServer
+from types import FrameType, TracebackType
 from typing import cast
 
 import requests
@@ -43,7 +45,14 @@ logger = logging.getLogger(__name__)
 
 
 class SignalHandler:
-    def __init__(self, config, sw, dws, pws, done):
+    def __init__(
+        self,
+        config: grokmirror.GrokConfigParser,
+        sw: mp.Process | None,
+        dws: list[mp.Process],
+        pws: list[mp.Process],
+        done: list,
+    ) -> None:
         self.config = config
         self.sw = sw
         self.dws = dws
@@ -51,7 +60,7 @@ class SignalHandler:
         self.done = done
         self.killed = False
 
-    def _handler(self, signum, frame):
+    def _handler(self, signum: int, frame: FrameType | None) -> None:
         self.killed = True
         logger.debug('Received signum=%s, frame=%s', signum, frame)
         # if self.sw:
@@ -74,11 +83,13 @@ class SignalHandler:
         logger.info('Exiting on signal %s', signum)
         sys.exit(0)
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         self.old_sigint = signal.signal(signal.SIGINT, self._handler)
         self.old_sigterm = signal.signal(signal.SIGTERM, self._handler)
 
-    def __exit__(self, sigtype, value, traceback):
+    def __exit__(
+        self, sigtype: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+    ) -> None:
         if self.killed:
             sys.exit(0)
         signal.signal(signal.SIGINT, self.old_sigint)
@@ -92,7 +103,7 @@ class ThreadedUnixStreamServer(ThreadingMixIn, UnixStreamServer):
 
 
 class Handler(StreamRequestHandler):
-    def handle(self):
+    def handle(self) -> None:
         # socketserver types self.server as the base class, so narrow it to the
         # one socket_worker() actually hands us
         server = cast('ThreadedUnixStreamServer', self.server)
@@ -123,7 +134,7 @@ class Handler(StreamRequestHandler):
                 return
 
 
-def build_optimal_forkgroups(l_manifest, r_manifest, toplevel, obstdir):
+def build_optimal_forkgroups(l_manifest: dict, r_manifest: dict, toplevel: str, obstdir: str) -> dict[str, set[str]]:
     r_forkgroups: dict[str, set[str]] = {}
     for gitdir in set(r_manifest.keys()):
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
@@ -177,8 +188,8 @@ def build_optimal_forkgroups(l_manifest, r_manifest, toplevel, obstdir):
     return forkgroups
 
 
-def spa_worker(config, q_spa, pauseonload):
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
+def spa_worker(config: grokmirror.GrokConfigParser, q_spa: mp.Queue, pauseonload: bool) -> None:
+    toplevel = os.path.realpath(config['core']['toplevel'])
     cpus = mp.cpu_count()
     saidpaused = False
     while True:
@@ -254,12 +265,12 @@ def spa_worker(config, q_spa, pauseonload):
         logger.info('      spa: %s (done: %s)', gitdir, ', '.join(done))
 
 
-def objstore_repo_preload(config, obstrepo):
+def objstore_repo_preload(config: grokmirror.GrokConfigParser, obstrepo: str) -> None:
     purl = config['remote'].get('preload_bundle_url')
     if not purl:
         return
     bname = os.path.basename(obstrepo)[:-4]
-    obstdir = os.path.realpath(config['core'].get('objstore'))
+    obstdir = os.path.realpath(config['core']['objstore'])
     burl = '{}/{}.bundle'.format(purl.rstrip('/'), bname)
     bfile = os.path.join(obstdir, f'{bname}.bundle')
     try:
@@ -296,9 +307,9 @@ def objstore_repo_preload(config, obstrepo):
     os.unlink(bfile)
 
 
-def pull_worker(config, q_pull, q_spa, q_done):
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
-    obstdir = os.path.realpath(config['core'].get('objstore'))
+def pull_worker(config: grokmirror.GrokConfigParser, q_pull: mp.Queue, q_spa: mp.Queue, q_done: mp.Queue) -> None:
+    toplevel = os.path.realpath(config['core']['toplevel'])
+    obstdir = os.path.realpath(config['core']['objstore'])
     maxretries = config['pull'].getint('retries', 3)
     # pull_mirror() checked these before starting us up
     site = config['remote']['site']
@@ -473,7 +484,7 @@ def pull_worker(config, q_pull, q_spa, q_done):
             q_spa.put((gitdir, spa_actions))
 
 
-def cull_manifest(manifest, config):
+def cull_manifest(manifest: dict, config: grokmirror.GrokConfigParser) -> dict:
     includes = config['pull'].get('include', '*').split('\n')
     excludes = config['pull'].get('exclude', '').split('\n')
 
@@ -500,7 +511,7 @@ def cull_manifest(manifest, config):
     return culled
 
 
-def fix_remotes(toplevel, gitdir, site, config):
+def fix_remotes(toplevel: str, gitdir: str, site: str, config: grokmirror.GrokConfigParser) -> bool:
     remotename = config['pull'].get('remotename', '_grokmirror')
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     # Set our remote
@@ -531,7 +542,7 @@ def fix_remotes(toplevel, gitdir, site, config):
     return True
 
 
-def set_repo_params(fullpath, repoinfo):
+def set_repo_params(fullpath: str, repoinfo: dict) -> None:
     owner = repoinfo.get('owner')
     description = repoinfo.get('description')
     head = repoinfo.get('head')
@@ -566,7 +577,7 @@ def set_repo_params(fullpath, repoinfo):
                 fh.write(f'{head}\n')
 
 
-def set_agefile(toplevel, gitdir, last_modified):
+def set_agefile(toplevel: str, gitdir: str, last_modified: int) -> None:
     grokmirror.set_repo_timestamp(toplevel, gitdir, last_modified)
 
     # set agefile, which can be used by cgit to show idle times
@@ -580,7 +591,7 @@ def set_agefile(toplevel, gitdir, last_modified):
     logger.debug('Wrote "%s" into %s', cgit_fmt, agefile)
 
 
-def get_hookscripts(config, hookname):
+def get_hookscripts(config: grokmirror.GrokConfigParser, hookname: str) -> list[list[str]]:
     hookscripts = []
     # And sinker!
     hookline = config['pull'].get(hookname, '')
@@ -598,7 +609,7 @@ def get_hookscripts(config, hookname):
     return hookscripts
 
 
-def run_post_clone_complete_hook(config, clones):
+def run_post_clone_complete_hook(config: grokmirror.GrokConfigParser, clones: list[str]) -> None:
     stdin = '\n'.join(clones) + '\n'
     hookscripts = get_hookscripts(config, 'post_clone_complete_hook')
     for args in hookscripts:
@@ -614,7 +625,7 @@ def run_post_clone_complete_hook(config, clones):
             logger.info('Hook Stdout: %s', output)
 
 
-def run_post_work_complete_hook(config):
+def run_post_work_complete_hook(config: grokmirror.GrokConfigParser) -> None:
     hookscripts = get_hookscripts(config, 'post_work_complete_hook')
     for args in hookscripts:
         logger.info(' workhook: %s', ' '.join(args))
@@ -626,7 +637,7 @@ def run_post_work_complete_hook(config):
             logger.info('Hook Stdout: %s', output)
 
 
-def run_post_update_hook(config, fullpath):
+def run_post_update_hook(config: grokmirror.GrokConfigParser, fullpath: str) -> None:
     hookscripts = get_hookscripts(config, 'post_update_hook')
     for args in hookscripts:
         logger.info('     hook: %s', ' '.join(args))
@@ -639,7 +650,7 @@ def run_post_update_hook(config, fullpath):
             logger.info('Hook Stdout (%s): %s', fullpath, output)
 
 
-def pull_repo(fullpath, remotename):
+def pull_repo(fullpath: str, remotename: str) -> bool:
     args = ['remote', 'update', remotename, '--prune']
 
     retcode, _output, error = grokmirror.run_git_command(fullpath, args)
@@ -672,7 +683,7 @@ def pull_repo(fullpath, remotename):
     return success
 
 
-def write_projects_list(config, manifest):
+def write_projects_list(config: grokmirror.GrokConfigParser, manifest: dict) -> None:
     plpath = config['pull'].get('projectslist', '')
     if not plpath:
         return
@@ -685,7 +696,7 @@ def write_projects_list(config, manifest):
 
     try:
         fh = os.fdopen(fd, 'wb', 0)
-        for gitdir in manifest:
+        for gitdir, repoinfo in manifest.items():
             if trimtop and gitdir.startswith(trimtop):
                 pgitdir = gitdir[len(trimtop) :]
             else:
@@ -695,10 +706,10 @@ def write_projects_list(config, manifest):
             pgitdir = pgitdir.lstrip('/')
             fh.write(f'{pgitdir}\n'.encode())
 
-            if add_symlinks and 'symlinks' in manifest[gitdir]:
+            if add_symlinks and 'symlinks' in repoinfo:
                 # Do the same for symlinks
                 # XXX: Should make this configurable, perhaps
-                for symlink in manifest[gitdir]['symlinks']:
+                for symlink in repoinfo['symlinks']:
                     if trimtop and symlink.startswith(trimtop):
                         symlink = symlink[len(trimtop) :]
 
@@ -721,9 +732,11 @@ def write_projects_list(config, manifest):
     logger.info(' projlist: wrote %s', plpath)
 
 
-def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
+def fill_todo_from_manifest(
+    config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomtime: bool = False, forcepurge: bool = False
+) -> None:
     # l_ = local, r_ = remote
-    l_mani_path = config['core'].get('manifest')
+    l_mani_path = config['core']['manifest']
     r_mani_cmd = config['remote'].get('manifest_command')
 
     if r_mani_cmd:
@@ -864,9 +877,9 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
     r_culled = cull_manifest(r_manifest, config)
     logger.info(' manifest: %s relevant entries', len(r_culled))
 
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
+    toplevel = os.path.realpath(config['core']['toplevel'])
 
-    obstdir = os.path.realpath(config['core'].get('objstore'))
+    obstdir = os.path.realpath(config['core']['objstore'])
     forkgroups = build_optimal_forkgroups(l_manifest, r_culled, toplevel, obstdir)
     privmasks = {x.strip() for x in config['core'].get('private', '').split('\n')}
 
@@ -1064,8 +1077,8 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             logger.debug('No repositories need purging')
 
 
-def update_manifest(config, entries):
-    manifile = config['core'].get('manifest')
+def update_manifest(config: grokmirror.GrokConfigParser, entries: list) -> None:
+    manifile = config['core']['manifest']
     grokmirror.manifest_lock(manifile)
     manifest = grokmirror.read_manifest(manifile)
     changed = False
@@ -1109,7 +1122,7 @@ def update_manifest(config, entries):
     grokmirror.manifest_unlock(manifile)
 
 
-def socket_worker(config, q_mani, sockfile):
+def socket_worker(config: grokmirror.GrokConfigParser, q_mani: mp.Queue, sockfile: str) -> None:
     logger.info(' listener: listening on socket %s', sockfile)
     curmask = os.umask(0)
     with ThreadedUnixStreamServer(sockfile, Handler) as server:
@@ -1120,7 +1133,15 @@ def socket_worker(config, q_mani, sockfile):
         server.serve_forever()
 
 
-def showstats(q_todo, q_pull, q_spa, good, bad, pws, dws):
+def showstats(
+    q_todo: mp.Queue,
+    q_pull: mp.Queue,
+    q_spa: mp.Queue,
+    good: int,
+    bad: int,
+    pws: list[mp.Process],
+    dws: list[mp.Process],
+) -> None:
     stats = []
     if good:
         stats.append(f'{good} fetched')
@@ -1138,7 +1159,7 @@ def showstats(q_todo, q_pull, q_spa, good, bad, pws, dws):
     logger.info('      ---:  %s', ', '.join(stats))
 
 
-def manifest_worker(config, q_mani, nomtime=False):
+def manifest_worker(config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomtime: bool = False) -> None:
     starttime = int(time.time())
     fill_todo_from_manifest(config, q_mani, nomtime=nomtime)
     refresh = config['pull'].getint('refresh', 300)
@@ -1147,7 +1168,9 @@ def manifest_worker(config, q_mani, nomtime=False):
         logger.info(' manifest: sleeping %ss', left)
 
 
-def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
+def pull_mirror(
+    config: grokmirror.GrokConfigParser, nomtime: bool = False, forcepurge: bool = False, runonce: bool = False
+) -> int:
     # We can't mirror anything without knowing where to pull from, and every
     # worker we start below assumes these are set. Say so plainly here, instead
     # of crashing much later inside a worker with a TypeError.
@@ -1161,8 +1184,8 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
         logger.critical('Section [remote] must define "manifest" or "manifest_command"')
         return 1
 
-    toplevel = os.path.realpath(config['core'].get('toplevel'))
-    obstdir = os.path.realpath(config['core'].get('objstore'))
+    toplevel = os.path.realpath(config['core']['toplevel'])
+    obstdir = os.path.realpath(config['core']['objstore'])
     refresh = config['pull'].getint('refresh', 300)
 
     q_mani: mp.Queue = mp.Queue()
@@ -1422,8 +1445,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
     return 0
 
 
-def parse_args():
-    import argparse
+def parse_args() -> argparse.Namespace:
 
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
@@ -1477,7 +1499,14 @@ def parse_args():
     return op.parse_args()
 
 
-def grok_pull(cfgfile, verbose=False, nomtime=False, purge=False, forcepurge=False, runonce=False):
+def grok_pull(
+    cfgfile: str,
+    verbose: bool = False,
+    nomtime: bool = False,
+    purge: bool = False,
+    forcepurge: bool = False,
+    runonce: bool = False,
+) -> int:
     global logger
 
     config = grokmirror.load_config_file(cfgfile)
@@ -1499,7 +1528,7 @@ def grok_pull(cfgfile, verbose=False, nomtime=False, purge=False, forcepurge=Fal
     return pull_mirror(config, nomtime, forcepurge, runonce)
 
 
-def command():
+def command() -> None:
     opts = parse_args()
 
     retval = grok_pull(opts.config, opts.verbose, opts.nomtime, opts.purge, opts.forcepurge, opts.runonce)
