@@ -101,8 +101,8 @@ def set_symlinks(manifest, toplevel, symlinks):
 
         # Now go through all repos and fix any references pointing to the
         # symlinked location. We shouldn't need to do anything with forkgroups.
-        for gitdir in manifest:
-            if manifest[gitdir] == relative:
+        for gitdir in list(manifest):
+            if gitdir == relative:
                 logger.info(' manifest: removing %s (replaced by a symlink)', gitdir)
                 manifest.pop(gitdir)
                 continue
