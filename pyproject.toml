@@ -26,6 +26,7 @@ classifiers = [
 dependencies = [
     "packaging",
     "requests",
+    "urllib3",
 ]
 dynamic = ["version"]
 
@@ -67,7 +68,9 @@ addopts = "--tb=short"
 [tool.mypy]
 # Not yet `strict = true`: grokmirror predates type annotations, so the strict
 # ratchet happens module by module. See the top of ci.sh for the plan.
-python_version = "3.9"
+# python_version is deliberately unset: mypy no longer accepts a 3.9 target, so
+# it checks against whatever interpreter it runs under. ruff, pyright and ty are
+# all still pinned to py39, and ci-matrix.sh actually runs the tests on 3.9.
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true

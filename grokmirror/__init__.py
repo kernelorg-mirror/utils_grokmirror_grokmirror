@@ -31,14 +31,15 @@ import tempfile
 import time
 import uuid
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
+from typing import IO, Literal, overload
 
 import requests
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from urllib3.util.retry import Retry
 
 VERSION = '3.0-dev'
-MANIFEST_LOCKH = None
-REPO_LOCKH = {}
+MANIFEST_LOCKH: IO[str] | None = None
+REPO_LOCKH: dict[str, IO[str]] = {}
 GITBIN = '/usr/bin/git'
 
 # default logger. Will be overridden.
@@ -105,9 +106,24 @@ def git_newer_than(minver: str) -> bool:
     return version.parse(ver) >= version.parse(minver)
 
 
+# The decode flag decides whether callers get str or bytes back. Overloads let
+# type checkers (and editors) figure that out instead of handing everybody a
+# str | bytes union they then have to narrow by hand.
+@overload
+def run_shell_command(
+    cmdargs: list, stdin: bytes | None = ..., decode: Literal[True] = ..., env: dict | None = ...
+) -> tuple[int, str, str]: ...
+
+
+@overload
+def run_shell_command(
+    cmdargs: list, stdin: bytes | None = ..., *, decode: Literal[False], env: dict | None = ...
+) -> tuple[int, bytes, bytes]: ...
+
+
 def run_shell_command(
     cmdargs: list, stdin: bytes | None = None, decode: bool = True, env: dict | None = None
-) -> tuple[int, str | bytes, str | bytes]:
+) -> tuple[int, str, str] | tuple[int, bytes, bytes]:
     if not env:
         env = {}
     logger.debug('Running: %s', ' '.join(cmdargs))
@@ -116,15 +132,26 @@ def run_shell_command(
     output, error = child.communicate(input=stdin)
 
     if decode:
-        output = output.decode().strip()
-        error = error.decode().strip()
+        return child.returncode, output.decode().strip(), error.decode().strip()
 
     return child.returncode, output, error
 
 
+@overload
+def run_git_command(
+    fullpath: str | None, args: list, stdin: bytes | None = ..., decode: Literal[True] = ...
+) -> tuple[int, str, str]: ...
+
+
+@overload
+def run_git_command(
+    fullpath: str | None, args: list, stdin: bytes | None = ..., *, decode: Literal[False]
+) -> tuple[int, bytes, bytes]: ...
+
+
 def run_git_command(
     fullpath: str | None, args: list, stdin: bytes | None = None, decode: bool = True
-) -> tuple[int, str | bytes, str | bytes]:
+) -> tuple[int, str, str] | tuple[int, bytes, bytes]:
     if 'GITBIN' in os.environ:
         _git = os.environ['GITBIN']
     else:
@@ -139,7 +166,11 @@ def run_git_command(
     else:
         cmdargs = [_git, '--no-pager'] + args
 
-    return run_shell_command(cmdargs, stdin, decode=decode)
+    # Spelled out as two calls so the overload above picks the right return type
+    if decode:
+        return run_shell_command(cmdargs, stdin, decode=True)
+
+    return run_shell_command(cmdargs, stdin, decode=False)
 
 
 def _lockname(fullpath):

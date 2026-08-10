@@ -27,7 +27,7 @@ mirrors.}
 %package -n python3-%{srcname}
 Summary:       %{summary}
 Requires(pre): shadow-utils
-Requires:      git-core, python3-packaging, python3-requests
+Requires:      git-core, python3-packaging, python3-requests, python3-urllib3
 BuildRequires: python3-devel
 BuildRequires: pyproject-rpm-macros
 BuildRequires: systemd
