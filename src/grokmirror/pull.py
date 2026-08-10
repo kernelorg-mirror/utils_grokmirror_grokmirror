@@ -1161,7 +1161,13 @@ def showstats(
 
 def manifest_worker(config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomtime: bool = False) -> None:
     starttime = int(time.time())
-    fill_todo_from_manifest(config, q_mani, nomtime=nomtime)
+    try:
+        fill_todo_from_manifest(config, q_mani, nomtime=nomtime)
+    except OSError as ex:
+        # Whatever went wrong was already logged in detail where it happened,
+        # so just say so and fall through to the usual pacing below: a broken
+        # origin must not turn this into a hot retry loop.
+        logger.critical('Could not get the remote manifest: %s', ex)
     refresh = config['pull'].getint('refresh', 300)
     left = refresh - int(time.time() - starttime)
     if left > 0:
@@ -1218,7 +1224,13 @@ def pull_mirror(
     actions: set[tuple[str, str]] = set()
     # Run in the main thread if we have runonce
     if runonce:
-        fill_todo_from_manifest(config, q_mani, nomtime=nomtime, forcepurge=forcepurge)
+        try:
+            fill_todo_from_manifest(config, q_mani, nomtime=nomtime, forcepurge=forcepurge)
+        except OSError as ex:
+            # Already logged in detail. A mirror run from cron should report the
+            # problem and exit non-zero, not print a traceback at the admin.
+            logger.critical('Could not get the remote manifest: %s', ex)
+            return 1
         if not q_mani.qsize():
             return 0
     else:
