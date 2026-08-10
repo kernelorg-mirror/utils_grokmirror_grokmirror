@@ -852,9 +852,15 @@ def set_repo_fingerprint(toplevel, gitdir, fingerprint=None):
 
     if fingerprint is None:
         fingerprint = get_repo_fingerprint(toplevel, gitdir, force=True)
+        if fingerprint is None:
+            # The repo has no refs at all (or is gone), so there is nothing to
+            # record. Writing it out anyway stores the literal string "None",
+            # which every reader then treats as a valid fingerprint.
+            logger.debug('No fingerprint to record for %s', gitdir)
+            return None
 
     with open(fpfile, 'wt') as fpfh:
-        fpfh.write(f'{fingerprint}')
+        fpfh.write(fingerprint)
 
     logger.debug('Recorded fingerprint for %s: %s', gitdir, fingerprint)
     return fingerprint

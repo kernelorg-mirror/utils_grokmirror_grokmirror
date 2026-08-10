@@ -67,6 +67,11 @@ def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
 
         repofpr = grokmirror.get_repo_fingerprint(toplevel, repo)
         logger.debug('%s fingerprint is %s', repo, repofpr)
+        if not repofpr:
+            # Either the repo is gone or it has no refs at all. Either way there
+            # is nothing to bundle, and no fingerprint to record next to it.
+            logger.info('  skipped: %s (no refs to bundle)', repo)
+            continue
 
         # Do we have a bundle file already?
         bfile = os.path.join(bundledir, 'clone.bundle')
