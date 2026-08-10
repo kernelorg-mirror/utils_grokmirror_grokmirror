@@ -145,10 +145,10 @@ def merge_siblings(siblings, amap):
             # Orphaned sibling, ignore it -- it will get cleaned up
             siblings.remove(sibling)
             continue
-        s_remotes = grokmirror.list_repo_remotes(sibling)
-        if len(s_remotes) > rcount:
+        s_remote_names = grokmirror.list_repo_remotes(sibling)
+        if len(s_remote_names) > rcount:
             mdest = sibling
-            rcount = len(s_remotes)
+            rcount = len(s_remote_names)
 
     if mdest is None:
         # Every sibling turned out to be orphaned, so there is nothing to merge
@@ -504,6 +504,19 @@ def check_precious_objects(fullpath):
     return grokmirror.is_precious(fullpath)
 
 
+def refresh_obst_roots(obst_roots: dict[str, set[str]], obstrepo: str) -> set[str] | None:
+    # Re-read the root commits of an objstore repo we just modified. Every
+    # consumer of this map ignores repos with no roots, so drop such repos
+    # instead of caching an empty entry -- an objstore repo whose contents were
+    # just migrated elsewhere must not be offered as a sibling target again.
+    roots = grokmirror.get_repo_roots(obstrepo, force=True)
+    if roots:
+        obst_roots[obstrepo] = roots
+    else:
+        obst_roots.pop(obstrepo, None)
+    return roots
+
+
 def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_all_quick=False, repack_all_full=False):
 
     if repack_all_quick or repack_all_full:
@@ -717,7 +730,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                     # Fetch into the obstrepo
                     logger.info('    fetch: fetching %s', gitdir)
                     grokmirror.fetch_objstore_repo(obstrepo, fullpath)
-                    obst_roots[obstrepo] = grokmirror.get_repo_roots(obstrepo, force=True)
+                    refresh_obst_roots(obst_roots, obstrepo)
                 run_git_repack(fullpath, config, level=1, prune=m_prune)
                 space_saved += start_size - get_repo_size(fullpath)
             else:
@@ -741,7 +754,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                             # Fetch into the obstrepo
                             logger.info('    fetch: fetching %s', top_sibling)
                             grokmirror.fetch_objstore_repo(obstrepo, top_sibling)
-                            obst_roots[obstrepo] = grokmirror.get_repo_roots(obstrepo, force=True)
+                            refresh_obst_roots(obst_roots, obstrepo)
                             # It doesn't matter if this fails, because repacking is still safe
                             # Other siblings will match in their own due course
                             break
@@ -762,7 +775,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                         grokmirror.fetch_objstore_repo(obstrepo, fullpath)
                     run_git_repack(fullpath, config, level=1, prune=m_prune)
                     space_saved += start_size - get_repo_size(fullpath)
-                    obst_roots[obstrepo] = grokmirror.get_repo_roots(obstrepo, force=True)
+                    refresh_obst_roots(obst_roots, obstrepo)
 
         elif not os.path.isdir(altdir):
             logger.critical('  reclone: %s (alternates repo gone)', gitdir)
@@ -834,7 +847,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                         # Now repack ourselves to get rid of any public objects
                         run_git_repack(fullpath, config, level=1, prune=m_prune)
 
-                obst_roots[obstrepo] = grokmirror.get_repo_roots(obstrepo, force=True)
+                refresh_obst_roots(obst_roots, obstrepo)
 
         elif altdir.find(obstdir) == 0 and not is_private:
             # Make sure this repo is properly set up with obstrepo
@@ -965,8 +978,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
                     status[mdest]['nextcheck'] = todayiso
 
                 # Recalculate my roots
-                my_roots = grokmirror.get_repo_roots(obstrepo, force=True)
-                obst_roots[obstrepo] = my_roots
+                my_roots = refresh_obst_roots(obst_roots, obstrepo)
 
         # Not an else, because the previous step may have migrated things
         if obstrepo not in amap or not len(amap[obstrepo]):

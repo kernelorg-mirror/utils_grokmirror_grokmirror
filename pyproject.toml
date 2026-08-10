@@ -87,6 +87,13 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
 
+[[tool.mypy.overrides]]
+# Per-module ratchet towards disallow_untyped_defs for the whole package. Add
+# modules here as they gain annotations; once the list is complete, hoist the
+# setting into [tool.mypy] above and drop this section.
+module = ["grokmirror"]
+disallow_untyped_defs = true
+
 [tool.pyright]
 # pyright automatically ignores virtual environments and other directories, but
 # once we specify `exclude`, we're on our own. The matrix in ci-matrix.sh

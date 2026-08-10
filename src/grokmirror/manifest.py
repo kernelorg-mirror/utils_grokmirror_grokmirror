@@ -321,7 +321,7 @@ def grok_manifest(
         grokmirror.manifest_unlock(manifile)
         return 0
 
-    gitdirs = []
+    gitdirs: list[str] = []
 
     if purge or not len(paths) or not len(manifest):
         # We automatically purge when we do a full tree walk

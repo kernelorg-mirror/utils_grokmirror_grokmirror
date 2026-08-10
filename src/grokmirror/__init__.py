@@ -30,6 +30,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Collection
 from configparser import ConfigParser, ExtendedInterpolation
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
 from typing import IO, Literal, overload
@@ -58,7 +59,7 @@ OBST_PREAMBULE = (
 )
 
 
-def get_requests_session():
+def get_requests_session() -> requests.Session:
     global REQSESSION
     if REQSESSION is None:
         REQSESSION = requests.session()
@@ -70,7 +71,7 @@ def get_requests_session():
     return REQSESSION
 
 
-def get_config_from_git(fullpath, regexp, defaults=None):
+def get_config_from_git(fullpath: str | None, regexp: str, defaults: dict[str, str] | None = None) -> dict[str, str]:
     args = ['config', '-z', '--get-regexp', regexp]
     _ecode, out, _err = run_git_command(fullpath, args)
     gitconfig = defaults
@@ -93,7 +94,7 @@ def get_config_from_git(fullpath, regexp, defaults=None):
     return gitconfig
 
 
-def set_git_config(fullpath, param, value, operation='--replace-all'):
+def set_git_config(fullpath: str, param: str, value: str, operation: str = '--replace-all') -> int:
     args = ['config', operation, param, value]
     ecode, _out, _err = run_git_command(fullpath, args)
     return ecode
@@ -174,7 +175,7 @@ def run_git_command(
     return run_shell_command(cmdargs, stdin, decode=False)
 
 
-def _lockname(fullpath):
+def _lockname(fullpath: str) -> str:
     lockpath = os.path.dirname(fullpath)
     lockname = f'.{os.path.basename(fullpath)}.lock'
     # dirname() is empty for a bare filename like "manifest.js.gz", and
@@ -185,7 +186,7 @@ def _lockname(fullpath):
     return repolock
 
 
-def lock_repo(fullpath, nonblocking=False):
+def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
     repolock = _lockname(fullpath)
 
     logger.debug('Attempting to exclusive-lock %s', repolock)
@@ -202,7 +203,7 @@ def lock_repo(fullpath, nonblocking=False):
     REPO_LOCKH[fullpath] = lockfh
 
 
-def unlock_repo(fullpath):
+def unlock_repo(fullpath: str) -> None:
     if fullpath in REPO_LOCKH:
         logger.debug('Unlocking %s', fullpath)
         lockf(REPO_LOCKH[fullpath], LOCK_UN)
@@ -210,7 +211,7 @@ def unlock_repo(fullpath):
         del REPO_LOCKH[fullpath]
 
 
-def is_bare_git_repo(path):
+def is_bare_git_repo(path: str) -> bool:
     """
     Return True if path (which is already verified to be a directory)
     sufficiently resembles a base git repo (good enough to fool git
@@ -228,7 +229,7 @@ def is_bare_git_repo(path):
     return False
 
 
-def get_repo_timestamp(toplevel, gitdir):
+def get_repo_timestamp(toplevel: str, gitdir: str) -> int:
     ts = 0
 
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
@@ -247,7 +248,7 @@ def get_repo_timestamp(toplevel, gitdir):
     return ts
 
 
-def set_repo_timestamp(toplevel, gitdir, ts):
+def set_repo_timestamp(toplevel: str, gitdir: str, ts: int) -> None:
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
 
@@ -258,7 +259,7 @@ def set_repo_timestamp(toplevel, gitdir, ts):
     logger.debug('Recorded timestamp for %s: %s', gitdir, ts)
 
 
-def get_repo_obj_info(fullpath):
+def get_repo_obj_info(fullpath: str) -> dict[str, str]:
     args = ['count-objects', '-v']
     _retcode, output, _error = run_git_command(fullpath, args)
     obj_info = {}
@@ -271,7 +272,7 @@ def get_repo_obj_info(fullpath):
     return obj_info
 
 
-def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
+def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: list[str] | None = None) -> dict:
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     description = None
     try:
@@ -343,7 +344,7 @@ def get_repo_defs(toplevel, gitdir, usenow=False, ignorerefs=None):
     return repoinfo
 
 
-def get_altrepo(fullpath):
+def get_altrepo(fullpath: str) -> str | None:
     altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
     altdir = None
     try:
@@ -357,7 +358,7 @@ def get_altrepo(fullpath):
     return altdir
 
 
-def set_altrepo(fullpath, altdir):
+def set_altrepo(fullpath: str, altdir: str) -> None:
     # I assume you already checked if this is a sane operation to perform
     altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
     objpath = os.path.join(altdir, 'objects')
@@ -368,9 +369,9 @@ def set_altrepo(fullpath, altdir):
         logger.critical('objdir %s does not exist, not setting alternates file %s', objpath, altfile)
 
 
-def get_rootsets(toplevel, obstdir):
-    top_roots = {}
-    obst_roots = {}
+def get_rootsets(toplevel: str, obstdir: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    top_roots: dict[str, set[str]] = {}
+    obst_roots: dict[str, set[str]] = {}
     topdirs = find_all_gitdirs(toplevel, normalize=True, exclude_objstore=True)
     obstdirs = find_all_gitdirs(obstdir, normalize=True, exclude_objstore=False)
     for fullpath in topdirs:
@@ -388,7 +389,7 @@ def get_rootsets(toplevel, obstdir):
     return top_roots, obst_roots
 
 
-def get_repo_roots(fullpath, force=False):
+def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
     if not os.path.exists(fullpath):
         logger.debug('Cannot check roots in %s, as it does not exist', fullpath)
         return None
@@ -417,7 +418,7 @@ def get_repo_roots(fullpath, force=False):
     return roots
 
 
-def setup_bare_repo(fullpath):
+def setup_bare_repo(fullpath: str) -> bool:
     args = ['init', '--bare', fullpath]
     ecode, _out, _err = run_git_command(None, args)
     if ecode > 0:
@@ -437,7 +438,7 @@ def setup_bare_repo(fullpath):
     return True
 
 
-def setup_objstore_repo(obstdir, name=None):
+def setup_objstore_repo(obstdir: str, name: str | None = None) -> str:
     if name is None:
         name = str(uuid.uuid4())
     pathlib.Path(obstdir).mkdir(parents=True, exist_ok=True)
@@ -462,14 +463,14 @@ def setup_objstore_repo(obstdir, name=None):
     return obstrepo
 
 
-def objstore_virtref(fullpath):
+def objstore_virtref(fullpath: str) -> str:
     fullpath = os.path.realpath(fullpath)
     vh = hashlib.sha1()
     vh.update(fullpath.encode())
     return vh.hexdigest()[:12]
 
 
-def objstore_trim_virtref(obstrepo, virtref):
+def objstore_trim_virtref(obstrepo: str, virtref: str) -> None:
     args = ['for-each-ref', '--format', 'delete %(refname)', f'refs/virtual/{virtref}']
     ecode, out, _err = run_git_command(obstrepo, args)
     if ecode == 0 and len(out):
@@ -478,7 +479,7 @@ def objstore_trim_virtref(obstrepo, virtref):
         run_git_command(obstrepo, args, stdin=out.encode())
 
 
-def remove_from_objstore(obstrepo, fullpath):
+def remove_from_objstore(obstrepo: str, fullpath: str) -> bool:
     # is fullpath still using us?
     altrepo = get_altrepo(fullpath)
     if altrepo and os.path.realpath(obstrepo) == os.path.realpath(altrepo):
@@ -502,7 +503,17 @@ def remove_from_objstore(obstrepo, fullpath):
     return True
 
 
-def list_repo_remotes(fullpath, withurl=False):
+@overload
+def list_repo_remotes(fullpath: str, withurl: Literal[False] = ...) -> list[str]: ...
+
+
+@overload
+def list_repo_remotes(fullpath: str, withurl: Literal[True]) -> list[tuple[str, ...]]: ...
+
+
+# withurl decides whether callers get bare remote names or (name, url) pairs,
+# so overload it the same way run_shell_command() overloads decode.
+def list_repo_remotes(fullpath: str, withurl: bool = False) -> list[str] | list[tuple[str, ...]]:
     args = ['remote']
     if withurl:
         args.append('-v')
@@ -515,7 +526,7 @@ def list_repo_remotes(fullpath, withurl=False):
     if not withurl:
         return out.split('\n')
 
-    remotes = []
+    remotes: list[tuple[str, ...]] = []
     for line in out.split('\n'):
         entry = tuple(line.split()[:2])
         if entry not in remotes:
@@ -523,7 +534,7 @@ def list_repo_remotes(fullpath, withurl=False):
     return remotes
 
 
-def add_repo_to_objstore(obstrepo, fullpath):
+def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
     virtref = objstore_virtref(fullpath)
     remotes = list_repo_remotes(obstrepo)
     if virtref in remotes:
@@ -554,7 +565,7 @@ def add_repo_to_objstore(obstrepo, fullpath):
     return True
 
 
-def _fetch_objstore_repo_using_plumbing(srcrepo, obstrepo, virtref):
+def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: str) -> bool:
     # Copies objects to objstore repos using direct git plumbing
     # as opposed to using "fetch". See discussion here:
     # http://lore.kernel.org/git/20200720173220.GB2045458@coredump.intra.peff.net
@@ -593,7 +604,7 @@ def _fetch_objstore_repo_using_plumbing(srcrepo, obstrepo, virtref):
     dstset = set(out.strip().split('\n'))
 
     # Now we create a stdin list of commands for update-ref
-    mapping = {}
+    mapping: dict[str, str] = {}
     newset = srcset.difference(dstset)
     if newset:
         for refline in newset:
@@ -629,12 +640,15 @@ def _fetch_objstore_repo_using_plumbing(srcrepo, obstrepo, virtref):
     return True
 
 
-def fetch_objstore_repo(obstrepo, fullpath=None, pack_refs=False, use_plumbing=False):
+def fetch_objstore_repo(
+    obstrepo: str, fullpath: str | None = None, pack_refs: bool = False, use_plumbing: bool = False
+) -> bool:
     my_remotes = list_repo_remotes(obstrepo, withurl=True)
+    remotes: list[tuple[str, ...]]
     if fullpath:
         virtref = objstore_virtref(fullpath)
         if (virtref, fullpath) in my_remotes:
-            remotes = {(virtref, fullpath)}
+            remotes = [(virtref, fullpath)]
         else:
             logger.debug('%s is not in remotes for %s', fullpath, obstrepo)
             return False
@@ -670,7 +684,7 @@ def fetch_objstore_repo(obstrepo, fullpath=None, pack_refs=False, use_plumbing=F
     return success
 
 
-def is_private_repo(config, fullpath):
+def is_private_repo(config: ConfigParser, fullpath: str) -> bool:
     privmasks = config['core'].get('private', '')
     if not len(privmasks):
         return False
@@ -682,7 +696,9 @@ def is_private_repo(config, fullpath):
     return False
 
 
-def find_siblings(fullpath, my_roots, known_roots, exact=False):
+def find_siblings(
+    fullpath: str, my_roots: set[str] | None, known_roots: dict[str, set[str]], exact: bool = False
+) -> set[str]:
     siblings = set()
     for gitpath, gitroots in known_roots.items():
         # Of course we're going to match ourselves
@@ -705,7 +721,9 @@ def find_siblings(fullpath, my_roots, known_roots, exact=False):
     return siblings
 
 
-def find_best_obstrepo(mypath, obst_roots, toplevel, baselines, minratio=0.2):
+def find_best_obstrepo(
+    mypath: str, obst_roots: dict[str, set[str]], toplevel: str, baselines: list[str], minratio: float = 0.2
+) -> str | None:
     # We want to find a repo with best intersect len to total roots len ratio,
     # but we'll ignore any repos where the ratio is too low, in order not to lump
     # together repositories that have very weak common histories.
@@ -743,7 +761,7 @@ def find_best_obstrepo(mypath, obst_roots, toplevel, baselines, minratio=0.2):
     return obstrepo
 
 
-def get_obstrepo_mapping(obstdir):
+def get_obstrepo_mapping(obstdir: str) -> dict[str, str]:
     mapping: dict[str, str] = {}
     if not os.path.isdir(obstdir):
         return mapping
@@ -769,7 +787,7 @@ def get_obstrepo_mapping(obstdir):
     return mapping
 
 
-def find_objstore_repo_for(obstdir, fullpath):
+def find_objstore_repo_for(obstdir: str, fullpath: str) -> str | None:
     if not os.path.isdir(obstdir):
         return None
 
@@ -787,7 +805,7 @@ def find_objstore_repo_for(obstdir, fullpath):
     return None
 
 
-def get_forkgroups(obstdir, toplevel):
+def get_forkgroups(obstdir: str, toplevel: str) -> dict[str, set[str]]:
     forkgroups: dict[str, set[str]] = {}
     if not os.path.exists(obstdir):
         return forkgroups
@@ -804,7 +822,9 @@ def get_forkgroups(obstdir, toplevel):
     return forkgroups
 
 
-def get_repo_fingerprint(toplevel, gitdir, force=False, ignorerefs=None):
+def get_repo_fingerprint(
+    toplevel: str, gitdir: str, force: bool = False, ignorerefs: list[str] | None = None
+) -> str | None:
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     if not os.path.exists(fullpath):
         logger.debug('Cannot fingerprint %s, as it does not exist', fullpath)
@@ -848,7 +868,7 @@ def get_repo_fingerprint(toplevel, gitdir, force=False, ignorerefs=None):
     return fingerprint
 
 
-def set_repo_fingerprint(toplevel, gitdir, fingerprint=None):
+def set_repo_fingerprint(toplevel: str, gitdir: str, fingerprint: str | None = None) -> str | None:
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     fpfile = os.path.join(fullpath, 'grokmirror.fingerprint')
 
@@ -868,7 +888,7 @@ def set_repo_fingerprint(toplevel, gitdir, fingerprint=None):
     return fingerprint
 
 
-def get_altrepo_map(toplevel, refresh=False):
+def get_altrepo_map(toplevel: str, refresh: bool = False) -> dict[str, set[str]]:
     global _alt_repo_map
     if _alt_repo_map is None or refresh:
         logger.info('   search: finding all repos using alternates')
@@ -888,14 +908,14 @@ def get_altrepo_map(toplevel, refresh=False):
     return _alt_repo_map
 
 
-def is_alt_repo(toplevel, refrepo):
+def is_alt_repo(toplevel: str, refrepo: str) -> bool:
     amap = get_altrepo_map(toplevel)
 
     looking_for = os.path.realpath(os.path.join(toplevel, refrepo.strip('/')))
     return looking_for in amap
 
 
-def is_obstrepo(fullpath, obstdir=None):
+def is_obstrepo(fullpath: str, obstdir: str | None = None) -> bool:
     if obstdir:
         # At this point, both should be normalized
         return fullpath.find(obstdir) == 0
@@ -903,7 +923,9 @@ def is_obstrepo(fullpath, obstdir=None):
     return os.path.exists(os.path.join(fullpath, 'grokmirror.objstore'))
 
 
-def find_all_gitdirs(toplevel, ignore=None, normalize=False, exclude_objstore=True):
+def find_all_gitdirs(
+    toplevel: str, ignore: Collection[str] | None = None, normalize: bool = False, exclude_objstore: bool = True
+) -> set[str]:
     global _alt_repo_map
     if _alt_repo_map is None:
         _alt_repo_map = {}
@@ -959,7 +981,7 @@ def find_all_gitdirs(toplevel, ignore=None, normalize=False, exclude_objstore=Tr
     return gitdirs
 
 
-def manifest_lock(manifile):
+def manifest_lock(manifile: str) -> None:
     global MANIFEST_LOCKH
     if MANIFEST_LOCKH is not None:
         logger.debug('Manifest %s already locked', manifile)
@@ -972,7 +994,7 @@ def manifest_lock(manifile):
     logger.debug('Manifest lock obtained')
 
 
-def manifest_unlock(manifile):
+def manifest_unlock(manifile: str) -> None:
     global MANIFEST_LOCKH
     if MANIFEST_LOCKH is not None:
         logger.debug('Unlocking manifest %s', manifile)
@@ -1019,7 +1041,7 @@ def read_manifest(manifile: str, wait: bool = False) -> dict:
     return manifest
 
 
-def write_manifest(manifile, manifest, mtime=None, pretty=False):
+def write_manifest(manifile: str, manifest: dict, mtime: int | None = None, pretty: bool = False) -> None:
     logger.debug('Writing new %s', manifile)
 
     (dirname, basename) = os.path.split(manifile)
@@ -1065,7 +1087,7 @@ class GrokConfigParser(ConfigParser):
     last_modified: int = 0
 
 
-def load_config_file(cfgfile):
+def load_config_file(cfgfile: str) -> GrokConfigParser:
     if not os.path.exists(cfgfile):
         sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
         sys.exit(1)
@@ -1109,13 +1131,19 @@ def load_config_file(cfgfile):
     return config
 
 
-def is_precious(fullpath):
+def is_precious(fullpath: str) -> bool:
     args = ['config', '--get', 'extensions.preciousObjects']
     _retcode, output, _error = run_git_command(fullpath, args)
     return output.strip().lower() in ('yes', 'true', '1')
 
 
-def get_repack_level(obj_info, max_loose_objects=1200, max_packs=20, pc_loose_objects=10, pc_loose_size=10):
+def get_repack_level(
+    obj_info: dict[str, str],
+    max_loose_objects: int = 1200,
+    max_packs: int = 20,
+    pc_loose_objects: int = 10,
+    pc_loose_size: int = 10,
+) -> int:
     # for now, hardcode the maximum loose objects and packs
     # XXX: we can probably set this in git config values?
     #      I don't think this makes sense as a global setting, because
@@ -1159,7 +1187,7 @@ def get_repack_level(obj_info, max_loose_objects=1200, max_packs=20, pc_loose_ob
     return needs_repack
 
 
-def init_logger(subcommand, logfile, loglevel, verbose):
+def init_logger(subcommand: str, logfile: str | None, loglevel: int, verbose: bool) -> logging.Logger:
     global logger
 
     logger = logging.getLogger('grokmirror')
