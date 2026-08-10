@@ -55,8 +55,10 @@ dev = [
     "types-requests",
 ]
 
-[tool.setuptools]
-packages = ["grokmirror"]
+[tool.setuptools.packages.find]
+# src layout: nothing at the top level is importable, so a stale build/ tree or
+# the cwd can't shadow the real package during tests and type checking.
+where = ["src"]
 
 [tool.setuptools.dynamic]
 version = { attr = "grokmirror.VERSION" }
@@ -71,8 +73,10 @@ addopts = "--tb=short"
 # python_version is deliberately unset: mypy no longer accepts a 3.9 target, so
 # it checks against whatever interpreter it runs under. ruff, pyright and ty are
 # all still pinned to py39, and ci-matrix.sh actually runs the tests on 3.9.
-# Otherwise a leftover build/ tree from `python -m build` collides with the
-# real package and mypy refuses to check anything at all.
+#
+# The src layout keeps stray copies of the package out of mypy's way, but a
+# build/ tree left behind by an older build backend would still collide with
+# src/grokmirror and make mypy refuse to check anything at all.
 exclude = ['^build/']
 check_untyped_defs = true
 warn_unused_configs = true
