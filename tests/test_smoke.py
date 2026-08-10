@@ -59,7 +59,7 @@ def test_version_is_exported() -> None:
 def test_script_help(script: str) -> None:
     # Invoke through the installed entry point rather than -m, since that is
     # how users actually reach these.
-    res = subprocess.run([script, '--help'], capture_output=True, text=True)
+    res = subprocess.run([script, '--help'], capture_output=True, text=True, check=False)
     assert res.returncode == 0, res.stderr
     assert 'usage:' in res.stdout
 

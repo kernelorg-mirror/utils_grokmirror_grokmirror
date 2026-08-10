@@ -115,7 +115,7 @@ def init_pi_inbox(gdir: str, pdir: str, opts) -> bool:
         addresses = list()
         for line in origins.split('\n'):
             line = line.strip()
-            if not line or line.startswith(';') or line.startswith('#') or line.startswith('[publicinbox'):
+            if not line or line.startswith((';', '#', '[publicinbox')):
                 continue
             try:
                 opt, val = line.split('=', maxsplit=1)

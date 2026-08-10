@@ -39,11 +39,9 @@ def log_errors(fullpath, cmdargs, lines):
     with open(os.path.join(fullpath, 'grokmirror.fsck.err'), 'w') as fh:
         fh.write('# Date: %s\n' % datetime.datetime.today().strftime('%F'))
         fh.write('# Cmd : git %s\n' % ' '.join(cmdargs))
-        count = 0
-        for line in lines:
+        for count, line in enumerate(lines, start=1):
             fh.write('%s\n' % line)
             logger.critical('\t%s', line)
-            count += 1
             if count > 10:
                 logger.critical('\t [ %s more lines skipped ]', len(lines) - 10)
                 logger.critical('\t [ see %s/grokmirror.fsck.err ]', os.path.basename(fullpath))

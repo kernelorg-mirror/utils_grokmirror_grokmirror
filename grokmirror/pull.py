@@ -151,7 +151,7 @@ def build_optimal_forkgroups(l_manifest, r_manifest, toplevel, obstdir):
     for r_fg, r_siblings in r_forkgroups.items():
         # if we have an intersection between their forkgroups and our forkgroups, then we use ours
         found = False
-        for l_fg, l_siblings in forkgroups.items():
+        for l_siblings in forkgroups.values():
             if l_siblings == r_siblings:
                 # No changes there
                 continue
@@ -820,7 +820,9 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
                 session.close()
                 r_manifest = json.loads(jdata)
 
-            except Exception as ex:
+            # Deliberately broad: anything at all going wrong while fetching or
+            # decoding the manifest is reported as a single OSError below.
+            except Exception as ex:  # noqa: BLE001
                 logger.warning('Failed to parse %s', r_mani_url)
                 logger.warning('Error was: %s', ex)
                 raise OSError('Failed to parse %s (%s)' % (r_mani_url, ex))

@@ -162,12 +162,10 @@ def lock_repo(fullpath, nonblocking=False):
         flags = LOCK_EX
 
     lockf(lockfh, flags)
-    global REPO_LOCKH
     REPO_LOCKH[fullpath] = lockfh
 
 
 def unlock_repo(fullpath):
-    global REPO_LOCKH
     if fullpath in REPO_LOCKH:
         logger.debug('Unlocking %s', fullpath)
         lockf(REPO_LOCKH[fullpath], LOCK_UN)
