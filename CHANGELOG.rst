@@ -51,7 +51,8 @@ v3.0 (TBD)
 - Interrupting any of the commands with Ctrl-C is now reliable; several
   code paths used bare except clauses that swallowed KeyboardInterrupt
 - The contrib pubsub v1 listener works again, and now requires falcon
-  3.0 or newer
+  3.0 or newer; it also reads the request body in a way that does not
+  depend on WSGI server internals
 - Development: the tree is checked with ruff, mypy, ty and pyright; run
   ./ci.sh before committing and ./ci-matrix.sh before releases
 

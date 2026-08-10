@@ -49,7 +49,10 @@ class PubsubListener:
             return
 
         try:
-            doc = json.load(req.stream)
+            # bounded_stream, not stream: reading the raw stream can block
+            # waiting for an EOF the client never sends, and calling read() with
+            # no size is not something a WSGI server has to support.
+            doc = json.load(req.bounded_stream)
         except ValueError:
             # JSONDecodeError and UnicodeDecodeError are both ValueErrors
             resp.status = falcon.HTTP_500
