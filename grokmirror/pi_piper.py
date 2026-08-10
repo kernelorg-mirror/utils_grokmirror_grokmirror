@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 #
 # This is a ready-made post_update_hook script for piping messages from
 # mirrored public-inbox repositories to arbitrary commands (e.g. procmail).

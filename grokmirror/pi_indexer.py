@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 #
 # A hook to properly initialize and index mirrored public-inbox repositories.
 
