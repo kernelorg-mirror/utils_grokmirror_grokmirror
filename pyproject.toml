@@ -91,7 +91,7 @@ no_implicit_optional = true
 # Per-module ratchet towards disallow_untyped_defs for the whole package. Add
 # modules here as they gain annotations; once the list is complete, hoist the
 # setting into [tool.mypy] above and drop this section.
-module = ["grokmirror"]
+module = ["grokmirror", "grokmirror.bundle", "grokmirror.dumb_pull", "grokmirror.pi_piper"]
 disallow_untyped_defs = true
 
 [tool.pyright]

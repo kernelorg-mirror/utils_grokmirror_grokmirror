@@ -13,6 +13,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
+import argparse
 import fnmatch
 import logging
 import os
@@ -23,7 +26,7 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 
-def git_rev_parse_all(gitdir):
+def git_rev_parse_all(gitdir: str) -> str:
     args = ['rev-parse', '--all']
     _retcode, output, error = grokmirror.run_git_command(gitdir, args)
 
@@ -35,7 +38,7 @@ def git_rev_parse_all(gitdir):
     return output
 
 
-def git_remote_update(args, fullpath):
+def git_remote_update(args: list[str], fullpath: str) -> None:
     _retcode, _output, error = grokmirror.run_git_command(fullpath, args)
 
     if error:
@@ -53,7 +56,7 @@ def git_remote_update(args, fullpath):
             logger.warning('Stderr: %s', '\n'.join(warn))
 
 
-def dumb_pull_repo(gitdir, remotes, svn=False):
+def dumb_pull_repo(gitdir: str, remotes: list[str], svn: bool = False) -> bool:
     # verify it's a git repo and fetch all remotes
     logger.debug('Will pull %s with following remotes: %s', gitdir, remotes)
     old_revs = git_rev_parse_all(gitdir)
@@ -110,7 +113,7 @@ def dumb_pull_repo(gitdir, remotes, svn=False):
     return True
 
 
-def run_post_update_hook(hookscript, gitdir):
+def run_post_update_hook(hookscript: str, gitdir: str) -> None:
     if hookscript == '':
         return
     if not os.access(hookscript, os.X_OK):
@@ -131,8 +134,7 @@ def run_post_update_hook(hookscript, gitdir):
         logger.info('Hook Stdout: %s', output)
 
 
-def parse_args():
-    import argparse
+def parse_args() -> argparse.Namespace:
 
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
@@ -180,7 +182,14 @@ def parse_args():
     return opts
 
 
-def dumb_pull(paths, verbose=False, svn=False, remotes=None, posthook='', logfile=None):
+def dumb_pull(
+    paths: list[str],
+    verbose: bool = False,
+    svn: bool = False,
+    remotes: list[str] | None = None,
+    posthook: str = '',
+    logfile: str | None = None,
+) -> None:
     global logger
 
     loglevel = logging.INFO
@@ -209,7 +218,7 @@ def dumb_pull(paths, verbose=False, svn=False, remotes=None, posthook='', logfil
                     run_post_update_hook(posthook, founddir)
 
 
-def command():
+def command() -> None:
     opts = parse_args()
 
     return dumb_pull(

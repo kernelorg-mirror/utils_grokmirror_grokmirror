@@ -13,10 +13,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import argparse
 import fnmatch
 import logging
 import os
 import sys
+from collections.abc import Collection
 from pathlib import Path
 
 import grokmirror
@@ -25,12 +27,13 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 
-def get_repo_size(fullpath):
+def get_repo_size(fullpath: str) -> int:
     reposize = 0
     obj_info = grokmirror.get_repo_obj_info(fullpath)
     if 'alternate' in obj_info:
         altpath = grokmirror.get_altrepo(fullpath)
-        reposize = get_repo_size(altpath)
+        if altpath:
+            reposize = get_repo_size(altpath)
     reposize += int(obj_info['size'])
     reposize += int(obj_info['size-pack'])
 
@@ -38,7 +41,14 @@ def get_repo_size(fullpath):
     return reposize
 
 
-def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
+def generate_bundles(
+    config: grokmirror.GrokConfigParser,
+    outdir: str,
+    gitargs: str,
+    revlistargs: str,
+    maxsize: int,
+    include: Collection[str],
+) -> int:
     # uses advisory lock, so its safe even if we die unexpectedly
     # load_config_file() guarantees both of these are set
     manifest = grokmirror.read_manifest(config['core']['manifest'])
@@ -109,8 +119,7 @@ def generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include):
     return 0
 
 
-def parse_args():
-    import argparse
+def parse_args() -> argparse.Namespace:
 
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
@@ -136,7 +145,15 @@ def parse_args():
     return opts
 
 
-def grok_bundle(cfgfile, outdir, gitargs, revlistargs, maxsize, include, verbose=False):
+def grok_bundle(
+    cfgfile: str,
+    outdir: str,
+    gitargs: str,
+    revlistargs: str,
+    maxsize: int,
+    include: Collection[str],
+    verbose: bool = False,
+) -> int:
     global logger
 
     config = grokmirror.load_config_file(cfgfile)
@@ -152,7 +169,7 @@ def grok_bundle(cfgfile, outdir, gitargs, revlistargs, maxsize, include, verbose
     return generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include)
 
 
-def command():
+def command() -> None:
     opts = parse_args()
 
     retval = grok_bundle(

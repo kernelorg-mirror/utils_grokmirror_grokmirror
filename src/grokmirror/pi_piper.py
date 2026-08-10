@@ -155,7 +155,7 @@ def run_pi_repo(
     sys.exit(ecode)
 
 
-def command():
+def command() -> None:
     import argparse
     from configparser import ConfigParser, ExtendedInterpolation
 
