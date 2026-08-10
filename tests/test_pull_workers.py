@@ -51,6 +51,7 @@ def test_objstore_action_on_a_repo_with_no_alternates(
     assert git('for-each-ref', '--format=%(refname)', cwd=tree.decoy).split() == ['refs/heads/decoybranch']
 
 
+@pytest.mark.slow
 def test_objstore_action_fetches_when_alternates_are_set(tree: GrokTree) -> None:
     tree.add_repo('test/one.git')
     tree.add_repo('test/fork.git')
