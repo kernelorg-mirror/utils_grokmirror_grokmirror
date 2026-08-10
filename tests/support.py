@@ -82,25 +82,28 @@ class Source:
         path.mkdir(parents=True, exist_ok=True)
         git('init', '-q', '-b', branch, str(path))
 
-    def commit(self, message: str | None = None, content: str | None = None) -> str:
+    def commit(self, message: str | None = None, content: str | None = None, filename: str = 'file.txt') -> str:
         """Add one commit and return its full hash.
 
         The commit content is seeded with the source's name, so two sources with
         different names have unrelated histories (no shared root commit) while
         two sources with the same name are byte-for-byte reproducible.
+
+        `filename` matters for public-inbox repositories, where each commit adds
+        a single file called 'm' holding the message.
         """
         self.commits += 1
         if message is None:
             message = f'Commit {self.commits}'
         if content is None:
             content = f'{self.path.name}: contents at commit {self.commits}\n'
-        (self.path / 'file.txt').write_text(content)
+        (self.path / filename).write_text(content)
         # A distinct, fixed date per commit keeps the hashes stable across runs
         # while still ordering the history the obvious way.
         stamp = f'{BASE_TIMESTAMP + self.commits * 60} +0000'
         env = dict(os.environ, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp)
         subprocess.run(
-            ['git', 'add', 'file.txt'],
+            ['git', 'add', filename],
             cwd=str(self.path),
             capture_output=True,
             text=True,
@@ -128,6 +131,18 @@ class Source:
         if refspec is None:
             refspec = f'HEAD:refs/heads/{self.branch}'
         git('push', '-q', str(dest), refspec, cwd=self.path)
+
+
+def pi_message(subject: str, body: str = 'Nothing to see here.\n') -> str:
+    """An RFC822-ish message body, as public-inbox stores it in the file 'm'."""
+    return (
+        'From: Tester <tests@grokmirror.invalid>\n'
+        'To: mylist@grokmirror.invalid\n'
+        f'Subject: {subject}\n'
+        f'Message-Id: <{subject.replace(" ", "-")}@grokmirror.invalid>\n'
+        '\n'
+        f'{body}'
+    )
 
 
 class GrokTree:
@@ -321,21 +336,30 @@ class GrokTree:
         allow_traceback: bool = False,
         cwd: Path | None = None,
         stdin: str | None = None,
+        timeout: int = 120,
     ) -> subprocess.CompletedProcess[str]:
         """Run a grokmirror console script and check how it went.
 
         Runs from inside the decoy repository unless told otherwise, fails the
         test if the exit code is not `expect` (pass None to accept any), and
         fails on a traceback even when the exit code was expected.
+
+        A command that does not finish within `timeout` fails the test instead of
+        blocking the suite: some of the bugs being guarded against here are
+        hangs, not crashes, and a hang has to be just as loud.
         """
-        res = subprocess.run(
-            list(argv),
-            cwd=str(cwd) if cwd is not None else str(self.decoy),
-            input=stdin,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            res = subprocess.run(
+                list(argv),
+                cwd=str(cwd) if cwd is not None else str(self.decoy),
+                input=stdin,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as ex:
+            raise AssertionError(f'{argv[0]} did not finish within {timeout}s: {" ".join(argv)}') from ex
         if expect is not None and res.returncode != expect:
             raise AssertionError(f'{argv[0]} exited with {res.returncode}, expected {expect}\n{self._report(res)}')
         if not allow_traceback and 'Traceback (most recent call last)' in res.stderr:
@@ -345,6 +369,13 @@ class GrokTree:
     def run_manifest(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         """grok-manifest against this tree's manifest and toplevel."""
         return self.run('grok-manifest', '-m', str(self.manifest), '-t', str(self.toplevel), *args, **kwargs)
+
+    def run_bundle(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """grok-bundle with this tree's config file, writing into bundles/."""
+        if not self.cfgfile.exists():
+            self.write_config()
+        outdir = self.root / 'bundles'
+        return self.run('grok-bundle', '-c', str(self.cfgfile), '-o', str(outdir), *args, **kwargs)
 
     def run_fsck(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         """grok-fsck with this tree's config file."""
