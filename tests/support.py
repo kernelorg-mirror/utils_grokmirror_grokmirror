@@ -260,6 +260,10 @@ class GrokTree:
         config['fsck'] = {
             'statusfile': str(self.statusfile),
             'frequency': '30',
+            # grok-fsck mails a report whenever anything is logged at CRITICAL
+            # level, so point it at a port nobody is listening on: no test may
+            # ever hand real mail to a real MTA.
+            'report_mailhost': '127.0.0.1:1',
         }
         for name, values in (sections or {}).items():
             if name not in config:
