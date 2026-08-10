@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_pi_repos(inboxdir: str) -> list:
-    members = list()
+    members = []
     at = 0
     while True:
         repodir = os.path.join(inboxdir, 'git', '%d.git' % at)
@@ -66,7 +66,7 @@ def index_pi_inbox(fullpath: str, opts) -> bool:
 
 def init_pi_inbox(gdir: str, pdir: str, opts) -> bool:
     # for boost values, we look at the number of entries
-    boosts = list()
+    boosts = []
     if opts.listid_priority:
         boosts = list(reversed(opts.listid_priority.split(',')))
 
@@ -105,14 +105,14 @@ def init_pi_inbox(gdir: str, pdir: str, opts) -> bool:
             local_url = f'{local_toplevel}/{inboxname}'
         else:
             local_url = inboxname
-        extraopts = list()
+        extraopts = []
         acceptopts = {'listid'}
         if opts.extra_cfgopts:
             acceptopts.update(opts.extra_cfgopts.split(','))
         description = None
         newsgroup = None
         listid = None
-        addresses = list()
+        addresses = []
         for line in origins.split('\n'):
             line = line.strip()
             if not line or line.startswith((';', '#', '[publicinbox')):
@@ -263,7 +263,7 @@ def cmd_init(opts):
             if os.path.exists(os.path.join(pdir, 'xap15')):
                 shutil.rmtree(os.path.join(pdir, 'xap15'))
     elif not sys.stdin.isatty():
-        repos = list()
+        repos = []
         for line in sys.stdin.read().split('\n'):
             if not line:
                 continue

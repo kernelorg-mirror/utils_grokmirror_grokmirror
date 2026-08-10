@@ -44,7 +44,7 @@ def git_get_new_revs(fullpath: str, pipelast: Optional[int] = None) -> list:
     if ecode > 0:
         raise KeyError('Could not iterate %s in %s' % (rev_range, fullpath))
 
-    newrevs = list()
+    newrevs = []
     if out:
         for line in out.split('\n'):
             (commit_id, logmsg) = line.split(' ', 1)

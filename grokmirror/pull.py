@@ -113,7 +113,7 @@ class ThreadedUnixStreamServer(ThreadingMixIn, UnixStreamServer):
 
 
 def build_optimal_forkgroups(l_manifest, r_manifest, toplevel, obstdir):
-    r_forkgroups = dict()
+    r_forkgroups = {}
     for gitdir in set(r_manifest.keys()):
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
         # our forkgroup info wins, because our own grok-fcsk may have found better siblings
@@ -199,7 +199,7 @@ def spa_worker(config, q_spa, pauseonload):
         else:
             logger.info('      spa: 1 active')
 
-        done = list()
+        done = []
         for action in actions:
             if action in done:
                 continue
@@ -297,7 +297,7 @@ def pull_worker(config, q_pull, q_spa, q_done):
         logger.debug('pull_worker: gitdir=%s, action=%s', gitdir, action)
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
         success = True
-        spa_actions = list()
+        spa_actions = []
 
         try:
             grokmirror.lock_repo(fullpath, nonblocking=True)
@@ -459,7 +459,7 @@ def cull_manifest(manifest, config):
     includes = config['pull'].get('include', '*').split('\n')
     excludes = config['pull'].get('exclude', '').split('\n')
 
-    culled = dict()
+    culled = {}
 
     for gitdir, repoinfo in manifest.items():
         if not repoinfo.get('fingerprint'):
@@ -501,7 +501,7 @@ def fix_remotes(toplevel, gitdir, site, config):
         return False
 
     ffonly = False
-    for globpatt in set([x.strip() for x in config['pull'].get('ffonly', '').split('\n')]):
+    for globpatt in {x.strip() for x in config['pull'].get('ffonly', '').split('\n')}:
         if fnmatch.fnmatch(gitdir, globpatt):
             ffonly = True
             break
@@ -563,7 +563,7 @@ def set_agefile(toplevel, gitdir, last_modified):
 
 
 def get_hookscripts(config, hookname):
-    hookscripts = list()
+    hookscripts = []
     # And sinker!
     hookline = config['pull'].get(hookname, '')
     for hookscript in hookline.split('\n'):
@@ -632,10 +632,15 @@ def pull_repo(fullpath, remotename):
 
     if error:
         # Put things we recognize into debug
-        debug = list()
-        warn = list()
+        debug = []
+        warn = []
         for line in error.split('\n'):
-            if line.find('From ') == 0 or line.find('-> ') > 0 or line.find('remote: warning:') == 0 or line.find('ControlSocket') >= 0:
+            if (
+                line.find('From ') == 0
+                or line.find('-> ') > 0
+                or line.find('remote: warning:') == 0
+                or line.find('ControlSocket') >= 0
+            ):
                 debug.append(line)
             elif not success:
                 warn.append(line)
@@ -743,7 +748,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
                 r_mani_status = json.loads(fh.read())
         except (OSError, json.JSONDecodeError):
             logger.debug('Could not read %s', r_mani_status_path)
-            r_mani_status = dict()
+            r_mani_status = {}
         r_last_fetched = r_mani_status.get('last-fetched', 0)
         config_last_modified = r_mani_status.get('config-last-modified', 0)
         if config_last_modified != config.last_modified:
@@ -775,7 +780,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
             session = grokmirror.get_requests_session()
 
             # Find out if we need to run at all first
-            headers = dict()
+            headers = {}
             if r_last_fetched and not nomtime:
                 last_modified_h = time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime(r_last_fetched))
                 logger.debug('Our last-modified is: %s', last_modified_h)
@@ -844,7 +849,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
 
     obstdir = os.path.realpath(config['core'].get('objstore'))
     forkgroups = build_optimal_forkgroups(l_manifest, r_culled, toplevel, obstdir)
-    privmasks = set([x.strip() for x in config['core'].get('private', '').split('\n')])
+    privmasks = {x.strip() for x in config['core'].get('private', '').split('\n')}
 
     # populate private/forkgroup info in r_culled
     for forkgroup, siblings in forkgroups.items():
@@ -1006,7 +1011,7 @@ def fill_todo_from_manifest(config, q_mani, nomtime=False, forcepurge=False):
                         exclude = True
                         break
                 # Refuse to purge ffonly repos
-                for globpatt in set([x.strip() for x in config['pull'].get('ffonly', '').split('\n')]):
+                for globpatt in {x.strip() for x in config['pull'].get('ffonly', '').split('\n')}:
                     if fnmatch.fnmatch(gitdir, globpatt):
                         # Woah, these are not supposed to be deleted, ever
                         logger.critical('Refusing to purge ffonly repo %s', gitdir)
@@ -1097,7 +1102,7 @@ def socket_worker(config, q_mani, sockfile):
 
 
 def showstats(q_todo, q_pull, q_spa, good, bad, pws, dws):
-    stats = list()
+    stats = []
     if good:
         stats.append('%s fetched' % good)
     if pws:
@@ -1148,9 +1153,9 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
         sw.daemon = True
         sw.start()
 
-    pws = list()
-    dws = list()
-    mws = list()
+    pws = []
+    dws = []
+    mws = []
     actions = set()
     # Run in the main thread if we have runonce
     if runonce:
@@ -1170,8 +1175,8 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
         pull_threads = 1
 
     busy = set()
-    done = list()
-    cloned = list()
+    done = []
+    cloned = []
     good = 0
     bad = 0
     loopmark = None
@@ -1230,7 +1235,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
                         if not more_clones:
                             # Fire the post_clone hook
                             run_post_clone_complete_hook(config, cloned)
-                            cloned = list()
+                            cloned = []
 
                     forkgroup = repoinfo.get('forkgroup')
                     if forkgroup and forkgroup in busy:
@@ -1312,7 +1317,7 @@ def pull_mirror(config, nomtime=False, forcepurge=False, runonce=False):
                 continue
 
             if repoinfo is None:
-                repoinfo = dict()
+                repoinfo = {}
 
             fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
             forkgroup = repoinfo.get('forkgroup')

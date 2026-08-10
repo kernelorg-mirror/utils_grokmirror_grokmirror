@@ -37,7 +37,7 @@ from requests.packages.urllib3.util.retry import Retry
 
 VERSION = '3.0-dev'
 MANIFEST_LOCKH = None
-REPO_LOCKH = dict()
+REPO_LOCKH = {}
 GITBIN = '/usr/bin/git'
 
 # default logger. Will be overridden.
@@ -72,7 +72,7 @@ def get_config_from_git(fullpath, regexp, defaults=None):
     ecode, out, err = run_git_command(fullpath, args)
     gitconfig = defaults
     if not gitconfig:
-        gitconfig = dict()
+        gitconfig = {}
     if not out:
         return gitconfig
 
@@ -108,7 +108,7 @@ def run_shell_command(
     cmdargs: list, stdin: Optional[bytes] = None, decode: bool = True, env: Optional[dict] = None
 ) -> Tuple[int, Union[str, bytes], Union[str, bytes]]:
     if not env:
-        env = dict()
+        env = {}
     logger.debug('Running: %s', ' '.join(cmdargs))
 
     child = subprocess.Popen(cmdargs, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
@@ -223,7 +223,7 @@ def set_repo_timestamp(toplevel, gitdir, ts):
 def get_repo_obj_info(fullpath):
     args = ['count-objects', '-v']
     retcode, output, error = run_git_command(fullpath, args)
-    obj_info = dict()
+    obj_info = {}
 
     if output:
         for line in output.split('\n'):
@@ -329,8 +329,8 @@ def set_altrepo(fullpath, altdir):
 
 
 def get_rootsets(toplevel, obstdir):
-    top_roots = dict()
-    obst_roots = dict()
+    top_roots = {}
+    obst_roots = {}
     topdirs = find_all_gitdirs(toplevel, normalize=True, exclude_objstore=True)
     obstdirs = find_all_gitdirs(obstdir, normalize=True, exclude_objstore=False)
     for fullpath in topdirs:
@@ -470,12 +470,12 @@ def list_repo_remotes(fullpath, withurl=False):
     ecode, out, err = run_git_command(fullpath, args)
     if not len(out):
         logger.debug('Could not list remotes in %s', fullpath)
-        return list()
+        return []
 
     if not withurl:
         return out.split('\n')
 
-    remotes = list()
+    remotes = []
     for line in out.split('\n'):
         entry = tuple(line.split()[:2])
         if entry not in remotes:
@@ -509,7 +509,7 @@ def add_repo_to_objstore(obstrepo, fullpath):
     knownsiblings.add(fullpath)
     with open(telltale, 'w') as fh:
         fh.write(OBST_PREAMBULE)
-        fh.write('\n'.join(sorted(list(knownsiblings))) + '\n')
+        fh.write('\n'.join(sorted(knownsiblings)) + '\n')
 
     return True
 
@@ -553,7 +553,7 @@ def _fetch_objstore_repo_using_plumbing(srcrepo, obstrepo, virtref):
     dstset = set(out.strip().split('\n'))
 
     # Now we create a stdin list of commands for update-ref
-    mapping = dict()
+    mapping = {}
     newset = srcset.difference(dstset)
     if newset:
         for refline in newset:
@@ -704,7 +704,7 @@ def find_best_obstrepo(mypath, obst_roots, toplevel, baselines, minratio=0.2):
 
 
 def get_obstrepo_mapping(obstdir):
-    mapping = dict()
+    mapping = {}
     if not os.path.isdir(obstdir):
         return mapping
     for child in pathlib.Path(obstdir).iterdir():
@@ -748,7 +748,7 @@ def find_objstore_repo_for(obstdir, fullpath):
 
 
 def get_forkgroups(obstdir, toplevel):
-    forkgroups = dict()
+    forkgroups = {}
     if not os.path.exists(obstdir):
         return forkgroups
     for child in pathlib.Path(obstdir).iterdir():
@@ -826,7 +826,7 @@ def get_altrepo_map(toplevel, refresh=False):
     global _alt_repo_map
     if _alt_repo_map is None or refresh:
         logger.info('   search: finding all repos using alternates')
-        _alt_repo_map = dict()
+        _alt_repo_map = {}
         tp = pathlib.Path(toplevel)
         for subp in tp.glob('**/*.git'):
             if subp.is_symlink():
@@ -862,7 +862,7 @@ def is_obstrepo(fullpath, obstdir=None):
 def find_all_gitdirs(toplevel, ignore=None, normalize=False, exclude_objstore=True):
     global _alt_repo_map
     if _alt_repo_map is None:
-        _alt_repo_map = dict()
+        _alt_repo_map = {}
         build_amap = True
     else:
         build_amap = False
@@ -954,7 +954,7 @@ def read_manifest(manifile, wait=False):
 
     if not os.path.exists(manifile):
         logger.info(' manifest: no local manifest, assuming initial run')
-        return dict()
+        return {}
 
     if manifile.find('.gz') > 0:
         fh = gzip.open(manifile, 'rb')
@@ -971,7 +971,7 @@ def read_manifest(manifile, wait=False):
     except:
         # We'll regenerate the file entirely on failure to parse
         logger.critical('Unable to parse %s, will regenerate', manifile)
-        manifest = dict()
+        manifest = {}
 
     logger.debug('Manifest contains %s entries', len(manifest.keys()))
 

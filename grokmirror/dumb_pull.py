@@ -28,15 +28,9 @@ def git_rev_parse_all(gitdir):
     retcode, output, error = grokmirror.run_git_command(gitdir, args)
 
     if error:
-        # Put things we recognize into debug
-        debug = list()
-        warn = list()
-        for line in error.split('\n'):
-            warn.append(line)
-        if debug:
-            logger.debug('Stderr: %s', '\n'.join(debug))
-        if warn:
-            logger.warning('Stderr: %s', '\n'.join(warn))
+        # Nothing from this command is recognized as harmless yet, so it all
+        # gets warned about. Compare with git_pull() below, which does classify.
+        logger.warning('Stderr: %s', error)
 
     return output
 
@@ -46,8 +40,8 @@ def git_remote_update(args, fullpath):
 
     if error:
         # Put things we recognize into debug
-        debug = list()
-        warn = list()
+        debug = []
+        warn = []
         for line in error.split('\n'):
             if line.find('From ') == 0 or line.find('-> ') > 0:
                 debug.append(line)

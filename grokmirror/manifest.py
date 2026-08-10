@@ -47,7 +47,7 @@ def update_manifest(manifest, toplevel, fullpath, usenow, ignorerefs):
             logger.info(' manifest: updated %s', gitdir)
         else:
             logger.info(' manifest: added %s', gitdir)
-            manifest[gitdir] = dict()
+            manifest[gitdir] = {}
     else:
         logger.info(' manifest: updated %s', gitdir)
 
@@ -58,7 +58,7 @@ def update_manifest(manifest, toplevel, fullpath, usenow, ignorerefs):
         # grokmirror-1.x clients continue to work without doing full clones
         remotes = grokmirror.list_repo_remotes(altrepo, withurl=True)
         if len(remotes):
-            urls = list(x[1] for x in remotes)
+            urls = [x[1] for x in remotes]
             urls.sort()
             reference = '/' + os.path.relpath(urls[0], toplevel)
     else:
@@ -248,7 +248,7 @@ def parse_args():
     if not opts.toplevel:
         op.error('You must provide the toplevel path')
     if opts.ignore is None:
-        opts.ignore = list()
+        opts.ignore = []
 
     if not len(opts.paths) and opts.wait:
         op.error('--wait option only makes sense when dirs are passed')
@@ -278,9 +278,9 @@ def grok_manifest(
 
     startt = datetime.datetime.now()
     if paths is None:
-        paths = list()
+        paths = []
     if ignore is None:
-        ignore = list()
+        ignore = []
 
     grokmirror.manifest_lock(manifile)
     manifest = grokmirror.read_manifest(manifile, wait=wait)
@@ -317,12 +317,11 @@ def grok_manifest(
         grokmirror.manifest_unlock(manifile)
         return 0
 
-    gitdirs = list()
+    gitdirs = []
 
     if purge or not len(paths) or not len(manifest):
         # We automatically purge when we do a full tree walk
-        for gitdir in grokmirror.find_all_gitdirs(toplevel, ignore=ignore, exclude_objstore=True):
-            gitdirs.append(gitdir)
+        gitdirs.extend(grokmirror.find_all_gitdirs(toplevel, ignore=ignore, exclude_objstore=True))
         purge_manifest(manifest, toplevel, gitdirs)
 
     if len(manifest) and len(paths):
@@ -336,7 +335,7 @@ def grok_manifest(
             else:
                 gitdirs.append(arealpath)
 
-    symlinks = list()
+    symlinks = []
     tofetch = set()
     for gitdir in gitdirs:
         # check to make sure this gitdir is ok to export

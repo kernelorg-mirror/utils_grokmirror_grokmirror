@@ -280,7 +280,7 @@ def is_safe_to_prune(fullpath, config):
     if grokmirror.is_obstrepo(fullpath, obstdir):
         # We only prune if all repos pointing to us are public
         urls = set(grokmirror.list_repo_remotes(fullpath, withurl=True))
-        mine = set([x[1] for x in urls])
+        mine = {x[1] for x in urls}
         amap = grokmirror.get_altrepo_map(toplevel)
         if mine != amap[fullpath]:
             logger.debug('Cannot prune %s because it is used by non-public repos', gitdir)
@@ -294,9 +294,9 @@ def is_safe_to_prune(fullpath, config):
 
 
 def remove_ignored_errors(output, config):
-    ierrors = set([x.strip() for x in config['fsck'].get('ignore_errors', '').split('\n')])
-    debug = list()
-    warn = list()
+    ierrors = {x.strip() for x in config['fsck'].get('ignore_errors', '').split('\n')}
+    debug = []
+    warn = []
     for line in output.split('\n'):
         line = line.strip()
         # ignore any blank linkes
@@ -338,7 +338,7 @@ def run_git_repack(fullpath, config, level=1, prune=True):
     commitgraph_flags = ['--reachable']
 
     # Figure out what our repack flags should be.
-    repack_flags = list()
+    repack_flags = []
     rregular = config['fsck'].get('extra_repack_flags', '').split()
     if len(rregular):
         repack_flags += rregular
@@ -559,7 +559,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
             flockh.close()
             return 1
     else:
-        status = dict()
+        status = {}
 
     frequency = config['fsck'].getint('frequency', 30)
 
@@ -971,7 +971,7 @@ def fsck_mirror(config, force=False, repack_only=False, conn_only=False, repack_
         telltale = os.path.join(obstrepo, 'grokmirror.objstore')
         with open(telltale, 'w') as fh:
             fh.write(grokmirror.OBST_PREAMBULE)
-            fh.write('\n'.join(sorted(list(amap[obstrepo]))) + '\n')
+            fh.write('\n'.join(sorted(amap[obstrepo])) + '\n')
 
         my_remotes = grokmirror.list_repo_remotes(obstrepo, withurl=True)
         # Use the first child repo as our "reference" entry in manifest
