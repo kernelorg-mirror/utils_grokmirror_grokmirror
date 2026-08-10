@@ -53,6 +53,9 @@ dev = [
     "mypy",
     "pyright",
     "pytest",
+    # The repo-fixture tests spend most of their time waiting on git and on
+    # grok-pull's worker poll intervals, so they parallelize almost perfectly.
+    "pytest-xdist",
     "ruff",
     "ty",
     "types-requests",
@@ -68,7 +71,7 @@ version = { attr = "grokmirror.VERSION" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--tb=short"
+addopts = "--tb=short -n auto --dist worksteal"
 
 [tool.mypy]
 # Not yet `strict = true`, but every function in the tree is annotated now, so
@@ -106,6 +109,11 @@ line-length = 120
 
 [tool.ruff.lint]
 extend-select = ["ARG", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["grokmirror"]
+# tests/support.py is imported by module name, since tests/ is not a package.
+known-local-folder = ["support"]
 
 [tool.ruff.format]
 quote-style = "single"
