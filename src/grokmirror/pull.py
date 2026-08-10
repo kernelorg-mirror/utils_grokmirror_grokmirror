@@ -1183,6 +1183,10 @@ def pull_mirror(
     if not (config['remote'].get('manifest') or config['remote'].get('manifest_command')):
         logger.critical('Section [remote] must define "manifest" or "manifest_command"')
         return 1
+    if 'pull' not in config:
+        # Same as in grok_pull(), for the benefit of anyone calling us directly:
+        # all of [pull] is optional, but the section must be there to read from.
+        config['pull'] = {}
 
     toplevel = os.path.realpath(config['core']['toplevel'])
     obstdir = os.path.realpath(config['core']['objstore'])
@@ -1510,6 +1514,11 @@ def grok_pull(
     global logger
 
     config = grokmirror.load_config_file(cfgfile)
+    if 'pull' not in config:
+        # Every setting in [pull] has a default, so mirroring without the
+        # section is perfectly fine -- but it has to exist for the lookups
+        # here and in the workers, which otherwise raise KeyError.
+        config['pull'] = {}
     if config['pull'].get('refresh', None) is None:
         runonce = True
 
