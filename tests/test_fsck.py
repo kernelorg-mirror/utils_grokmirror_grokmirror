@@ -207,3 +207,26 @@ def test_plumbing_fetch_survives_a_sibling_that_lost_every_ref(tree: GrokTree) -
 
     # The stale virtual refs are gone, not left behind pointing at nothing.
     assert not git('for-each-ref', '--format=%(refname)', f'refs/virtual/{virtref}', cwd=obstrepo)
+
+
+def test_pre_objstore_alternates_are_left_alone(tree: GrokTree) -> None:
+    # Grokmirror-1.x had a fork borrow objects straight from another toplevel
+    # repository, and grok-fsck used to convert that arrangement into a real
+    # objstore repo on its first run. Grokmirror-3 dropped the migration, so
+    # the arrangement now has to survive untouched -- a half-converted repo is
+    # much worse than an old-fashioned one -- and say so out loud.
+    mommy = tree.add_repo('test/mommy.git')
+    child = tree.add_repo('test/child.git')
+    borrowed = str(mommy / 'objects')
+    (child / 'objects' / 'info' / 'alternates').write_text(f'{borrowed}\n')
+    tree.run_manifest()
+    tree.write_config()
+
+    head = git('rev-parse', 'HEAD', cwd=child).strip()
+
+    tree.run_fsck('-f')
+
+    assert tree.alternates('test/child.git') == borrowed
+    assert 'not an objstore repo' in tree.log_text()
+    # Mommy is still lending objects to child, so nothing may prune her.
+    assert git('cat-file', '-e', head, cwd=mommy) == ''

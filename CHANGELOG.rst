@@ -1,6 +1,12 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- Remove the grokmirror-1.x object storage migration from grok-fsck.
+  Repositories whose alternates point at another regular repository are
+  no longer converted into objstore repositories; they are left alone
+  (and still repacked and fscked as usual) with a warning in the log.
+  Upgrade via grokmirror-2.x if you still need that migration, and see
+  UPGRADING.rst
 - Switch to a pyproject.toml-based build (setup.py is gone; downstream
   packaging should use the PEP 517 interface)
 - Add new hook post_work_complete_hook that fires after all work is

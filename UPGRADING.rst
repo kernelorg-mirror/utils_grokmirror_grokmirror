@@ -1,3 +1,19 @@
+Upgrading from Grokmirror 2.x to 3.x
+------------------------------------
+Grokmirror-3 no longer performs the 1.x-to-2.x object storage migration.
+Grok-fsck used to notice repositories whose alternates pointed at another
+regular repository -- the way grokmirror-1.x arranged forks -- and convert
+them into proper objstore repositories on its first run. That code has
+been removed.
+
+Repositories in that state are now left exactly as they are: grok-fsck
+still repacks and fscks them, and still refuses to prune a repository
+that others borrow objects from, but it logs a warning and does not
+attempt the conversion. If you are somehow still running the 1.x layout,
+upgrade to grokmirror-2.x first and let one grok-fsck run finish the
+migration, then upgrade to 3.x. The rest of this document describes that
+2.x migration and still applies.
+
 Upgrading from Grokmirror 1.x to 2.x
 ------------------------------------
 Grokmirror-2.0 introduced major changes to how repositories are

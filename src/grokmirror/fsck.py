@@ -679,7 +679,6 @@ def fsck_mirror(
     top_roots, obst_roots = grokmirror.get_rootsets(ses, toplevel, obstdir)
     amap = ses.get_altrepo_map(toplevel)
 
-    fetched_obstrepos = set()
     obst_changes = False
     analyzed = 0
     queued = 0
@@ -792,73 +791,15 @@ def fsck_mirror(
             continue
 
         elif not grokmirror.is_obstrepo(altdir, obstdir):
-            # We have an alternates repo, but it's not an objstore repo
-            # Probably left over from grokmirror-1.x
-            # Do we have any matching obstrepos?
-            obstrepo = grokmirror.find_best_obstrepo(fullpath, obst_roots, toplevel, baselines)
-            if obstrepo:
-                logger.info('%s: migrating to %s', gitdir, Path(obstrepo).name)
-                if altdir not in fetched_obstrepos:
-                    # We're already sharing objects with altdir, so no need to check if it's private
-                    grokmirror.add_repo_to_objstore(obstrepo, altdir)
-                    logger.info('    fetch: fetching %s (previous parent)', os.path.relpath(altdir, toplevel))
-                    success = grokmirror.fetch_objstore_repo(obstrepo, altdir)
-                    fetched_obstrepos.add(altdir)
-                    if success:
-                        set_precious_objects(altdir, enabled=False)
-                        pre_size = get_repo_size(altdir)
-                        run_git_repack(ses, altdir, config, level=1, prune=False)
-                        space_saved += pre_size - get_repo_size(altdir)
-                    else:
-                        logger.critical('Unsuccessful fetching %s into %s', altdir, Path(obstrepo).name)
-                        obstrepo = None
-            else:
-                # Make a new obstrepo out of mommy
-                obstrepo = grokmirror.setup_objstore_repo(obstdir)
-                logger.info('%s: migrating to %s', gitdir, Path(obstrepo).name)
-                logger.info('     init: new objstore repo %s', Path(obstrepo).name)
-                grokmirror.add_repo_to_objstore(obstrepo, altdir)
-                logger.info('    fetch: fetching %s (previous parent)', os.path.relpath(altdir, toplevel))
-                success = grokmirror.fetch_objstore_repo(obstrepo, altdir)
-                fetched_obstrepos.add(altdir)
-                if success:
-                    grokmirror.set_altrepo(altdir, obstrepo)
-                    # mommy is no longer precious
-                    set_precious_objects(altdir, enabled=False)
-                    # Don't prune, because there may be objects others are still borrowing
-                    # It can only be pruned once the full migration is completed
-                    pre_size = get_repo_size(altdir)
-                    run_git_repack(ses, altdir, config, level=1, prune=False)
-                    space_saved += pre_size - get_repo_size(altdir)
-                else:
-                    logger.critical('Unsuccessful fetching %s into %s', altdir, Path(obstrepo).name)
-                    obstrepo = None
+            # Alternates pointing at something that isn't an objstore repo is the
+            # grokmirror-1.x arrangement, where a fork borrowed objects straight
+            # from another toplevel repository. Grokmirror-3 no longer migrates
+            # those automatically; see UPGRADING.rst. We leave the repo alone
+            # apart from the usual repack/fsck scheduling below, because taking
+            # its alternates away would be a destructive guess.
+            logger.warning('%s: alternates point at %s, which is not an objstore repo', gitdir, altdir)
 
-            if obstrepo:
-                obst_changes = True
-                if not is_private:
-                    # Fetch into the obstrepo
-                    grokmirror.add_repo_to_objstore(obstrepo, fullpath)
-                    logger.info('    fetch: fetching %s', gitdir)
-                    if grokmirror.fetch_objstore_repo(obstrepo, fullpath):
-                        grokmirror.set_altrepo(fullpath, obstrepo)
-                        set_precious_objects(fullpath, enabled=False)
-                        run_git_repack(ses, fullpath, config, level=1, prune=m_prune)
-                        space_saved += start_size - get_repo_size(fullpath)
-                else:
-                    # Grab all the objects from the previous parent, since we can't simply
-                    # fetch ourselves into the obstrepo (we're private).
-                    args = ['repack', '-a']
-                    logger.info('    fetch: restoring private repo %s', gitdir)
-                    if grokmirror.run_git_command(fullpath, args):
-                        grokmirror.set_altrepo(fullpath, obstrepo)
-                        set_precious_objects(fullpath, enabled=False)
-                        # Now repack ourselves to get rid of any public objects
-                        run_git_repack(ses, fullpath, config, level=1, prune=m_prune)
-
-                refresh_obst_roots(obst_roots, obstrepo)
-
-        elif grokmirror.is_obstrepo(altdir, obstdir) and not is_private:
+        elif not is_private:
             # Make sure this repo is properly set up with obstrepo
             # (e.g. it could have been cloned/copied and obstrepo is not tracking it yet)
             obstrepo = altdir
