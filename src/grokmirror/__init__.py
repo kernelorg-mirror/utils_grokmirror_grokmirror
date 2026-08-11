@@ -247,7 +247,7 @@ class GrokSession:
         ignorematch = compile_globs(ignore)
         gitdirs = set()
         for root, dirs, files in os.walk(toplevel, topdown=True):
-            if not len(dirs):
+            if not dirs:
                 continue
 
             torm = set()
@@ -632,7 +632,7 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
     if not usenow:
         args = ['for-each-ref', '--sort=-committerdate', '--format=%(committerdate:iso-strict)', '--count=1']
         _ecode, out, _err = run_git_command(fullpath, args)
-        if len(out):
+        if out:
             # Recent git versions render a UTC offset as a trailing 'Z', and
             # datetime.fromisoformat() only understands that from Python 3.11 on,
             # so translate it into the offset spelling every version accepts.
@@ -742,7 +742,7 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
             logger.debug('Error listing roots in %s', fullpath)
             return None
 
-        if not len(out):
+        if not out:
             logger.debug('No roots in %s', fullpath)
             return None
 
@@ -807,7 +807,7 @@ def objstore_virtref(fullpath: str) -> str:
 def objstore_trim_virtref(obstrepo: str, virtref: str) -> None:
     args = ['for-each-ref', '--format', 'delete %(refname)', f'refs/virtual/{virtref}']
     ecode, out, _err = run_git_command(obstrepo, args)
-    if ecode == 0 and len(out):
+    if ecode == 0 and out:
         out += '\n'
         args = ['update-ref', '--stdin']
         run_git_command(obstrepo, args, stdin=out.encode())
@@ -853,7 +853,7 @@ def list_repo_remotes(fullpath: str, withurl: bool = False) -> list[str] | list[
         args.append('-v')
 
     _ecode, out, _err = run_git_command(fullpath, args)
-    if not len(out):
+    if not out:
         logger.debug('Could not list remotes in %s', fullpath)
         return []
 
@@ -884,7 +884,7 @@ def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
         with open(telltale, encoding='utf-8') as fh:
             for line in fh:
                 line = line.strip()
-                if not len(line) or line[0] == '#':
+                if not line or line[0] == '#':
                     continue
                 if os.path.isdir(line):
                     knownsiblings.add(line)
@@ -947,7 +947,7 @@ def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: st
     oldset = dstset.difference(srcset)
     if oldset:
         for refline in oldset:
-            if not len(refline):
+            if not refline:
                 continue
             obj, ref = refline.split(' ', 1)
             if ref in mapping:
@@ -1028,7 +1028,7 @@ def find_siblings(
     siblings = set()
     for gitpath, gitroots in known_roots.items():
         # Of course we're going to match ourselves
-        if fullpath == gitpath or not my_roots or not gitroots or not len(gitroots.intersection(my_roots)):
+        if fullpath == gitpath or not my_roots or not gitroots or not gitroots.intersection(my_roots):
             continue
         if gitroots == my_roots:
             siblings.add(gitpath)
@@ -1067,7 +1067,7 @@ def find_best_obstrepo(
             # No match at all
             continue
         # Baseline repos win over the ratio logic
-        if len(baselines):
+        if baselines:
             # Any of its member siblings match baselines?
             s_remotes = list_repo_remotes(path, withurl=True)
             for _virtref, childpath in s_remotes:
@@ -1164,7 +1164,7 @@ def get_repo_fingerprint(
     else:
         logger.debug('Generating fingerprint for %s', gitdir)
         ecode, out, _err = run_git_command(fullpath, ['show-ref'])
-        if ecode > 0 or not len(out):
+        if ecode > 0 or not out:
             logger.debug('No heads in %s, nothing to fingerprint.', fullpath)
             return None
 

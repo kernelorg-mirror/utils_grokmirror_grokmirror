@@ -63,7 +63,7 @@ def update_manifest(
         # Without alternates there is no forkgroup to look in, and asking git for
         # the remotes of no repo at all just returns whatever is in the cwd.
         remotes = grokmirror.list_repo_remotes(altrepo, withurl=True) if altrepo else []
-        if len(remotes):
+        if remotes:
             urls = [x[1] for x in remotes]
             urls.sort()
             reference = '/' + os.path.relpath(urls[0], toplevel)
@@ -256,7 +256,7 @@ def parse_args() -> argparse.Namespace:
     if opts.ignore is None:
         opts.ignore = []
 
-    if not len(opts.paths) and opts.wait:
+    if not opts.paths and opts.wait:
         op.error('--wait option only makes sense when dirs are passed')
 
     return opts
@@ -297,10 +297,10 @@ def grok_manifest(
         toplevel = os.path.realpath(toplevel)
 
         # If manifest is empty, don't use current timestamp
-        if not len(manifest):
+        if not manifest:
             usenow = False
 
-        if remove and len(paths):
+        if remove and paths:
             # Remove the repos as required, write new manfiest and exit
             for fullpath in paths:
                 repo = '/' + os.path.relpath(fullpath, toplevel)
@@ -328,12 +328,12 @@ def grok_manifest(
 
         gitdirs: list[str] = []
 
-        if purge or not len(paths) or not len(manifest):
+        if purge or not paths or not manifest:
             # We automatically purge when we do a full tree walk
             gitdirs.extend(ses.find_all_gitdirs(toplevel, ignore=ignore, exclude_objstore=True))
             purge_manifest(manifest, toplevel, gitdirs)
 
-        if len(manifest) and len(paths):
+        if manifest and paths:
             # limit ourselves to passed dirs only when there is something
             # in the manifest. This precaution makes sure we regenerate the
             # whole file when there is nothing in it or it can't be parsed.
@@ -368,7 +368,7 @@ def grok_manifest(
                     # Do it after we're done with manifest, to avoid keeping it locked
                     tofetch.add(gitdir)
 
-        if len(symlinks):
+        if symlinks:
             set_symlinks(manifest, toplevel, symlinks)
 
         grokmirror.write_manifest(manifile, manifest, pretty=pretty)

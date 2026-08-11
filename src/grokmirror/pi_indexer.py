@@ -206,7 +206,7 @@ def get_inboxdirs(repos: list[str]) -> set[str]:
 
 
 def process_inboxdirs(inboxdirs: set[str], opts: argparse.Namespace, init: bool = False) -> None:
-    if not len(inboxdirs):
+    if not inboxdirs:
         logger.info('Nothing to do')
         sys.exit(0)
 

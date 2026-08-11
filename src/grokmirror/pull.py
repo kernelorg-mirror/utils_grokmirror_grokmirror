@@ -69,7 +69,7 @@ class SignalHandler:
 
     def _handler(self, signum: int, frame: FrameType | None) -> None:
         logger.debug('Received signum=%s, frame=%s', signum, frame)
-        if len(self.done):
+        if self.done:
             try:
                 update_manifest(self.config, self.done)
             except grokmirror.GrokError as ex:
@@ -182,7 +182,7 @@ def build_optimal_forkgroups(
             if l_siblings == r_siblings:
                 # No changes there
                 continue
-            if len(l_siblings.intersection(r_siblings)):
+            if l_siblings.intersection(r_siblings):
                 l_siblings.update(r_siblings)
                 found = True
                 break
@@ -264,7 +264,7 @@ def _spa_repo(
                     args = ['repack', '-Adlq']
                     if 'fsck' in config:
                         extraflags = config['fsck'].get('extra_repack_flags', '').split()
-                        if len(extraflags):
+                        if extraflags:
                             args += extraflags
                     ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
                     if ecode > 0:
@@ -607,7 +607,7 @@ def get_hookscripts(config: grokmirror.GrokConfigParser, hookname: str) -> list[
     for hookscript in hookline.split('\n'):
         hookscript = os.path.expanduser(hookscript.strip())
         args = shlex.split(hookscript)
-        if not len(args):
+        if not args:
             continue
         if not os.access(args[0], os.X_OK):
             logger.warning('hook not executable: %s', hookscript)
@@ -773,7 +773,7 @@ def fill_todo_from_manifest(
             logger.warning(' manifest: executing %s returned %s', r_mani_cmd, ecode)
             return
 
-        if not len(r_manifest):
+        if not r_manifest:
             logger.warning(' manifest: empty, ignoring')
             raise grokmirror.GrokManifestError(f'Empty manifest returned by {r_mani_cmd}')
 
@@ -808,7 +808,7 @@ def fill_todo_from_manifest(
             logger.info('Reading new manifest from %s', r_mani_url)
             r_manifest = grokmirror.read_manifest(r_mani_url)
             # Don't accept empty manifests -- that indicates something is wrong
-            if not len(r_manifest):
+            if not r_manifest:
                 logger.warning('Remote manifest empty or unparseable! Quitting.')
                 raise grokmirror.GrokManifestError(f'Empty manifest in {r_mani_url}')
 
@@ -1011,7 +1011,7 @@ def fill_todo_from_manifest(
             q_mani.put((gitdir, repoinfo, 'init'))
             continue
 
-        if repoinfo.get('private') and len(public_siblings):
+        if repoinfo.get('private') and public_siblings:
             # Clone public siblings first
             for s_gitdir in public_siblings:
                 if s_gitdir not in seen:
@@ -1038,7 +1038,7 @@ def fill_todo_from_manifest(
                     logger.debug('Adding %s to to_purge', gitdir)
                     to_purge.add(gitdir)
 
-        if len(to_purge):
+        if to_purge:
             # Purge-protection engage
             purge_limit = int(config['pull'].getint('purgeprotect', 5))
             if purge_limit < 1 or purge_limit > 99:
@@ -1069,7 +1069,7 @@ def update_manifest(config: grokmirror.GrokConfigParser, entries: list[DoneItem]
     with grokmirror.locked_manifest(manifile):
         manifest = grokmirror.read_manifest(manifile)
         changed = False
-        while len(entries):
+        while entries:
             gitdir, repoinfo, action, success = entries.pop()
             if not success:
                 continue

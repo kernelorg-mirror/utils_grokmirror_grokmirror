@@ -75,7 +75,7 @@ def get_blob_set(fullpath: str) -> tuple[set[tuple[str, int]], int]:
         with open(blobcache, encoding='utf-8') as fh:
             while True:
                 line = fh.readline()
-                if not len(line):
+                if not line:
                     break
                 if line[0] == '#':
                     continue
@@ -112,7 +112,7 @@ def check_sibling_repos_by_blobs(
     bset1: set[tuple[str, int]], bsize1: int, bset2: set[tuple[str, int]], bsize2: int, ratio: int
 ) -> bool:
     iset = bset1.intersection(bset2)
-    if not len(iset):
+    if not iset:
         return False
     isize = 0
     for bhash, bsize in iset:
@@ -147,7 +147,7 @@ def merge_siblings(siblings: set[str], amap: dict[str, set[str]]) -> str | None:
     # wants the very same list again, and every call forks a git.
     remotes: dict[str, list[tuple[str, ...]]] = {}
     for sibling in set(siblings):
-        if sibling not in amap or not len(amap[sibling]):
+        if not amap.get(sibling):
             # Orphaned sibling, ignore it -- it will get cleaned up
             siblings.remove(sibling)
             continue
@@ -314,7 +314,7 @@ def remove_ignored_errors(output: str, config: grokmirror.GrokConfigParser) -> l
     for line in output.split('\n'):
         line = line.strip()
         # ignore any blank linkes
-        if not len(line):
+        if not line:
             continue
         ignored = False
         for estring in ierrors:
@@ -356,12 +356,12 @@ def run_git_repack(
     # Figure out what our repack flags should be.
     repack_flags = []
     rregular = config['fsck'].get('extra_repack_flags', '').split()
-    if len(rregular):
+    if rregular:
         repack_flags += rregular
 
     full_repack_flags = ['-f', '--pack-kept-objects']
     rfull = config['fsck'].get('extra_repack_flags_full', '').split()
-    if len(rfull):
+    if rfull:
         full_repack_flags += rfull
 
     if grokmirror.is_obstrepo(fullpath, obstdir):
@@ -760,7 +760,7 @@ def fsck_mirror(
                 obstrepo = None
                 my_roots = grokmirror.get_repo_roots(fullpath)
                 top_siblings = grokmirror.find_siblings(fullpath, my_roots, top_roots)
-                if len(top_siblings):
+                if top_siblings:
                     # Am I a private repo?
                     if is_private:
                         # Are there any non-private siblings?
@@ -981,7 +981,7 @@ def fsck_mirror(
         analyzed += 1
         logger.debug('Processing objstore repo: %s', os.path.basename(obstrepo))
         my_roots = grokmirror.get_repo_roots(obstrepo)
-        if obstrepo in amap and len(amap[obstrepo]):
+        if amap.get(obstrepo):
             # Is it redundant with any other objstore repos?
             strategy = config['fsck'].get('obstrepo_merge_strategy', 'exact')
             if strategy == 'blobs':
@@ -991,7 +991,7 @@ def fsck_mirror(
                 if strategy == 'loose':
                     exact_merge = False
                 siblings = grokmirror.find_siblings(obstrepo, my_roots, obst_roots, exact=exact_merge)
-            if len(siblings):
+            if siblings:
                 siblings.add(obstrepo)
                 mdest = merge_siblings(siblings, amap)
                 obst_changes = True
@@ -1003,7 +1003,7 @@ def fsck_mirror(
                 my_roots = refresh_obst_roots(obst_roots, obstrepo)
 
         # Not an else, because the previous step may have migrated things
-        if obstrepo not in amap or not len(amap[obstrepo]):
+        if not amap.get(obstrepo):
             obst_changes = True
             # XXX: Is there a possible race condition here if grok-pull cloned a new repo
             #      while we were migrating this one?
@@ -1083,7 +1083,7 @@ def fsck_mirror(
 
             manifest[gitdir]['forkgroup'] = os.path.basename(obstrepo).removesuffix('.git')
 
-        if len(baseline_refs):
+        if baseline_refs:
             # sort the list, so we have deterministic value
             br = list(baseline_refs)
             br.sort()
@@ -1169,7 +1169,7 @@ def fsck_mirror(
 
             grokmirror.write_manifest(manifile, disk_manifest, pretty=pretty)
 
-    if not len(to_process):
+    if not to_process:
         logger.info('No repos need attention.')
         return 0
 
@@ -1366,7 +1366,7 @@ def grok_fsck(
     fsck_mirror(config, force, repack_only, conn_only, repack_all_quick, repack_all_full)
 
     report = rh.getvalue()
-    if len(report):
+    if report:
         msg = EmailMessage()
         msg.set_content(report)
         subject = config['fsck'].get('report_subject')

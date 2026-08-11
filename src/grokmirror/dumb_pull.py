@@ -77,7 +77,7 @@ def dumb_pull_repo(gitdir: str, remotes: list[str], svn: bool = False) -> bool:
             else:
                 # Not an svn remote
                 myremotes = grokmirror.list_repo_remotes(gitdir)
-                if not len(myremotes):
+                if not myremotes:
                     logger.info('Repository %s has no defined remotes!', gitdir)
                     return False
 
@@ -169,7 +169,7 @@ def parse_args() -> argparse.Namespace:
 
     opts = op.parse_args()
 
-    if not len(opts.paths):
+    if not opts.paths:
         op.error('You must provide at least a path to the repos to pull')
 
     return opts
