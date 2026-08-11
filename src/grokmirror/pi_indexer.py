@@ -190,8 +190,7 @@ def init_pi_inbox(gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
                 success = False
 
         if success:
-            with open(os.path.join(pdir, 'description'), 'w') as fh:
-                fh.write(description)
+            pathlib.Path(pdir, 'description').write_text(description)
 
     # Unlock all members
     for subrepo in pi_repos:

@@ -12,6 +12,7 @@ import logging
 import os
 import shlex
 import sys
+from pathlib import Path
 
 import grokmirror
 
@@ -35,9 +36,8 @@ def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list:
     if pipelast:
         rev_range = f'-n {pipelast}'
     else:
-        with open(statf, 'r') as fh:
-            latest = fh.read().strip()
-            rev_range = f'{latest}..'
+        latest = Path(statf).read_text().strip()
+        rev_range = f'{latest}..'
 
     args = ['rev-list', '--pretty=oneline', '--reverse', rev_range, 'master']
     ecode, out, _err = grokmirror.run_git_command(fullpath, args)
@@ -73,8 +73,7 @@ def init_piper_tracking(repo: str, shallow: bool) -> bool:
     # Just write latest into the tracking file and return
     latest = out.strip()
     statf = os.path.join(repo, 'pi-piper.latest')
-    with open(statf, 'w') as fh:
-        fh.write(latest)
+    Path(statf).write_text(latest)
     if shallow:
         reshallow(repo, latest)
     return True
@@ -146,9 +145,8 @@ def run_pi_repo(
             logger.info('Skipping %s', commit_id)
 
     if latest_good and not dryrun:
-        with open(statf, 'w') as fh:
-            fh.write(latest_good)
-            logger.info('Wrote %s', statf)
+        Path(statf).write_text(latest_good)
+        logger.info('Wrote %s', statf)
         if ecode == 0 and shallow:
             reshallow(repo, latest_good)
 

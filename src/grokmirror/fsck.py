@@ -247,8 +247,7 @@ def set_repo_reclone(fullpath: str, reason: str) -> None:
         logger.debug('Already requested repo reclone for %s', fullpath)
         return
 
-    with open(rfile, 'w') as rfh:
-        rfh.write(f'Requested by grok-fsck due to error: {reason}')
+    Path(rfile).write_text(f'Requested by grok-fsck due to error: {reason}')
 
 
 def run_git_prune(fullpath: str, config: grokmirror.GrokConfigParser) -> bool:
@@ -578,8 +577,7 @@ def fsck_mirror(
             #    ...
             #  }
 
-            with open(statusfile) as stfh:
-                status = json.loads(stfh.read())
+            status = json.loads(Path(statusfile).read_text())
         except (OSError, ValueError):
             logger.critical('Failed to parse %s', statusfile)
             lockf(flockh, LOCK_UN)
@@ -655,8 +653,7 @@ def fsck_mirror(
 
     # record newly found repos in the status file
     logger.debug('Updating status file in %s', statusfile)
-    with open(statusfile, 'w') as stfh:
-        stfh.write(json.dumps(status, indent=2))
+    Path(statusfile).write_text(json.dumps(status, indent=2))
 
     # Go through status and find all repos that need work done on them.
     # Entries are (fullpath, action, repack_level), with no level for fsck runs.
@@ -1031,10 +1028,8 @@ def fsck_mirror(
             l_fpf = os.path.join(obstrepo, f'grokmirror.{virtref}.fingerprint')
             r_fpf = os.path.join(childpath, 'grokmirror.fingerprint')
             try:
-                with open(l_fpf) as fh:
-                    l_fp = fh.read().strip()
-                with open(r_fpf) as fh:
-                    r_fp = fh.read().strip()
+                l_fp = Path(l_fpf).read_text().strip()
+                r_fp = Path(r_fpf).read_text().strip()
                 if l_fp == r_fp:
                     fetch = False
             except OSError:
@@ -1259,13 +1254,11 @@ def fsck_mirror(
         # Write status file after each check, so if the process dies, we won't
         # have to recheck all the repos we've already checked
         logger.debug('Updating status file in %s', statusfile)
-        with open(statusfile, 'w') as stfh:
-            stfh.write(json.dumps(status, indent=2))
+        Path(statusfile).write_text(json.dumps(status, indent=2))
 
     logger.info('Processed %s repos in %0.2fs', total_checked, total_elapsed)
 
-    with open(statusfile, 'w') as stfh:
-        stfh.write(json.dumps(status, indent=2))
+    Path(statusfile).write_text(json.dumps(status, indent=2))
 
     lockf(flockh, LOCK_UN)
     flockh.close()

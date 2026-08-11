@@ -108,7 +108,18 @@ target-version = "py39"
 line-length = 120
 
 [tool.ruff.lint]
-extend-select = ["ARG", "I"]
+# explicit-preview-rules means a family selection ("FURB") still enables only
+# its stable rules; preview rules are opted into one by one, by exact code.
+preview = true
+explicit-preview-rules = true
+extend-select = [
+    "ARG",
+    "FURB",
+    "FURB101", # read-whole-file: open()+read() -> Path.read_text/read_bytes
+    "FURB103", # write-whole-file: open()+write() -> Path.write_text/write_bytes
+    "FURB113", # repeated-append -> one extend()
+    "I",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["grokmirror"]

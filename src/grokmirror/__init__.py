@@ -235,8 +235,7 @@ def get_repo_timestamp(toplevel: str, gitdir: str) -> int:
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
     if os.path.exists(tsfile):
-        with open(tsfile, 'rb') as tsfh:
-            contents = tsfh.read()
+        contents = pathlib.Path(tsfile).read_bytes()
         try:
             ts = int(contents)
             logger.debug('Timestamp for %s: %s', gitdir, ts)
@@ -252,9 +251,8 @@ def set_repo_timestamp(toplevel: str, gitdir: str, ts: int) -> None:
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
 
-    with open(tsfile, 'wt') as tsfh:
-        # int() keeps the truncating behaviour the old '%d' formatting had
-        tsfh.write(f'{int(ts)}')
+    # int() keeps the truncating behaviour the old '%d' formatting had
+    pathlib.Path(tsfile).write_text(f'{int(ts)}')
 
     logger.debug('Recorded timestamp for %s: %s', gitdir, ts)
 
@@ -277,11 +275,10 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
     description = None
     try:
         descfile = os.path.join(fullpath, 'description')
-        with open(descfile, 'rb') as fh:
-            contents = fh.read().strip()
-            if len(contents) and contents.find(b'edit this file') < 0:
-                # We don't need to tell mirrors to edit this file
-                description = contents.decode(errors='replace')
+        contents = pathlib.Path(descfile).read_bytes().strip()
+        if len(contents) and contents.find(b'edit this file') < 0:
+            # We don't need to tell mirrors to edit this file
+            description = contents.decode(errors='replace')
     except OSError:
         pass
 
@@ -308,8 +305,7 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
 
     head = None
     try:
-        with open(os.path.join(fullpath, 'HEAD')) as fh:
-            head = fh.read().strip()
+        head = pathlib.Path(fullpath, 'HEAD').read_text().strip()
     except OSError:
         pass
 
@@ -347,10 +343,9 @@ def get_altrepo(fullpath: str) -> str | None:
     altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
     altdir = None
     try:
-        with open(altfile, 'r') as fh:
-            contents = fh.read().strip()
-            if len(contents) > 8 and contents[-8:] == '/objects':
-                altdir = os.path.realpath(contents[:-8])
+        contents = pathlib.Path(altfile).read_text().strip()
+        if len(contents) > 8 and contents[-8:] == '/objects':
+            altdir = os.path.realpath(contents[:-8])
     except OSError:
         pass
 
@@ -362,8 +357,7 @@ def set_altrepo(fullpath: str, altdir: str) -> None:
     altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
     objpath = os.path.join(altdir, 'objects')
     if os.path.isdir(objpath):
-        with open(altfile, 'w') as fh:
-            fh.write(objpath + '\n')
+        pathlib.Path(altfile).write_text(objpath + '\n')
     else:
         logger.critical('objdir %s does not exist, not setting alternates file %s', objpath, altfile)
 
@@ -394,9 +388,8 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
         return None
     rfile = os.path.join(fullpath, 'grokmirror.roots')
     if not force and os.path.exists(rfile):
-        with open(rfile, 'rt') as rfh:
-            content = rfh.read()
-            roots = set(content.split('\n'))
+        content = pathlib.Path(rfile).read_text()
+        roots = set(content.split('\n'))
     else:
         logger.debug('Generating roots for %s', fullpath)
         ecode, out, _err = run_git_command(fullpath, ['rev-list', '--max-parents=0', '--all'])
@@ -409,9 +402,8 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
             return None
 
         # save it for future use
-        with open(rfile, 'w') as rfh:
-            rfh.write(out)
-            logger.debug('Wrote %s', rfile)
+        pathlib.Path(rfile).write_text(out)
+        logger.debug('Wrote %s', rfile)
         roots = set(out.split('\n'))
 
     return roots
@@ -456,8 +448,7 @@ def setup_objstore_repo(obstdir: str, name: str | None = None) -> str:
     set_git_config(obstrepo, 'repack.writeBitmaps', 'true')
     set_git_config(obstrepo, 'pack.island', 'refs/virtual/([0-9a-f]+)/', operation='--add')
     telltale = os.path.join(obstrepo, 'grokmirror.objstore')
-    with open(telltale, 'w') as fh:
-        fh.write(OBST_PREAMBULE)
+    pathlib.Path(telltale).write_text(OBST_PREAMBULE)
     unlock_repo(obstrepo)
     return obstrepo
 
@@ -831,8 +822,7 @@ def get_repo_fingerprint(
 
     fpfile = os.path.join(fullpath, 'grokmirror.fingerprint')
     if not force and os.path.exists(fpfile):
-        with open(fpfile, 'r') as fpfh:
-            fingerprint = fpfh.read()
+        fingerprint = pathlib.Path(fpfile).read_text()
         logger.debug('Fingerprint for %s: %s', gitdir, fingerprint)
     else:
         logger.debug('Generating fingerprint for %s', gitdir)
@@ -880,8 +870,7 @@ def set_repo_fingerprint(toplevel: str, gitdir: str, fingerprint: str | None = N
             logger.debug('No fingerprint to record for %s', gitdir)
             return None
 
-    with open(fpfile, 'wt') as fpfh:
-        fpfh.write(fingerprint)
+    pathlib.Path(fpfile).write_text(fingerprint)
 
     logger.debug('Recorded fingerprint for %s: %s', gitdir, fingerprint)
     return fingerprint

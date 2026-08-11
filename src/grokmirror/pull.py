@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 import uuid
+from pathlib import Path
 from socketserver import StreamRequestHandler, ThreadingMixIn, UnixStreamServer
 from types import FrameType, TracebackType
 from typing import cast
@@ -441,8 +442,7 @@ def pull_worker(config: grokmirror.GrokConfigParser, q_pull: mp.Queue, q_spa: mp
                             obj_info = grokmirror.get_repo_obj_info(fullpath)
                             if grokmirror.get_repack_level(obj_info):
                                 # We only do quick repacks, so we don't care about precise level
-                                spa_actions.append('repack')
-                                spa_actions.append('packrefs')
+                                spa_actions.extend(('repack', 'packrefs'))
 
                     modified = repoinfo.get('modified')
                     if modified is not None:
@@ -451,8 +451,7 @@ def pull_worker(config: grokmirror.GrokConfigParser, q_pull: mp.Queue, q_spa: mp
                 logger.debug('FP match, not pulling %s', gitdir)
 
         if action == 'objstore_migrate':
-            spa_actions.append('objstore')
-            spa_actions.append('repack')
+            spa_actions.extend(('objstore', 'repack'))
 
         grokmirror.unlock_repo(fullpath)
 
@@ -554,12 +553,10 @@ def set_repo_params(fullpath: str, repoinfo: dict) -> None:
         descfile = os.path.join(fullpath, 'description')
         contents = None
         if os.path.exists(descfile):
-            with open(descfile) as fh:
-                contents = fh.read()
+            contents = Path(descfile).read_text()
         if contents != description:
             logger.debug('Setting %s description to: %s', fullpath, description)
-            with open(descfile, 'w') as fh:
-                fh.write(description)
+            Path(descfile).write_text(description)
 
     if owner is not None:
         logger.debug('Setting %s owner to: %s', fullpath, owner)
@@ -569,12 +566,10 @@ def set_repo_params(fullpath: str, repoinfo: dict) -> None:
         headfile = os.path.join(fullpath, 'HEAD')
         contents = None
         if os.path.exists(headfile):
-            with open(headfile) as fh:
-                contents = fh.read().rstrip()
+            contents = Path(headfile).read_text().rstrip()
         if contents != head:
             logger.debug('Setting %s HEAD to: %s', fullpath, head)
-            with open(headfile, 'w') as fh:
-                fh.write(f'{head}\n')
+            Path(headfile).write_text(f'{head}\n')
 
 
 def set_agefile(toplevel: str, gitdir: str, last_modified: int) -> None:
@@ -586,8 +581,7 @@ def set_agefile(toplevel: str, gitdir: str, last_modified: int) -> None:
     agefile = os.path.join(toplevel, gitdir.lstrip('/'), 'info/web/last-modified')
     if not os.path.exists(os.path.dirname(agefile)):
         os.makedirs(os.path.dirname(agefile))
-    with open(agefile, 'wt') as fh:
-        fh.write(f'{cgit_fmt}\n')
+    Path(agefile).write_text(f'{cgit_fmt}\n')
     logger.debug('Wrote "%s" into %s', cgit_fmt, agefile)
 
 
@@ -775,8 +769,7 @@ def fill_todo_from_manifest(
     else:
         r_mani_status_path = os.path.join(os.path.dirname(l_mani_path), f'.{os.path.basename(l_mani_path)}.remote')
         try:
-            with open(r_mani_status_path, 'r') as fh:
-                r_mani_status = json.loads(fh.read())
+            r_mani_status = json.loads(Path(r_mani_status_path).read_text())
         except (OSError, json.JSONDecodeError):
             logger.debug('Could not read %s', r_mani_status_path)
             r_mani_status = {}
@@ -921,9 +914,8 @@ def fill_todo_from_manifest(
             if os.path.exists(rfile):
                 logger.debug('Reclone requested for %s:', gitdir)
                 q_mani.put((gitdir, repoinfo, 'reclone'))
-                with open(rfile, 'r') as rfh:
-                    reason = rfh.read()
-                    logger.debug('  %s', reason)
+                reason = Path(rfile).read_text()
+                logger.debug('  %s', reason)
                 continue
 
             if gitdir not in l_manifest:

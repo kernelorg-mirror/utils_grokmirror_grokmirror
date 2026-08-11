@@ -92,8 +92,7 @@ def generate_bundles(
             # Do we have a bundle fingerprint?
             logger.debug('Found existing bundle in %s', bfile)
             if os.path.exists(bfprfile):
-                with open(bfprfile) as fh:
-                    bfpr = fh.read().strip()
+                bfpr = Path(bfprfile).read_text().strip()
                 logger.debug('Read bundle fingerprint from %s: %s', bfprfile, bfpr)
                 if bfpr == repofpr:
                     logger.info('  skipped: %s (unchanged)', repo)
@@ -112,9 +111,8 @@ def generate_bundles(
         ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs)
 
         if ecode == 0:
-            with open(bfprfile, 'w') as fh:
-                fh.write(repofpr)
-                logger.debug('Wrote %s into %s', repofpr, bfprfile)
+            Path(bfprfile).write_text(repofpr)
+            logger.debug('Wrote %s into %s', repofpr, bfprfile)
 
     return 0
 
