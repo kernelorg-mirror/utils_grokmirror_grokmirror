@@ -5,11 +5,11 @@ import argparse
 import contextlib
 import logging
 import os
-import pathlib
 import re
 import shutil
 import sys
 from fnmatch import fnmatch
+from pathlib import Path
 
 import grokmirror
 
@@ -17,12 +17,12 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 
-def get_pi_repos(inboxdir: str) -> list[str]:
+def get_pi_repos(inboxdir: grokmirror.StrPath) -> list[Path]:
     members = []
     at = 0
     while True:
-        repodir = os.path.join(inboxdir, 'git', f'{at}.git')
-        if not os.path.isdir(repodir):
+        repodir = Path(inboxdir, 'git', f'{at}.git')
+        if not repodir.is_dir():
             break
         members.append(repodir)
         at += 1
@@ -35,8 +35,8 @@ def index_pi_inbox(fullpath: str, opts: argparse.Namespace) -> bool:
     logger.info('pi-index %s', gdir)
     success = True
     # Check that msgmap.sqlite3 is there
-    msgmapdbf = os.path.join(pdir, 'msgmap.sqlite3')
-    if not os.path.exists(msgmapdbf):
+    msgmapdbf = Path(pdir, 'msgmap.sqlite3')
+    if not msgmapdbf.exists():
         logger.info('Inboxdir not initialized: %s', pdir)
         return False
 
@@ -83,7 +83,7 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
                 ec, out, err = grokmirror.run_git_command(subrepo, gitargs)
                 if out:
                     origins = out
-        inboxname = os.path.basename(gdir)
+        inboxname = Path(gdir).name
         if not origins and opts.origin_host:
             # Attempt to grab the config sample from remote
             origin_host = opts.origin_host.rstrip('/')
@@ -160,10 +160,11 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
             if success:
                 if gdir != pdir:
                     # public-inbox databases are separate from the main git trees
-                    pathlib.Path(pdir).mkdir(parents=True, exist_ok=True)
+                    Path(pdir).mkdir(parents=True, exist_ok=True)
                     # Symlink the git subpath
-                    if not os.path.islink(os.path.join(pdir, 'git')):
-                        os.symlink(os.path.join(gdir, 'git'), os.path.join(pdir, 'git'))
+                    gitlink = Path(pdir, 'git')
+                    if not gitlink.is_symlink():
+                        gitlink.symlink_to(Path(gdir, 'git'))
 
                 # Now we run public-inbox-init
                 piargs = ['public-inbox-init', '-V2', '-L', opts.indexlevel]
@@ -186,7 +187,7 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
                     success = False
 
             if success:
-                pathlib.Path(pdir, 'description').write_text(description, encoding='utf-8')
+                Path(pdir, 'description').write_text(description, encoding='utf-8')
 
     return success
 
@@ -214,15 +215,15 @@ def process_inboxdirs(inboxdirs: set[str], opts: argparse.Namespace, init: bool 
         gdir, pdir = get_git_pi_dir(opts, inboxdir)
         # Check if msgmap.sqlite3 is there -- it can be a clone of a new epoch,
         # so no initialization is necessary
-        msgmapdbf = os.path.join(pdir, 'msgmap.sqlite3')
+        msgmapdbf = Path(pdir, 'msgmap.sqlite3')
         # Kept nested on purpose: collapsing this would move the side-effecting
         # init_pi_inbox() call into a boolean chain.
-        if init and not os.path.exists(msgmapdbf):  # noqa: SIM102
+        if init and not msgmapdbf.exists():  # noqa: SIM102
             # Initialize this public-inbox repo
             if not init_pi_inbox(ses, gdir, pdir, opts):
                 logger.critical('Could not init %s', inboxdir)
                 continue
-        if os.path.exists(msgmapdbf):
+        if msgmapdbf.exists():
             toindex.add(inboxdir)
 
     for inboxdir in toindex:
@@ -239,7 +240,9 @@ def get_git_pi_dir(opts: argparse.Namespace, fullpath: str) -> tuple[str, str]:
     pitop = os.path.realpath(opts.pitoplevel)
     groktop = os.path.realpath(opts.toplevel)
     inboxname = os.path.relpath(fullpath, groktop)
-    return fullpath, os.path.join(pitop, inboxname)
+    # Both halves stay str: they end up in a public-inbox argv, and gdir is
+    # compared against pdir above.
+    return fullpath, str(Path(pitop, inboxname))
 
 
 def cmd_init(opts: argparse.Namespace) -> None:
@@ -248,13 +251,14 @@ def cmd_init(opts: argparse.Namespace) -> None:
         if opts.forceinit:
             inboxdir = inboxdirs.pop()
             _gdir, pdir = get_git_pi_dir(opts, inboxdir)
-            msgmapdbf = os.path.join(pdir, 'msgmap.sqlite3')
+            msgmapdbf = Path(pdir, 'msgmap.sqlite3')
             # Delete msgmap and xap15 if present and reinitialize
-            if os.path.exists(msgmapdbf):
+            if msgmapdbf.exists():
                 logger.critical('Reinitializing %s', opts.inboxdir)
-                os.unlink(msgmapdbf)
-            if os.path.exists(os.path.join(pdir, 'xap15')):
-                shutil.rmtree(os.path.join(pdir, 'xap15'))
+                msgmapdbf.unlink()
+            xapdir = Path(pdir, 'xap15')
+            if xapdir.exists():
+                shutil.rmtree(xapdir)
     elif not sys.stdin.isatty():
         repos = [line for line in sys.stdin.read().splitlines() if line]
         inboxdirs = get_inboxdirs(repos)
