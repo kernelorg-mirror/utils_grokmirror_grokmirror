@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import datetime
 import gc
 import io
@@ -532,17 +533,34 @@ def refresh_obst_roots(obst_roots: dict[str, set[str]], obstrepo: str) -> set[st
     return roots
 
 
-def fsck_mirror(
-    config: grokmirror.GrokConfigParser,
-    force: bool = False,
-    repack_only: bool = False,
-    conn_only: bool = False,
-    repack_all_quick: bool = False,
-    repack_all_full: bool = False,
-) -> int:
+@dataclasses.dataclass
+class FsckOptions:
+    """The command-line knobs for a single grok-fsck run.
 
-    if repack_all_quick or repack_all_full:
-        force = True
+    These travel together through every stage of a run, so they travel as one
+    object. GrokSession does the same thing for per-run state.
+    """
+
+    force: bool = False
+    repack_only: bool = False
+    conn_only: bool = False
+    repack_all_quick: bool = False
+    repack_all_full: bool = False
+
+    def __post_init__(self) -> None:
+        # Both --repack-all-* flags say "(Assumes --force)" in their help, and
+        # the implication has to hold everywhere force is read, not just where
+        # the flags themselves are.
+        if self.repack_all_quick or self.repack_all_full:
+            self.force = True
+
+    @property
+    def repack_all(self) -> bool:
+        """True when every repository is being repacked, schedule or no."""
+        return self.repack_all_quick or self.repack_all_full
+
+
+def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> int:
 
     statusfile = config['fsck'].get('statusfile')
     if not statusfile:
@@ -611,7 +629,7 @@ def fsck_mirror(
         todayiso = today.strftime('%F')
 
         # Use randomization for the next check, again
-        checkdelay = random.randint(1, frequency) if force else frequency
+        checkdelay = random.randint(1, frequency) if options.force else frequency
 
         commitgraph = config['fsck'].getboolean('commitgraph', True)
 
@@ -637,7 +655,7 @@ def fsck_mirror(
 
             if fullpath not in status:
                 # Newly added repository
-                if not force:
+                if not options.force:
                     # Randomize next check between now and frequency
                     delay = random.randint(0, frequency)
                     nextdate = today + datetime.timedelta(days=delay)
@@ -825,10 +843,10 @@ def fsck_mirror(
             # don't look at me if you turned off repack
             logger.debug('Not repacking because repack=no in config')
             repack_level = None
-        elif repack_all_full and (count_loose > 0 or packs > 1):
+        elif options.repack_all_full and (count_loose > 0 or packs > 1):
             logger.debug('repack_level=2 due to repack_all_full')
             repack_level = 2
-        elif repack_all_quick and count_loose > 0:
+        elif options.repack_all_quick and count_loose > 0:
             logger.debug('repack_level=1 due to repack_all_quick')
             repack_level = 1
         elif status[fullpath].get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir):
@@ -876,9 +894,9 @@ def fsck_mirror(
                 logger.info('   queued: %s (full repack)', fullpath)
             else:
                 logger.info('   queued: %s (repack)', fullpath)
-        elif repack_only or repack_all_quick or repack_all_full:
+        elif options.repack_only or options.repack_all:
             continue
-        elif schedcheck <= today or force:
+        elif schedcheck <= today or options.force:
             queued += 1
             to_process.add((fullpath, 'fsck', None))
             logger.info('   queued: %s (fsck)', fullpath)
@@ -1064,9 +1082,9 @@ def fsck_mirror(
                 logger.info('   queued: %s (full repack)', Path(obstrepo).name)
             else:
                 logger.info('   queued: %s (repack)', Path(obstrepo).name)
-        elif repack_only or repack_all_quick or repack_all_full:
+        elif options.repack_only or options.repack_all:
             continue
-        elif (nextcheck <= today or force) and not repack_only:
+        elif (nextcheck <= today or options.force) and not options.repack_only:
             queued += 1
             status[obstrepo]['nextcheck'] = nextcheck.strftime('%F')
             to_process.add((obstrepo, 'fsck', None))
@@ -1106,7 +1124,7 @@ def fsck_mirror(
     for fullpath, action, repack_level in to_process:
         logger.info('%s:', fullpath)
         start_size = get_repo_size(fullpath)
-        checkdelay = frequency if not force else random.randint(1, frequency)
+        checkdelay = frequency if not options.force else random.randint(1, frequency)
         nextcheck = today + datetime.timedelta(days=checkdelay)
 
         # Calculate elapsed seconds
@@ -1137,7 +1155,7 @@ def fsck_mirror(
                     continue
 
             elif action == 'fsck':
-                run_git_fsck(ses, fullpath, config, conn_only)
+                run_git_fsck(ses, fullpath, config, options.conn_only)
                 status[fullpath]['lastcheck'] = todayiso
                 status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
                 logger.info('     next: %s', status[fullpath]['nextcheck'])
@@ -1247,15 +1265,9 @@ def parse_args() -> argparse.Namespace:
     return opts
 
 
-def grok_fsck(
-    cfgfile: str,
-    verbose: bool = False,
-    force: bool = False,
-    repack_only: bool = False,
-    conn_only: bool = False,
-    repack_all_quick: bool = False,
-    repack_all_full: bool = False,
-) -> None:
+def grok_fsck(cfgfile: str, verbose: bool = False, options: FsckOptions | None = None) -> None:
+    if options is None:
+        options = FsckOptions()
     config = grokmirror.load_config_file(cfgfile)
 
     obstdir = config['core'].get('objstore', None)
@@ -1278,7 +1290,7 @@ def grok_fsck(
     # attaches to the shared parent logger, not this module's child.
     root_logger.addHandler(ch)
 
-    fsck_mirror(config, force, repack_only, conn_only, repack_all_quick, repack_all_full)
+    fsck_mirror(config, options)
 
     report = rh.getvalue()
     if report:
@@ -1312,11 +1324,13 @@ def command() -> None:
         grok_fsck(
             opts.config,
             opts.verbose,
-            opts.force,
-            opts.repack_only,
-            opts.conn_only,
-            opts.repack_all_quick,
-            opts.repack_all_full,
+            FsckOptions(
+                force=opts.force,
+                repack_only=opts.repack_only,
+                conn_only=opts.conn_only,
+                repack_all_quick=opts.repack_all_quick,
+                repack_all_full=opts.repack_all_full,
+            ),
         )
     except grokmirror.GrokError as ex:
         sys.stderr.write(f'ERROR: {ex}\n')

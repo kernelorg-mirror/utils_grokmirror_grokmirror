@@ -793,3 +793,32 @@ class TestReadManifest:
         text = Path(manifile).read_text(encoding='utf-8')
         assert text.index('/test/one.git') < text.index('/test/two.git')
         assert '\n ' in text
+
+
+class TestFsckOptions:
+    """The command-line knobs for a grok-fsck run, kept together as one object.
+
+    The interesting part is the implication: --repack-all-quick and
+    --repack-all-full both say "(Assumes --force)" in their help, and every
+    place that reads force has to see it, not just the places that read the
+    repack-all flags.
+    """
+
+    @pytest.mark.parametrize('flag', ['repack_all_quick', 'repack_all_full'])
+    def test_repack_all_implies_force(self, flag: str) -> None:
+        options = grokmirror.fsck.FsckOptions(**{flag: True})
+
+        assert options.force
+        assert options.repack_all
+
+    def test_nothing_is_forced_by_default(self) -> None:
+        options = grokmirror.fsck.FsckOptions()
+
+        assert not options.force
+        assert not options.repack_all
+
+    def test_force_alone_is_not_a_repack_all(self) -> None:
+        # --force means "check everything now", not "repack everything now".
+        options = grokmirror.fsck.FsckOptions(force=True)
+
+        assert not options.repack_all
