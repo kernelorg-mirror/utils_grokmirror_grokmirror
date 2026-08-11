@@ -39,20 +39,27 @@ def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list[tuple[s
         latest = Path(statf).read_text(encoding='utf-8').strip()
         rev_range = f'{latest}..'
 
-    args = ['rev-list', '--pretty=oneline', '--reverse', rev_range, 'master']
+    # Terminate each record with a NUL instead of relying on a newline. These
+    # subjects are email Subject: headers, so they can carry anything a mail
+    # client saw fit to put there -- \v, \f, U+0085 and friends all count as
+    # line breaks to str.splitlines(), and git escapes none of them. A NUL is
+    # the one byte that cannot appear inside the record.
+    args = ['rev-list', '--pretty=format:%H %s%x00', '--reverse', rev_range, 'master']
     ecode, out, _err = grokmirror.run_git_command(fullpath, args)
     if ecode > 0:
         raise grokmirror.GrokMissingRevisionsError(f'Could not iterate {rev_range} in {fullpath}')
 
     newrevs = []
-    if out:
-        # Deliberately not splitlines(): a commit subject may contain \v, \f or
-        # U+0085, and git's oneline output does not escape them. splitlines()
-        # would break such a line in two and the unpacking below would fail.
-        for line in out.split('\n'):
-            (commit_id, logmsg) = line.split(' ', 1)
-            logger.debug('commit_id=%s, subject=%s', commit_id, logmsg)
-            newrevs.append((commit_id, logmsg))
+    for record in out.split('\0'):
+        # --pretty=format: puts a "commit <sha>" header line ahead of every
+        # record, and --no-commit-header only suppresses it from git 2.33 on,
+        # so keep just the last line: the one we asked for.
+        entry = record.rsplit('\n', 1)[-1]
+        if not entry:
+            continue
+        commit_id, _, logmsg = entry.partition(' ')
+        logger.debug('commit_id=%s, subject=%s', commit_id, logmsg)
+        newrevs.append((commit_id, logmsg))
 
     return newrevs
 

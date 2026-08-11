@@ -77,6 +77,10 @@ v3.0 (TBD)
   is now reported as an error instead of silently succeeding; fcntl locks
   cannot protect a process from itself, and re-locking the manifest used
   to quietly drop the lock the process believed it still held
+- grok-pi-piper now asks git for NUL-terminated records when listing new
+  messages, so a subject line containing an exotic line break (a vertical
+  tab, a form feed, U+0085) can no longer be mistaken for the end of one
+  record and the start of another
 - Fix grok-pi-piper labeling its log entries as coming from grok-pull
 - Fix grok-manifest traceback when purging repositories that no longer
   exist on disk (broken since v2.0.0)

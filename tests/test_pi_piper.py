@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from support import GrokTree, pi_message
+from grokmirror.pi_piper import git_get_new_revs
+
+from support import GrokTree, git, pi_message
 
 
 def write_piper_config(path: Path, body: str) -> Path:
@@ -78,6 +80,21 @@ def test_pipes_new_messages(tree: GrokTree, inbox: Path) -> None:
     assert piped.endswith('---\n')
     # Only the new message, not the whole history.
     assert 'First message' not in piped
+
+
+def test_exotic_subject_characters_do_not_split_a_record(tree: GrokTree, inbox: Path) -> None:
+    # These subjects are email Subject: headers, so they can hold anything a
+    # mail client put there -- including \v, \f and U+0085, all of which
+    # str.splitlines() treats as line breaks and git escapes in none of its
+    # newline-delimited output. Records are NUL-terminated instead, so the
+    # subject stays in one piece no matter what is in it.
+    (inbox / 'pi-piper.latest').write_text(git('rev-parse', 'master', cwd=inbox).strip())
+    subject = 'weird \v subject \x85 here \f end'
+    deliver(tree, inbox, subject)
+
+    revs = git_get_new_revs(str(inbox))
+
+    assert revs == [(git('rev-parse', 'master', cwd=inbox).strip(), subject)]
 
 
 def test_dry_run_changes_nothing(tree: GrokTree, inbox: Path) -> None:
