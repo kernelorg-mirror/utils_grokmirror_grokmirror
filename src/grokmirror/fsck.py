@@ -56,7 +56,7 @@ def gen_preload_bundle(fullpath: str, config: grokmirror.GrokConfigParser) -> No
     # Only called when the caller has already checked this is set
     outdir = config['fsck']['preload_bundle_outdir']
     Path(outdir).mkdir(parents=True, exist_ok=True)
-    bname = f'{os.path.basename(fullpath)[:-4]}.bundle'
+    bname = f'{os.path.basename(fullpath).removesuffix(".git")}.bundle'
     args = ['bundle', 'create', os.path.join(outdir, bname), '--all']
     logger.info(' bundling: %s', bname)
     grokmirror.run_git_command(fullpath, args)
@@ -706,8 +706,7 @@ def fsck_mirror(
             continue
 
         # Check to make sure it's still in the manifest
-        gitdir = fullpath.replace(toplevel, '', 1)
-        gitdir = '/' + gitdir.lstrip('/')
+        gitdir = '/' + os.path.relpath(fullpath, toplevel)
 
         if gitdir not in manifest:
             status.pop(fullpath)
@@ -1091,7 +1090,7 @@ def fsck_mirror(
             else:
                 manifest[gitdir]['reference'] = refrepo
 
-            manifest[gitdir]['forkgroup'] = os.path.basename(obstrepo[:-4])
+            manifest[gitdir]['forkgroup'] = os.path.basename(obstrepo).removesuffix('.git')
 
         if len(baseline_refs):
             # sort the list, so we have deterministic value

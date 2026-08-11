@@ -46,6 +46,9 @@ v3.0 (TBD)
 - Only treat a manifest file or URL ending in .gz as gzipped, instead of
   one containing ".gz" anywhere in its path (a plain-text manifest under
   a directory like /srv/my.gz-mirrors/ used to crash the reader)
+- Fix grok-bundle mangling repository names that contain ".git" somewhere
+  other than at the end: a repository named foo.github.io.git used to be
+  bundled into a directory called "foohub.io"
 - Locking a repository or the manifest a second time from the same process
   is now reported as an error instead of silently succeeding; fcntl locks
   cannot protect a process from itself, and re-locking the manifest used

@@ -73,7 +73,7 @@ def generate_bundles(
         repo = repo.lstrip('/')
         fullpath = os.path.join(toplevel, repo)
 
-        bundledir = os.path.join(outdir, repo.replace('.git', ''))
+        bundledir = os.path.join(outdir, repo.removesuffix('.git'))
         Path(bundledir).mkdir(parents=True, exist_ok=True)
 
         repofpr = grokmirror.get_repo_fingerprint(toplevel, repo)

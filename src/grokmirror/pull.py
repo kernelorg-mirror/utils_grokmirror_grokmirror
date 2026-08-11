@@ -277,7 +277,7 @@ def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokCo
     purl = config['remote'].get('preload_bundle_url')
     if not purl:
         return
-    bname = os.path.basename(obstrepo)[:-4]
+    bname = os.path.basename(obstrepo).removesuffix('.git')
     obstdir = os.path.realpath(config['core']['objstore'])
     burl = '{}/{}.bundle'.format(purl.rstrip('/'), bname)
     bfile = os.path.join(obstdir, f'{bname}.bundle')

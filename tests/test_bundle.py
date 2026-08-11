@@ -81,6 +81,17 @@ def test_skips_a_repo_with_no_refs(tree: GrokTree) -> None:
     assert 'no refs to bundle' in res.stdout + res.stderr
 
 
+def test_repo_name_containing_dot_git_keeps_its_name(tree: GrokTree) -> None:
+    # The output directory was derived with repo.replace('.git', ''), which
+    # strips every occurrence, not just the trailing one, so a repository named
+    # foo.github.io.git bundled into "foohub.io" instead of "foo.github.io".
+    tree.add_repo('test/foo.github.io.git')
+    tree.run_manifest()
+    tree.run_bundle('-v')
+
+    assert (tree.root / 'bundles' / 'test' / 'foo.github.io' / 'clone.bundle').exists()
+
+
 def test_include_globbing(tree: GrokTree) -> None:
     tree.add_repo('test/one.git')
     tree.add_repo('other/two.git', source='beta')

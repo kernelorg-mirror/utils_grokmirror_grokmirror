@@ -573,7 +573,7 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
     forkgroup = None
     altrepo = get_altrepo(fullpath)
     if altrepo and os.path.exists(os.path.join(altrepo, 'grokmirror.objstore')):
-        forkgroup = os.path.basename(altrepo)[:-4]
+        forkgroup = os.path.basename(altrepo).removesuffix('.git')
 
     # we need a way to quickly compare whether mirrored repositories match
     # what is in the master manifest. To this end, we calculate a so-called
@@ -605,8 +605,11 @@ def get_altrepo(fullpath: str) -> str | None:
     altdir = None
     try:
         contents = pathlib.Path(altfile).read_text(encoding='utf-8').strip()
-        if len(contents) > 8 and contents[-8:] == '/objects':
-            altdir = os.path.realpath(contents[:-8])
+        altpath = contents.removesuffix('/objects')
+        # A bare "/objects" would leave nothing to point at, and realpath('')
+        # is the current directory -- exactly the kind of answer we never want.
+        if altpath and altpath != contents:
+            altdir = os.path.realpath(altpath)
     except OSError:
         pass
 
@@ -826,13 +829,14 @@ def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: st
     for root, dirs, files in os.walk(srcobj, topdown=True):
         if 'info' in dirs:
             dirs.remove('info')
-        subpath = root.replace(srcobj, '').lstrip('/')
+        subpath = os.path.relpath(root, srcobj)
         for file in files:
             srcpath = os.path.join(root, file)
             if file.endswith('.bitmap'):
                 torm.add(srcpath)
                 continue
-            dstpath = os.path.join(dstobj, subpath, file)
+            # normpath because relpath says '.' for the top of the walk
+            dstpath = os.path.normpath(os.path.join(dstobj, subpath, file))
             if not os.path.exists(dstpath):
                 pathlib.Path(os.path.dirname(dstpath)).mkdir(parents=True, exist_ok=True)
                 os.link(srcpath, dstpath)
@@ -1363,8 +1367,9 @@ def get_repack_level(
         total_size = size_loose + size_pack
         # If we have an alternate, then add those numbers in
         alternate = obj_info.get('alternate')
-        if alternate and len(alternate) > 8 and alternate[-8:] == '/objects':
-            alt_obj_info = get_repo_obj_info(alternate[:-8])
+        altpath = alternate.removesuffix('/objects') if alternate else None
+        if altpath and altpath != alternate:
+            alt_obj_info = get_repo_obj_info(altpath)
             total_obj += int(alt_obj_info['in-pack'])
             total_size += int(alt_obj_info['size-pack'])
 

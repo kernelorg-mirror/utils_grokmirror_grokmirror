@@ -193,7 +193,7 @@ def dumb_pull(
 
     # Find all repositories we are to pull
     for entry in paths:
-        if entry[-4:] == '.git':
+        if entry.endswith('.git'):
             if not os.path.exists(entry):
                 logger.critical('%s does not exist', entry)
                 continue
