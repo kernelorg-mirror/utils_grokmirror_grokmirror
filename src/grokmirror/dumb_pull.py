@@ -188,10 +188,8 @@ def dumb_pull(
     posthook: str = '',
     logfile: str | None = None,
 ) -> None:
-    global logger
-
     loglevel = logging.INFO
-    logger = grokmirror.init_logger('dumb-pull', logfile, loglevel, verbose)
+    grokmirror.init_logger('dumb-pull', logfile, loglevel, verbose)
 
     if remotes is None:
         remotes = ['*']

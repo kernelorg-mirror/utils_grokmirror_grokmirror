@@ -306,8 +306,6 @@ def cmd_extindex(opts: argparse.Namespace) -> None:
 
 def command() -> None:
 
-    global logger
-
     # noinspection PyTypeChecker
     ap = argparse.ArgumentParser(
         prog='grok-pi-indexer',
@@ -390,7 +388,7 @@ def command() -> None:
     else:
         loglevel = logging.INFO
 
-    logger = grokmirror.init_logger('pi-indexer', logfile, loglevel, opts.verbose)
+    grokmirror.init_logger('pi-indexer', logfile, loglevel, opts.verbose)
     opts.func(opts)
 
 

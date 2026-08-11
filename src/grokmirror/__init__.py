@@ -44,7 +44,9 @@ MANIFEST_LOCKH: IO[str] | None = None
 REPO_LOCKH: dict[str, IO[str]] = {}
 GITBIN = '/usr/bin/git'
 
-# default logger. Will be overridden.
+# The shared parent logger: every module logs through a getLogger(__name__)
+# child of this one, so the handlers init_logger() attaches here serve the
+# whole package. No rebinding needed anywhere.
 logger = logging.getLogger(__name__)
 
 _alt_repo_map: dict[str, set[str]] | None = None
@@ -1223,9 +1225,6 @@ def get_repack_level(
 
 
 def init_logger(subcommand: str, logfile: str | None, loglevel: int, verbose: bool) -> logging.Logger:
-    global logger
-
-    logger = logging.getLogger('grokmirror')
     logger.setLevel(logging.DEBUG)
 
     if logfile:

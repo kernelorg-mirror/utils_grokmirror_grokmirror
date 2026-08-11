@@ -157,8 +157,6 @@ def command() -> None:
     import argparse
     from configparser import ConfigParser, ExtendedInterpolation
 
-    global logger
-
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
         prog='grok-pi-piper',
@@ -217,7 +215,9 @@ def command() -> None:
 
     shallow = config[section].getboolean('shallow', False)
 
-    logger = grokmirror.init_logger('pull', logfile, loglevel, opts.verbose)
+    # This used to say 'pull', so grok-pi-piper's log entries were labeled
+    # as coming from grok-pull.
+    grokmirror.init_logger('pi-piper', logfile, loglevel, opts.verbose)
 
     try:
         run_pi_repo(opts.repo, pipe, dryrun=opts.dryrun, shallow=shallow, pipelast=opts.pipelast)

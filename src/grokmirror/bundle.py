@@ -152,8 +152,6 @@ def grok_bundle(
     include: Collection[str],
     verbose: bool = False,
 ) -> int:
-    global logger
-
     config = grokmirror.load_config_file(cfgfile)
 
     logfile = config['core'].get('log', None)
@@ -162,7 +160,7 @@ def grok_bundle(
     else:
         loglevel = logging.INFO
 
-    logger = grokmirror.init_logger('bundle', logfile, loglevel, verbose)
+    grokmirror.init_logger('bundle', logfile, loglevel, verbose)
 
     return generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include)
 

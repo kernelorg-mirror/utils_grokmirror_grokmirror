@@ -1337,8 +1337,6 @@ def grok_fsck(
     repack_all_quick: bool = False,
     repack_all_full: bool = False,
 ) -> None:
-    global logger
-
     config = grokmirror.load_config_file(cfgfile)
 
     obstdir = config['core'].get('objstore', None)
@@ -1353,14 +1351,16 @@ def grok_fsck(
     else:
         loglevel = logging.INFO
 
-    logger = grokmirror.init_logger('fsck', logfile, loglevel, verbose)
+    root_logger = grokmirror.init_logger('fsck', logfile, loglevel, verbose)
 
     rh = io.StringIO()
     ch = logging.StreamHandler(stream=rh)
     formatter = logging.Formatter('%(message)s')
     ch.setFormatter(formatter)
     ch.setLevel(logging.CRITICAL)
-    logger.addHandler(ch)
+    # The report must capture messages from every grokmirror module, so it
+    # attaches to the shared parent logger, not this module's child.
+    root_logger.addHandler(ch)
 
     fsck_mirror(config, force, repack_only, conn_only, repack_all_quick, repack_all_full)
 

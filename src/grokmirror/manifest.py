@@ -276,9 +276,8 @@ def grok_manifest(
     fetchobst: bool = False,
     ignorerefs: list[str] | None = None,
 ) -> int:
-    global logger
     loglevel = logging.INFO
-    logger = grokmirror.init_logger('manifest', logfile, loglevel, verbose)
+    grokmirror.init_logger('manifest', logfile, loglevel, verbose)
 
     # Monotonic, so a clock adjustment mid-run can't produce a silly duration
     startt = time.monotonic()

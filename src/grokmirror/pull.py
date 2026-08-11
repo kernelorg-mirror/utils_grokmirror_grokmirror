@@ -1514,8 +1514,6 @@ def grok_pull(
     forcepurge: bool = False,
     runonce: bool = False,
 ) -> int:
-    global logger
-
     config = grokmirror.load_config_file(cfgfile)
     if 'pull' not in config:
         # Every setting in [pull] has a default, so mirroring without the
@@ -1535,7 +1533,7 @@ def grok_pull(
         # Override the pull.purge setting
         config['pull']['purge'] = 'yes'
 
-    logger = grokmirror.init_logger('pull', logfile, loglevel, verbose)
+    grokmirror.init_logger('pull', logfile, loglevel, verbose)
 
     return pull_mirror(config, nomtime, forcepurge, runonce)
 
