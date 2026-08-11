@@ -129,6 +129,7 @@ extend-select = [
     "PIE",
     "PL",
     "PTH", # os.path and friends -> pathlib
+    "RUF",
     "SIM",
     "TRY", # tryceratops: exception handling antipatterns
 ]

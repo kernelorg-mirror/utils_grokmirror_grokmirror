@@ -414,7 +414,7 @@ def run_git_repack(
         logger.info('   reflog: expiring reflogs')
         grokmirror.run_git_command(fullpath, args)
 
-    args = ['repack'] + repack_flags
+    args = ['repack', *repack_flags]
     logger.info('   repack: repacking with "%s"', ' '.join(repack_flags))
 
     # We always tack on -q

@@ -105,7 +105,7 @@ def generate_bundles(
             logger.info('  skipped: %s (%s > %s)', bundlename, total_size, maxsize)
             continue
 
-        fullargs = git_args + ['bundle', 'create', str(bfile)] + revlist_args
+        fullargs = [*git_args, 'bundle', 'create', str(bfile), *revlist_args]
         logger.debug('Full git args: %s', fullargs)
         logger.info(' generate: %s', bfile)
         ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs)

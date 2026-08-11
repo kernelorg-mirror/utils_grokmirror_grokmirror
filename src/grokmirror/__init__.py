@@ -470,9 +470,9 @@ def run_git_command(
     if fullpath is not None:
         # os.fspath(), not str(): the argv has to be strings all the way
         # through, because run_shell_command() logs it with ' '.join().
-        cmdargs = [_git, '--no-pager', '--git-dir', os.fspath(fullpath)] + args
+        cmdargs = [_git, '--no-pager', '--git-dir', os.fspath(fullpath), *args]
     else:
-        cmdargs = [_git, '--no-pager'] + args
+        cmdargs = [_git, '--no-pager', *args]
 
     # Spelled out as two calls so the overload above picks the right return type
     if decode:
