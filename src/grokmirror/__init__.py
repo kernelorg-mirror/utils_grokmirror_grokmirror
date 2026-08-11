@@ -26,7 +26,6 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
@@ -57,6 +56,28 @@ OBST_PREAMBULE = (
     '# Deleting or moving it will cause corruption in the following repositories\n'
     '# (caution, this list may be incomplete):\n'
 )
+
+
+class GrokError(Exception):
+    """An expected failure: something is wrong with the world, not the code.
+
+    Library functions raise this (or a subclass) instead of calling
+    sys.exit(), so that long-running callers can clean up and the test
+    suite can assert on failures. Each command() entry point catches it,
+    prints the message to stderr, and exits non-zero.
+    """
+
+
+class GrokConfigError(GrokError):
+    """The configuration file is missing, unparseable, or incomplete."""
+
+
+class GrokManifestError(GrokError):
+    """The remote manifest could not be fetched or parsed."""
+
+
+class GrokMissingRevisionsError(GrokError):
+    """Revisions we expected to find in a repository are not there."""
 
 
 def get_requests_session() -> requests.Session:
@@ -437,7 +458,7 @@ def setup_objstore_repo(obstdir: str, name: str | None = None) -> str:
     logger.debug('Creating objstore repo in %s', obstrepo)
     lock_repo(obstrepo)
     if not setup_bare_repo(obstrepo):
-        sys.exit(1)
+        raise GrokError(f'Unable to set up an objstore repo in {obstrepo}')
     # All our objects are precious -- we only turn this off when repacking
     set_git_config(obstrepo, 'core.repositoryformatversion', '1')
     set_git_config(obstrepo, 'extensions.preciousObjects', 'true')
@@ -535,7 +556,7 @@ def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
     ecode, _out, _err = run_git_command(obstrepo, args)
     if ecode > 0:
         logger.critical('Could not add remote to %s', obstrepo)
-        sys.exit(1)
+        raise GrokError(f'Could not add remote to {obstrepo}')
     set_git_config(obstrepo, f'remote.{virtref}.fetch', f'+refs/*:refs/virtual/{virtref}/*')
     telltale = os.path.join(obstrepo, 'grokmirror.objstore')
     knownsiblings = set()
@@ -1077,25 +1098,22 @@ class GrokConfigParser(ConfigParser):
 
 def load_config_file(cfgfile: str) -> GrokConfigParser:
     if not os.path.exists(cfgfile):
-        sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
-        sys.exit(1)
+        raise GrokConfigError(f'File does not exist: {cfgfile}')
     config = GrokConfigParser(interpolation=ExtendedInterpolation())
     config.read(cfgfile, encoding='utf-8')
 
     if 'core' not in config:
-        sys.stderr.write(f'ERROR: Section [core] must exist in: {cfgfile}\n')
-        sys.stderr.write('       Perhaps this is a grokmirror-1.x config file?\n')
-        sys.exit(1)
+        raise GrokConfigError(
+            f'Section [core] must exist in: {cfgfile}\n       Perhaps this is a grokmirror-1.x config file?'
+        )
 
     cfgtoplevel = config['core'].get('toplevel')
     if not cfgtoplevel:
-        sys.stderr.write(f'ERROR: Section [core] must define "toplevel" in: {cfgfile}\n')
-        sys.exit(1)
+        raise GrokConfigError(f'Section [core] must define "toplevel" in: {cfgfile}')
 
     toplevel = os.path.realpath(os.path.expanduser(cfgtoplevel))
     if not os.access(toplevel, os.W_OK):
-        logger.critical('Toplevel %s does not exist or is not writable', toplevel)
-        sys.exit(1)
+        raise GrokConfigError(f'Toplevel {toplevel} does not exist or is not writable')
     # Just in case we did expanduser
     config['core']['toplevel'] = toplevel
 

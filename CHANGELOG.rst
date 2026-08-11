@@ -10,6 +10,11 @@ v3.0 (TBD)
 - Read and write all text files (configs, logs, descriptions, manifests,
   state files) as UTF-8 regardless of the system locale, so behavior no
   longer changes under e.g. LC_ALL=C cron environments
+- Report expected failures (bad config, unreachable manifest) as clean
+  one-line errors raised through a new GrokError exception hierarchy
+  instead of exiting from deep inside library code; a failed manifest
+  fetch no longer kills grok-pull running in daemon mode, and Ctrl-C is
+  no longer swallowed by bare except clauses
 - Fix grok-manifest traceback when purging repositories that no longer
   exist on disk (broken since v2.0.0)
 - Fix grok-manifest not removing a repository from the manifest when it

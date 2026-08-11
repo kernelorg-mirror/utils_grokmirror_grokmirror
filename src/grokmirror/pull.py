@@ -282,7 +282,10 @@ def objstore_repo_preload(config: grokmirror.GrokConfigParser, obstrepo: str) ->
         with open(bfile, 'wb') as fh:
             fh.writelines(resp.iter_content(chunk_size=8192))
         resp.close()
-    except:  # noqa
+    # Deliberately broad: whatever went wrong mid-download, clean up and fall
+    # back to a regular clone. But no longer a bare except: a Ctrl-C or a
+    # SystemExit must not be swallowed here.
+    except Exception:  # noqa: BLE001
         # Make sure we don't leave .bundle files lying around
         # Should we add logic to resume downloads here in the future?
         if os.path.exists(bfile):
@@ -739,7 +742,7 @@ def fill_todo_from_manifest(
         cmdargs = list(sp)
         if not os.access(cmdargs[0], os.X_OK):
             logger.critical('Remote manifest command is not executable: %s', cmdargs[0])
-            sys.exit(1)
+            raise grokmirror.GrokManifestError(f'Remote manifest command is not executable: {cmdargs[0]}')
         logger.info(' manifest: executing %s', r_mani_cmd)
         if nomtime:
             cmdargs += ['--force']
@@ -750,13 +753,13 @@ def fill_todo_from_manifest(
             except json.JSONDecodeError as ex:
                 logger.warning('Failed to parse output from %s', r_mani_cmd)
                 logger.warning('Error was: %s', ex)
-                raise OSError(f'Failed to parse output from {r_mani_cmd} ({ex})')
+                raise grokmirror.GrokManifestError(f'Failed to parse output from {r_mani_cmd} ({ex})') from ex
         elif ecode == 127:
             logger.info(' manifest: unchanged')
             return
         elif ecode == 1:
             logger.warning('Executing %s failed with exit code %s, exiting', r_mani_cmd, ecode)
-            raise OSError(f'Failed executing {r_mani_cmd}')
+            raise grokmirror.GrokManifestError(f'Failed executing {r_mani_cmd}')
         else:
             # Non-fatal errors for all other exit codes
             logger.warning(' manifest: executing %s returned %s', r_mani_cmd, ecode)
@@ -764,7 +767,7 @@ def fill_todo_from_manifest(
 
         if not len(r_manifest):
             logger.warning(' manifest: empty, ignoring')
-            raise OSError(f'Empty manifest returned by {r_mani_cmd}')
+            raise grokmirror.GrokManifestError(f'Empty manifest returned by {r_mani_cmd}')
 
     else:
         r_mani_status_path = os.path.join(os.path.dirname(l_mani_path), f'.{os.path.basename(l_mani_path)}.remote')
@@ -784,7 +787,7 @@ def fill_todo_from_manifest(
             r_mani_url = r_mani_url.replace('file://', '')
             if not os.path.exists(r_mani_url):
                 logger.critical('Remote manifest not found in %s! Quitting!', r_mani_url)
-                raise OSError(f'Remote manifest not found in {r_mani_url}')
+                raise grokmirror.GrokManifestError(f'Remote manifest not found in {r_mani_url}')
 
             fstat = os.stat(r_mani_url)
             r_last_modified = fstat[8]
@@ -799,7 +802,7 @@ def fill_todo_from_manifest(
             # Don't accept empty manifests -- that indicates something is wrong
             if not len(r_manifest):
                 logger.warning('Remote manifest empty or unparseable! Quitting.')
-                raise OSError(f'Empty manifest in {r_mani_url}')
+                raise grokmirror.GrokManifestError(f'Empty manifest in {r_mani_url}')
 
         else:
             session = grokmirror.get_requests_session()
@@ -817,7 +820,7 @@ def fill_todo_from_manifest(
             except requests.exceptions.RequestException as ex:
                 logger.warning('Could not fetch %s', r_mani_url)
                 logger.warning('Server returned: %s', ex)
-                raise OSError(f'Remote server returned an error: {ex}')
+                raise grokmirror.GrokManifestError(f'Remote server returned an error: {ex}') from ex
 
             if res.status_code == 304:
                 # No change to the manifest, nothing to do
@@ -827,7 +830,7 @@ def fill_todo_from_manifest(
             if res.status_code > 200:
                 logger.warning('Could not fetch %s', r_mani_url)
                 logger.warning('Server returned status: %s', res.status_code)
-                raise OSError(f'Remote server returned an error: {res.status_code}')
+                raise grokmirror.GrokManifestError(f'Remote server returned an error: {res.status_code}')
 
             r_mtime = time.strptime(res.headers['Last-Modified'], '%a, %d %b %Y %H:%M:%S %Z')
             r_last_modified = calendar.timegm(r_mtime)
@@ -851,11 +854,11 @@ def fill_todo_from_manifest(
                 r_manifest = json.loads(jdata)
 
             # Deliberately broad: anything at all going wrong while fetching or
-            # decoding the manifest is reported as a single OSError below.
-            except Exception as ex:  # noqa: BLE001
+            # decoding the manifest is reported as a single error below.
+            except Exception as ex:
                 logger.warning('Failed to parse %s', r_mani_url)
                 logger.warning('Error was: %s', ex)
-                raise OSError(f'Failed to parse {r_mani_url} ({ex})')
+                raise grokmirror.GrokManifestError(f'Failed to parse {r_mani_url} ({ex})') from ex
 
         # Record for the next run
         with open(r_mani_status_path, 'w', encoding='utf-8') as fh:
@@ -1155,7 +1158,7 @@ def manifest_worker(config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomti
     starttime = int(time.time())
     try:
         fill_todo_from_manifest(config, q_mani, nomtime=nomtime)
-    except OSError as ex:
+    except (OSError, grokmirror.GrokManifestError) as ex:
         # Whatever went wrong was already logged in detail where it happened,
         # so just say so and fall through to the usual pacing below: a broken
         # origin must not turn this into a hot retry loop.
@@ -1204,7 +1207,7 @@ def pull_mirror(
             if stat.S_ISSOCK(mode):
                 os.unlink(sockfile)
             else:
-                raise OSError(f'File exists but is not a socket: {sockfile}')
+                raise grokmirror.GrokError(f'File exists but is not a socket: {sockfile}')
 
         sw = mp.Process(target=socket_worker, args=(config, q_mani, sockfile))
         sw.daemon = True
@@ -1218,7 +1221,7 @@ def pull_mirror(
     if runonce:
         try:
             fill_todo_from_manifest(config, q_mani, nomtime=nomtime, forcepurge=forcepurge)
-        except OSError as ex:
+        except (OSError, grokmirror.GrokManifestError) as ex:
             # Already logged in detail. A mirror run from cron should report the
             # problem and exit non-zero, not print a traceback at the admin.
             logger.critical('Could not get the remote manifest: %s', ex)
@@ -1544,7 +1547,11 @@ def grok_pull(
 def command() -> None:
     opts = parse_args()
 
-    retval = grok_pull(opts.config, opts.verbose, opts.nomtime, opts.purge, opts.forcepurge, opts.runonce)
+    try:
+        retval = grok_pull(opts.config, opts.verbose, opts.nomtime, opts.purge, opts.forcepurge, opts.runonce)
+    except grokmirror.GrokError as ex:
+        sys.stderr.write(f'ERROR: {ex}\n')
+        retval = 1
 
     sys.exit(retval)
 

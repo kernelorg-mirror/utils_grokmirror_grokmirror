@@ -33,7 +33,7 @@ def update_manifest(manifest: dict, toplevel: str, fullpath: str, usenow: bool, 
     if not grokmirror.is_bare_git_repo(fullpath):
         logger.critical('Error opening %s.', fullpath)
         logger.critical('Make sure it is a bare git repository.')
-        sys.exit(1)
+        raise grokmirror.GrokError(f'Not a bare git repository: {fullpath}')
 
     gitdir = '/' + os.path.relpath(fullpath, toplevel)
     repoinfo = grokmirror.get_repo_defs(toplevel, gitdir, usenow=usenow, ignorerefs=ignorerefs)
@@ -396,24 +396,28 @@ def grok_manifest(
 
 
 def command() -> int:
-    opts = parse_args()
+    try:
+        opts = parse_args()
 
-    return grok_manifest(
-        opts.manifile,
-        opts.toplevel,
-        paths=opts.paths,
-        logfile=opts.logfile,
-        usenow=opts.usenow,
-        check_export_ok=opts.check_export_ok,
-        purge=opts.purge,
-        remove=opts.remove,
-        pretty=opts.pretty,
-        ignore=opts.ignore,
-        wait=opts.wait,
-        verbose=opts.verbose,
-        fetchobst=opts.fetchobst,
-        ignorerefs=opts.ignore_refs,
-    )
+        return grok_manifest(
+            opts.manifile,
+            opts.toplevel,
+            paths=opts.paths,
+            logfile=opts.logfile,
+            usenow=opts.usenow,
+            check_export_ok=opts.check_export_ok,
+            purge=opts.purge,
+            remove=opts.remove,
+            pretty=opts.pretty,
+            ignore=opts.ignore,
+            wait=opts.wait,
+            verbose=opts.verbose,
+            fetchobst=opts.fetchobst,
+            ignorerefs=opts.ignore_refs,
+        )
+    except grokmirror.GrokError as ex:
+        sys.stderr.write(f'ERROR: {ex}\n')
+        return 1
 
 
 if __name__ == '__main__':

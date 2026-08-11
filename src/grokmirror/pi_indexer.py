@@ -92,7 +92,9 @@ def init_pi_inbox(gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
             res = ses.get(rconfig)
             res.raise_for_status()
             origins = res.text
-        except:  # noqa
+        # Deliberately broad: any failure to fetch origins info just skips this
+        # inbox. But no longer a bare except: a Ctrl-C must not be swallowed.
+        except Exception:  # noqa: BLE001
             logger.critical('ERROR: Not able to get origins info for %s, skipping', gdir)
             success = False
 

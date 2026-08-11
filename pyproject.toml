@@ -114,6 +114,7 @@ preview = true
 explicit-preview-rules = true
 extend-select = [
     "ARG",
+    "B904", # raise inside except must use "from" to keep the original cause
     "FURB",
     "FURB101", # read-whole-file: open()+read() -> Path.read_text/read_bytes
     "FURB103", # write-whole-file: open()+write() -> Path.write_text/write_bytes

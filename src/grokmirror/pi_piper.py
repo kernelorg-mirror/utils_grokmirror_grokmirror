@@ -27,7 +27,7 @@ def git_get_message_from_pi(fullpath: str, commit_id: str) -> bytes:
     if ecode > 0:
         logger.debug('Could not get the message, error below')
         logger.debug(err.decode())
-        raise KeyError(f'Could not find {commit_id} in {fullpath}')
+        raise grokmirror.GrokMissingRevisionsError(f'Could not find {commit_id} in {fullpath}')
     return out
 
 
@@ -42,7 +42,7 @@ def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list:
     args = ['rev-list', '--pretty=oneline', '--reverse', rev_range, 'master']
     ecode, out, _err = grokmirror.run_git_command(fullpath, args)
     if ecode > 0:
-        raise KeyError(f'Could not iterate {rev_range} in {fullpath}')
+        raise grokmirror.GrokMissingRevisionsError(f'Could not iterate {rev_range} in {fullpath}')
 
     newrevs = []
     if out:
@@ -101,7 +101,7 @@ def run_pi_repo(
 
     try:
         revlist = git_get_new_revs(repo, pipelast=pipelast)
-    except KeyError:
+    except grokmirror.GrokMissingRevisionsError:
         # this could have happened if the public-inbox repository
         # got rebased, e.g. due to GDPR-induced history editing.
         # For now, bluntly handle this by getting rid of our
@@ -141,7 +141,7 @@ def run_pi_repo(
                     logger.info(err)
                     break
                 latest_good = commit_id
-        except KeyError:
+        except grokmirror.GrokMissingRevisionsError:
             logger.info('Skipping %s', commit_id)
 
     if latest_good and not dryrun:
@@ -219,7 +219,11 @@ def command() -> None:
 
     logger = grokmirror.init_logger('pull', logfile, loglevel, opts.verbose)
 
-    run_pi_repo(opts.repo, pipe, dryrun=opts.dryrun, shallow=shallow, pipelast=opts.pipelast)
+    try:
+        run_pi_repo(opts.repo, pipe, dryrun=opts.dryrun, shallow=shallow, pipelast=opts.pipelast)
+    except grokmirror.GrokError as ex:
+        sys.stderr.write(f'ERROR: {ex}\n')
+        sys.exit(1)
 
 
 if __name__ == '__main__':

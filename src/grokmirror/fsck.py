@@ -26,6 +26,7 @@ import os
 import random
 import shutil
 import smtplib
+import sys
 import time
 from email.message import EmailMessage
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
@@ -1396,15 +1397,19 @@ def grok_fsck(
 def command() -> None:
     opts = parse_args()
 
-    return grok_fsck(
-        opts.config,
-        opts.verbose,
-        opts.force,
-        opts.repack_only,
-        opts.conn_only,
-        opts.repack_all_quick,
-        opts.repack_all_full,
-    )
+    try:
+        grok_fsck(
+            opts.config,
+            opts.verbose,
+            opts.force,
+            opts.repack_only,
+            opts.conn_only,
+            opts.repack_all_quick,
+            opts.repack_all_full,
+        )
+    except grokmirror.GrokError as ex:
+        sys.stderr.write(f'ERROR: {ex}\n')
+        sys.exit(1)
 
 
 if __name__ == '__main__':

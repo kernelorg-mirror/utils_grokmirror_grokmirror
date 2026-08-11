@@ -170,9 +170,13 @@ def grok_bundle(
 def command() -> None:
     opts = parse_args()
 
-    retval = grok_bundle(
-        opts.config, opts.outdir, opts.gitargs, opts.revlistargs, opts.maxsize, opts.include, verbose=opts.verbose
-    )
+    try:
+        retval = grok_bundle(
+            opts.config, opts.outdir, opts.gitargs, opts.revlistargs, opts.maxsize, opts.include, verbose=opts.verbose
+        )
+    except grokmirror.GrokError as ex:
+        sys.stderr.write(f'ERROR: {ex}\n')
+        retval = 1
 
     sys.exit(retval)
 
