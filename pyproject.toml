@@ -125,6 +125,7 @@ extend-select = [
     "FURB113", # repeated-append -> one extend()
     "I",
     "PLC1802", # len-test: `if len(x)` as a condition -> `if x`
+    "PTH", # os.path and friends -> pathlib
     "PLW1514", # unspecified-encoding: text-mode I/O must say encoding=
     "SIM108", # if-else-block-instead-of-if-exp: four lines to assign one value
 ]

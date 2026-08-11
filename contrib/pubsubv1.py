@@ -27,6 +27,7 @@ import os
 import re
 import socket
 from configparser import ConfigParser, ExtendedInterpolation
+from pathlib import Path
 
 import falcon
 
@@ -85,7 +86,7 @@ class PubsubListener:
             return
 
         confdir = os.environ.get('GROKMIRROR_CONFIG_DIR', '/etc/grokmirror')
-        cfgfile = os.path.join(confdir, f'{proj}.conf')
+        cfgfile = Path(confdir, f'{proj}.conf')
         if not os.access(cfgfile, os.R_OK):
             resp.status = falcon.HTTP_500
             resp.text = 'Invalid project name\n'

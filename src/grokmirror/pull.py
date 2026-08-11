@@ -512,7 +512,7 @@ def pull_worker(
                 # Make sure the leading dirs are in place; another worker may
                 # be placing a sibling symlink there at this very moment.
                 target.parent.mkdir(parents=True, exist_ok=True)
-                os.symlink(fullpath, target)
+                target.symlink_to(fullpath)
 
     if spa_actions:
         q_spa.put((gitdir, spa_actions))
@@ -619,7 +619,7 @@ def get_hookscripts(config: grokmirror.GrokConfigParser, hookname: str) -> list[
         # is a whole command line, arguments and all, not a path. Round-tripping
         # it through Path would rewrite the arguments too -- '//' collapsed, a
         # trailing slash dropped -- and only the leading '~' needs expanding.
-        hookscript = os.path.expanduser(hookscript.strip())
+        hookscript = os.path.expanduser(hookscript.strip())  # noqa: PTH111
         args = shlex.split(hookscript)
         if not args:
             continue
@@ -737,8 +737,8 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirro
         fh.close()
         # mkstemp() always creates 0600, so put the umask back on
         tmpfile.chmod(grokmirror.file_mode())
-        # os.replace for an actually atomic swap; see write_manifest()
-        os.replace(tmpfile, plfile)
+        # Path.replace for an actually atomic swap; see write_manifest()
+        tmpfile.replace(plfile)
 
     finally:
         # If something failed, don't leave tempfiles trailing around
@@ -1211,7 +1211,7 @@ def pull_mirror(
         # the daemon to check a repository. Set after the bind rather than by
         # zeroing the process umask, which would have applied to every other
         # file the process creates for as long as the window was open.
-        os.chmod(sockfile, 0o777)
+        Path(sockfile).chmod(0o777)
         # Stick some objects into the server
         server.q_mani = q_mani
         server.config = config

@@ -72,7 +72,7 @@ class TestLockName:
 
     def test_absolute_path(self, tmp_path: Path) -> None:
         target = tmp_path / 'sub' / 'manifest.js.gz'
-        assert grokmirror._lockname(str(target)) == str(tmp_path / 'sub' / '.manifest.js.gz.lock')
+        assert grokmirror._lockname(str(target)) == tmp_path / 'sub' / '.manifest.js.gz.lock'
         # The containing directory gets created, since the manifest may not
         # exist yet on a mirror's first run.
         assert (tmp_path / 'sub').is_dir()
@@ -82,7 +82,7 @@ class TestLockName:
         # FileNotFoundError instead of being a no-op, so `grok-manifest -m
         # manifest.js.gz` used to die before doing any work. A cron job running
         # from the manifest's own directory is a perfectly plausible setup.
-        assert grokmirror._lockname('manifest.js.gz') == '.manifest.js.gz.lock'
+        assert grokmirror._lockname('manifest.js.gz') == Path('.manifest.js.gz.lock')
 
     def test_manifest_lock_round_trip_with_a_relative_name(self, tmp_path: Path) -> None:
         os.chdir(tmp_path)
@@ -747,7 +747,7 @@ class TestReadManifest:
     def test_write_with_an_explicit_mtime(self, tmp_path: Path) -> None:
         manifile = str(tmp_path / 'manifest.js.gz')
         grokmirror.write_manifest(manifile, {'/test/one.git': {'modified': 5}}, mtime=1600000000)
-        assert int(os.stat(manifile).st_mtime) == 1600000000
+        assert int(Path(manifile).stat().st_mtime) == 1600000000
 
     @pytest.mark.parametrize(
         ('umask', 'expected'),
@@ -772,7 +772,7 @@ class TestReadManifest:
         try:
             manifile = str(tmp_path / 'manifest.js')
             grokmirror.write_manifest(manifile, {'/test/one.git': {'modified': 5}})
-            assert stat.S_IMODE(os.stat(manifile).st_mode) == expected
+            assert stat.S_IMODE(Path(manifile).stat().st_mode) == expected
         finally:
             os.umask(old)
 

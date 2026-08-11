@@ -259,7 +259,10 @@ class GrokSession:
 
             torm = set()
             for name in dirs:
-                fullpath = os.path.join(root, name)
+                # os.path.join, not Path: os.walk() is a str API (Path.walk()
+                # only arrived in 3.12), and these paths go into a set that is
+                # matched against, compared and returned as strings.
+                fullpath = os.path.join(root, name)  # noqa: PTH118
                 # Should we ignore this dir?
                 if ignorematch.match(fullpath):
                     torm.add(name)
@@ -271,7 +274,7 @@ class GrokSession:
                 if normalize:
                     fullpath = os.path.realpath(fullpath)
 
-                logger.debug('Found %s', os.path.join(root, name))
+                logger.debug('Found %s', os.path.join(root, name))  # noqa: PTH118
                 gitdirs.add(fullpath)
                 torm.add(name)
 
@@ -478,7 +481,7 @@ def run_git_command(
     return run_shell_command(cmdargs, stdin, decode=False, timeout=timeout)
 
 
-def _lockname(fullpath: StrPath) -> str:
+def _lockname(fullpath: StrPath) -> Path:
     target = Path(fullpath)
     # For a bare filename like "manifest.js.gz" the parent is '.', where
     # os.path.dirname() used to give '' -- so this no longer needs the guard
@@ -486,7 +489,7 @@ def _lockname(fullpath: StrPath) -> str:
     # no-op, and joining onto '.' drops it, so the lock still lands next to
     # the file in the cwd.
     target.parent.mkdir(parents=True, exist_ok=True)
-    return str(target.parent / f'.{target.name}.lock')
+    return target.parent / f'.{target.name}.lock'
 
 
 def lock_repo(fullpath: StrPath, nonblocking: bool = False) -> None:
@@ -514,7 +517,7 @@ def lock_repo(fullpath: StrPath, nonblocking: bool = False) -> None:
         # Deliberately not a context manager: the handle is stashed in
         # REPO_LOCKH and released by unlock_repo(). Callers should prefer
         # locked_repo().
-        lockfh = open(repolock, 'w', encoding='utf-8')  # noqa: SIM115
+        lockfh = repolock.open('w', encoding='utf-8')
     except OSError:
         with _REPO_LOCKH_MUTEX:
             del REPO_LOCKH[key]
@@ -1265,7 +1268,7 @@ def manifest_lock(manifile: StrPath) -> None:
         manilock = _lockname(manifile)
         # Deliberately not a context manager: released by manifest_unlock().
         # Callers should prefer locked_manifest().
-        lockfh = open(manilock, 'w', encoding='utf-8')  # noqa: SIM115
+        lockfh = manilock.open('w', encoding='utf-8')
         logger.debug('Attempting to lock %s', manilock)
         try:
             lockf(lockfh, LOCK_EX)
@@ -1367,10 +1370,11 @@ def write_manifest(manifile: StrPath, manifest: Manifest, mtime: int | None = No
             logger.debug('Setting mtime to %s', mtime)
             os.utime(tmpfile, (mtime, mtime))
         logger.debug('Moving %s to %s', tmpfile, manipath)
-        # os.replace, not shutil.move: the whole tempfile dance exists to make
-        # this step atomic, and shutil.move quietly degrades to copy+unlink.
-        # Same directory as the target, so this can never cross a filesystem.
-        os.replace(tmpfile, manipath)
+        # Path.replace (i.e. os.replace), not shutil.move: the whole tempfile
+        # dance exists to make this step atomic, and shutil.move quietly
+        # degrades to copy+unlink. Same directory as the target, so this can
+        # never cross a filesystem.
+        tmpfile.replace(manipath)
 
     finally:
         # If something failed, don't leave these trailing around
