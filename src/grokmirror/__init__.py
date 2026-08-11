@@ -24,7 +24,6 @@ import json
 import logging
 import logging.handlers
 import os
-import pathlib
 import re
 import shutil
 import subprocess
@@ -36,11 +35,19 @@ from collections.abc import Collection, Iterable, Iterator
 from configparser import ConfigParser, ExtendedInterpolation
 from contextlib import contextmanager
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
-from typing import IO, Literal, TypedDict, overload
+from pathlib import Path, PurePath
+from typing import IO, Literal, TypedDict, Union, overload
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# Anything that names a path: a str, or a Path, or anything else with a
+# __fspath__. Parameters that take a path accept all of them and normalize
+# internally, so callers never have to str() a Path on the way in.
+# Spelled with Union because this is a runtime assignment, and PEP 604's `|`
+# only works in one at 3.10.
+StrPath = Union[str, os.PathLike[str]]
 
 VERSION = '3.0-dev'
 
@@ -207,7 +214,7 @@ class GrokSession:
         if key not in self._alt_repo_maps or refresh:
             logger.info('   search: finding all repos using alternates')
             amap: dict[str, set[str]] = {}
-            tp = pathlib.Path(toplevel)
+            tp = Path(toplevel)
             for subp in tp.glob('**/*.git'):
                 if subp.is_symlink():
                     # Don't care about symlinks for altrepo mapping
@@ -223,7 +230,7 @@ class GrokSession:
     def is_alt_repo(self, toplevel: str, refrepo: str) -> bool:
         amap = self.get_altrepo_map(toplevel)
 
-        looking_for = os.path.realpath(os.path.join(toplevel, refrepo.strip('/')))
+        looking_for = os.path.realpath(gitdir_to_fullpath(toplevel, refrepo))
         return looking_for in amap
 
     def find_all_gitdirs(
@@ -259,7 +266,7 @@ class GrokSession:
                     continue
                 if not is_bare_git_repo(fullpath):
                     continue
-                if exclude_objstore and os.path.exists(os.path.join(fullpath, 'grokmirror.objstore')):
+                if exclude_objstore and Path(fullpath, 'grokmirror.objstore').exists():
                     continue
                 if normalize:
                     fullpath = os.path.realpath(fullpath)
@@ -319,7 +326,9 @@ def file_mode(base: int = 0o666) -> int:
     return base & ~UMASK
 
 
-def get_config_from_git(fullpath: str | None, regexp: str, defaults: dict[str, str] | None = None) -> dict[str, str]:
+def get_config_from_git(
+    fullpath: StrPath | None, regexp: str, defaults: dict[str, str] | None = None
+) -> dict[str, str]:
     args = ['config', '-z', '--get-regexp', regexp]
     _ecode, out, _err = run_git_command(fullpath, args)
     gitconfig = defaults
@@ -342,7 +351,7 @@ def get_config_from_git(fullpath: str | None, regexp: str, defaults: dict[str, s
     return gitconfig
 
 
-def set_git_config(fullpath: str, param: str, value: str, operation: str = '--replace-all') -> int:
+def set_git_config(fullpath: StrPath, param: str, value: str, operation: str = '--replace-all') -> int:
     args = ['config', operation, param, value]
     ecode, _out, _err = run_git_command(fullpath, args)
     return ecode
@@ -423,7 +432,7 @@ def run_shell_command(
 
 @overload
 def run_git_command(
-    fullpath: str | None,
+    fullpath: StrPath | None,
     args: list[str],
     stdin: bytes | None = ...,
     decode: Literal[True] = ...,
@@ -433,7 +442,7 @@ def run_git_command(
 
 @overload
 def run_git_command(
-    fullpath: str | None,
+    fullpath: StrPath | None,
     args: list[str],
     stdin: bytes | None = ...,
     *,
@@ -443,7 +452,7 @@ def run_git_command(
 
 
 def run_git_command(
-    fullpath: str | None,
+    fullpath: StrPath | None,
     args: list[str],
     stdin: bytes | None = None,
     decode: bool = True,
@@ -451,12 +460,14 @@ def run_git_command(
 ) -> tuple[int, str, str] | tuple[int, bytes, bytes]:
     _git = os.environ.get('GITBIN', GITBIN)
 
-    if not os.path.isfile(_git) and os.access(_git, os.X_OK):
+    if not Path(_git).is_file() and os.access(_git, os.X_OK):
         # we hope for the best by using 'git' without full path
         _git = 'git'
 
     if fullpath is not None:
-        cmdargs = [_git, '--no-pager', '--git-dir', fullpath] + args
+        # os.fspath(), not str(): the argv has to be strings all the way
+        # through, because run_shell_command() logs it with ' '.join().
+        cmdargs = [_git, '--no-pager', '--git-dir', os.fspath(fullpath)] + args
     else:
         cmdargs = [_git, '--no-pager'] + args
 
@@ -467,30 +478,34 @@ def run_git_command(
     return run_shell_command(cmdargs, stdin, decode=False, timeout=timeout)
 
 
-def _lockname(fullpath: str) -> str:
-    lockpath = os.path.dirname(fullpath)
-    lockname = f'.{os.path.basename(fullpath)}.lock'
-    # dirname() is empty for a bare filename like "manifest.js.gz", and
-    # makedirs('') raises instead of being a no-op. Lock next to it in the cwd.
-    if lockpath and not os.path.exists(lockpath):
-        os.makedirs(lockpath)
-    repolock = os.path.join(lockpath, lockname)
-    return repolock
+def _lockname(fullpath: StrPath) -> str:
+    target = Path(fullpath)
+    # For a bare filename like "manifest.js.gz" the parent is '.', where
+    # os.path.dirname() used to give '' -- so this no longer needs the guard
+    # that kept makedirs('') from raising. mkdir('.') with exist_ok is a
+    # no-op, and joining onto '.' drops it, so the lock still lands next to
+    # the file in the cwd.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return str(target.parent / f'.{target.name}.lock')
 
 
-def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
+def lock_repo(fullpath: StrPath, nonblocking: bool = False) -> None:
+    # The registry is keyed by the path *string*. One caller holding a Path
+    # and another holding an equal str must land on the same entry, or the
+    # double-lock guard below quietly stops guarding anything.
+    key = os.fspath(fullpath)
     with _REPO_LOCKH_MUTEX:
-        if fullpath in REPO_LOCKH:
+        if key in REPO_LOCKH:
             # A second lock would succeed instantly (fcntl locks cannot
             # protect a process from itself) and the first unlock_repo()
             # would release both, so a second lock from anywhere in this
             # process -- same thread or another one -- must fail instead.
-            raise GrokLockError(f'{fullpath} is already locked by this process')
+            raise GrokLockError(f'{key} is already locked by this process')
         # Claim the entry before touching the lock file. Merely opening a
         # second descriptor of a file this process holds a lock on is enough
         # to lose that lock when the descriptor is closed again, so the
         # check above and this claim must be one atomic step.
-        REPO_LOCKH[fullpath] = None
+        REPO_LOCKH[key] = None
 
     repolock = _lockname(fullpath)
 
@@ -502,7 +517,7 @@ def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
         lockfh = open(repolock, 'w', encoding='utf-8')  # noqa: SIM115
     except OSError:
         with _REPO_LOCKH_MUTEX:
-            del REPO_LOCKH[fullpath]
+            del REPO_LOCKH[key]
         raise
 
     flags = (LOCK_EX | LOCK_NB) if nonblocking else LOCK_EX
@@ -518,14 +533,14 @@ def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
         # because the registry says this process holds no lock on the file.
         lockfh.close()
         with _REPO_LOCKH_MUTEX:
-            del REPO_LOCKH[fullpath]
+            del REPO_LOCKH[key]
         raise GrokLockError(f'Could not obtain exclusive lock on {repolock}') from ex
-    REPO_LOCKH[fullpath] = lockfh
+    REPO_LOCKH[key] = lockfh
 
 
-def unlock_repo(fullpath: str) -> None:
+def unlock_repo(fullpath: StrPath) -> None:
     with _REPO_LOCKH_MUTEX:
-        lockfh = REPO_LOCKH.pop(fullpath, None)
+        lockfh = REPO_LOCKH.pop(os.fspath(fullpath), None)
     if lockfh is not None:
         logger.debug('Unlocking %s', fullpath)
         lockf(lockfh, LOCK_UN)
@@ -533,7 +548,7 @@ def unlock_repo(fullpath: str) -> None:
 
 
 @contextmanager
-def locked_repo(fullpath: str, nonblocking: bool = False) -> Iterator[None]:
+def locked_repo(fullpath: StrPath, nonblocking: bool = False) -> Iterator[None]:
     """Hold the exclusive repository lock for the duration of the with block.
 
     Raises GrokLockError if the lock cannot be obtained; with
@@ -547,18 +562,43 @@ def locked_repo(fullpath: str, nonblocking: bool = False) -> Iterator[None]:
         unlock_repo(fullpath)
 
 
-def is_bare_git_repo(path: str) -> bool:
+def gitdir_to_fullpath(toplevel: StrPath, gitdir: str) -> Path:
+    """
+    Turn a manifest key ('/pub/scm/foo.git') into the path it names under
+    toplevel.
+
+    The lstrip is the whole point of having this as a function. Manifest keys
+    are spelled with a leading slash, and both os.path.join() and Path()
+    *discard everything to the left* of an absolute component, so joining a
+    key on directly hands you '/pub/scm/foo.git' on the real filesystem
+    rather than a path inside the mirror. That rule was rediscovered by hand
+    at eighteen call sites; now it lives in one.
+    """
+    return Path(toplevel, gitdir.lstrip('/'))
+
+
+def fullpath_to_gitdir(toplevel: StrPath, fullpath: StrPath) -> str:
+    """
+    Turn a path under toplevel into the manifest key that names it.
+
+    os.path.relpath, not Path.relative_to: manifest keys have to come out as
+    plain strings, and relative_to() raises for anything not under toplevel
+    where relpath walks up with '..'. Path only grew walk_up= in 3.12, well
+    past our floor. relpath never returns a leading slash of its own, so the
+    result always has exactly the one we put there.
+    """
+    return '/' + os.path.relpath(fullpath, toplevel)
+
+
+def is_bare_git_repo(path: StrPath) -> bool:
     """
     Return True if path (which is already verified to be a directory)
     sufficiently resembles a base git repo (good enough to fool git
     itself).
     """
     logger.debug('Checking if %s is a git repository', path)
-    if (
-        os.path.isdir(os.path.join(path, 'objects'))
-        and os.path.isdir(os.path.join(path, 'refs'))
-        and os.path.isfile(os.path.join(path, 'HEAD'))
-    ):
+    path = Path(path)
+    if (path / 'objects').is_dir() and (path / 'refs').is_dir() and (path / 'HEAD').is_file():
         return True
 
     logger.debug('Skipping %s: not a git repository', path)
@@ -568,10 +608,9 @@ def is_bare_git_repo(path: str) -> bool:
 def get_repo_timestamp(toplevel: str, gitdir: str) -> int:
     ts = 0
 
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
-    if os.path.exists(tsfile):
-        contents = pathlib.Path(tsfile).read_bytes()
+    tsfile = gitdir_to_fullpath(toplevel, gitdir) / 'grokmirror.timestamp'
+    if tsfile.exists():
+        contents = tsfile.read_bytes()
         try:
             ts = int(contents)
             logger.debug('Timestamp for %s: %s', gitdir, ts)
@@ -584,11 +623,10 @@ def get_repo_timestamp(toplevel: str, gitdir: str) -> int:
 
 
 def set_repo_timestamp(toplevel: str, gitdir: str, ts: int) -> None:
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
+    tsfile = gitdir_to_fullpath(toplevel, gitdir) / 'grokmirror.timestamp'
 
     # int() keeps the truncating behaviour the old '%d' formatting had
-    pathlib.Path(tsfile).write_text(f'{int(ts)}', encoding='utf-8')
+    tsfile.write_text(f'{int(ts)}', encoding='utf-8')
 
     logger.debug('Recorded timestamp for %s: %s', gitdir, ts)
 
@@ -606,11 +644,10 @@ def get_repo_obj_info(fullpath: str) -> dict[str, str]:
 
 
 def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: list[str] | None = None) -> RepoInfo:
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+    fullpath = gitdir_to_fullpath(toplevel, gitdir)
     description = None
     try:
-        descfile = os.path.join(fullpath, 'description')
-        contents = pathlib.Path(descfile).read_bytes().strip()
+        contents = (fullpath / 'description').read_bytes().strip()
         if contents and b'edit this file' not in contents:
             # We don't need to tell mirrors to edit this file
             description = contents.decode(errors='replace')
@@ -640,14 +677,14 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
 
     head = None
     try:
-        head = pathlib.Path(fullpath, 'HEAD').read_text(encoding='utf-8').strip()
+        head = Path(fullpath, 'HEAD').read_text(encoding='utf-8').strip()
     except OSError:
         pass
 
     forkgroup = None
     altrepo = get_altrepo(fullpath)
-    if altrepo and os.path.exists(os.path.join(altrepo, 'grokmirror.objstore')):
-        forkgroup = os.path.basename(altrepo).removesuffix('.git')
+    if altrepo and Path(altrepo, 'grokmirror.objstore').exists():
+        forkgroup = Path(altrepo).name.removesuffix('.git')
 
     # we need a way to quickly compare whether mirrored repositories match
     # what is in the master manifest. To this end, we calculate a so-called
@@ -674,11 +711,10 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
     return repoinfo
 
 
-def get_altrepo(fullpath: str) -> str | None:
-    altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
+def get_altrepo(fullpath: StrPath) -> str | None:
     altdir = None
     try:
-        contents = pathlib.Path(altfile).read_text(encoding='utf-8').strip()
+        contents = Path(fullpath, 'objects', 'info', 'alternates').read_text(encoding='utf-8').strip()
         altpath = contents.removesuffix('/objects')
         # A bare "/objects" would leave nothing to point at, and realpath('')
         # is the current directory -- exactly the kind of answer we never want.
@@ -690,12 +726,12 @@ def get_altrepo(fullpath: str) -> str | None:
     return altdir
 
 
-def set_altrepo(fullpath: str, altdir: str) -> None:
+def set_altrepo(fullpath: StrPath, altdir: StrPath) -> None:
     # I assume you already checked if this is a sane operation to perform
-    altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
-    objpath = os.path.join(altdir, 'objects')
-    if os.path.isdir(objpath):
-        pathlib.Path(altfile).write_text(objpath + '\n', encoding='utf-8')
+    altfile = Path(fullpath, 'objects', 'info', 'alternates')
+    objpath = Path(altdir, 'objects')
+    if objpath.is_dir():
+        altfile.write_text(f'{objpath}\n', encoding='utf-8')
     else:
         logger.critical('objdir %s does not exist, not setting alternates file %s', objpath, altfile)
 
@@ -720,13 +756,13 @@ def get_rootsets(ses: GrokSession, toplevel: str, obstdir: str) -> tuple[dict[st
     return top_roots, obst_roots
 
 
-def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
-    if not os.path.exists(fullpath):
+def get_repo_roots(fullpath: StrPath, force: bool = False) -> set[str] | None:
+    if not Path(fullpath).exists():
         logger.debug('Cannot check roots in %s, as it does not exist', fullpath)
         return None
-    rfile = os.path.join(fullpath, 'grokmirror.roots')
-    if not force and os.path.exists(rfile):
-        content = pathlib.Path(rfile).read_text(encoding='utf-8')
+    rfile = Path(fullpath, 'grokmirror.roots')
+    if not force and rfile.exists():
+        content = rfile.read_text(encoding='utf-8')
         roots = set(content.splitlines())
     else:
         logger.debug('Generating roots for %s', fullpath)
@@ -740,38 +776,37 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
             return None
 
         # save it for future use
-        pathlib.Path(rfile).write_text(out, encoding='utf-8')
+        rfile.write_text(out, encoding='utf-8')
         logger.debug('Wrote %s', rfile)
         roots = set(out.splitlines())
 
     return roots
 
 
-def setup_bare_repo(fullpath: str) -> bool:
-    args = ['init', '--bare', fullpath]
+def setup_bare_repo(fullpath: StrPath) -> bool:
+    args = ['init', '--bare', os.fspath(fullpath)]
     ecode, _out, _err = run_git_command(None, args)
     if ecode > 0:
         logger.critical('Unable to bare-init %s', fullpath)
         return False
 
     # Remove .sample files from hooks, because they are just dead weight
-    hooksdir = os.path.join(fullpath, 'hooks')
-    for child in pathlib.Path(hooksdir).iterdir():
+    for child in Path(fullpath, 'hooks').iterdir():
         if child.suffix == '.sample':
             child.unlink()
     # We never want auto-gc anywhere
     set_git_config(fullpath, 'gc.auto', '0')
     # We don't care about FETCH_HEAD information and writing to it just
     # wastes IO cycles
-    os.symlink('/dev/null', os.path.join(fullpath, 'FETCH_HEAD'))
+    Path(fullpath, 'FETCH_HEAD').symlink_to('/dev/null')
     return True
 
 
-def setup_objstore_repo(obstdir: str, name: str | None = None) -> str:
+def setup_objstore_repo(obstdir: StrPath, name: str | None = None) -> str:
     if name is None:
         name = str(uuid.uuid4())
-    pathlib.Path(obstdir).mkdir(parents=True, exist_ok=True)
-    obstrepo = os.path.join(obstdir, f'{name}.git')
+    Path(obstdir).mkdir(parents=True, exist_ok=True)
+    obstrepo = str(Path(obstdir, f'{name}.git'))
     logger.debug('Creating objstore repo in %s', obstrepo)
     with locked_repo(obstrepo):
         if not setup_bare_repo(obstrepo):
@@ -785,19 +820,17 @@ def setup_objstore_repo(obstdir: str, name: str | None = None) -> str:
         set_git_config(obstrepo, 'repack.useDeltaIslands', 'true')
         set_git_config(obstrepo, 'repack.writeBitmaps', 'true')
         set_git_config(obstrepo, 'pack.island', 'refs/virtual/([0-9a-f]+)/', operation='--add')
-        telltale = os.path.join(obstrepo, 'grokmirror.objstore')
-        pathlib.Path(telltale).write_text(OBST_PREAMBULE, encoding='utf-8')
+        Path(obstrepo, 'grokmirror.objstore').write_text(OBST_PREAMBULE, encoding='utf-8')
     return obstrepo
 
 
-def objstore_virtref(fullpath: str) -> str:
-    fullpath = os.path.realpath(fullpath)
+def objstore_virtref(fullpath: StrPath) -> str:
     vh = hashlib.sha1()
-    vh.update(fullpath.encode())
+    vh.update(os.path.realpath(fullpath).encode())
     return vh.hexdigest()[:12]
 
 
-def objstore_trim_virtref(obstrepo: str, virtref: str) -> None:
+def objstore_trim_virtref(obstrepo: StrPath, virtref: str) -> None:
     args = ['for-each-ref', '--format', 'delete %(refname)', f'refs/virtual/{virtref}']
     ecode, out, _err = run_git_command(obstrepo, args)
     if ecode == 0 and out:
@@ -806,7 +839,7 @@ def objstore_trim_virtref(obstrepo: str, virtref: str) -> None:
         run_git_command(obstrepo, args, stdin=out.encode())
 
 
-def remove_from_objstore(obstrepo: str, fullpath: str) -> bool:
+def remove_from_objstore(obstrepo: StrPath, fullpath: StrPath) -> bool:
     # is fullpath still using us?
     altrepo = get_altrepo(fullpath)
     if altrepo and os.path.realpath(obstrepo) == os.path.realpath(altrepo):
@@ -816,7 +849,7 @@ def remove_from_objstore(obstrepo: str, fullpath: str) -> bool:
         if ecode > 0:
             logger.debug('Could not repack child repo %s for removal from %s', fullpath, obstrepo)
             return False
-        os.unlink(os.path.join(fullpath, 'objects', 'info', 'alternates'))
+        Path(fullpath, 'objects', 'info', 'alternates').unlink()
 
     virtref = objstore_virtref(fullpath)
     objstore_trim_virtref(obstrepo, virtref)
@@ -824,23 +857,23 @@ def remove_from_objstore(obstrepo: str, fullpath: str) -> bool:
     args = ['remote', 'remove', virtref]
     run_git_command(obstrepo, args)
     try:
-        os.unlink(os.path.join(obstrepo, f'grokmirror.{virtref}.fingerprint'))
+        Path(obstrepo, f'grokmirror.{virtref}.fingerprint').unlink()
     except (OSError, FileNotFoundError):
         pass
     return True
 
 
 @overload
-def list_repo_remotes(fullpath: str, withurl: Literal[False] = ...) -> list[str]: ...
+def list_repo_remotes(fullpath: StrPath, withurl: Literal[False] = ...) -> list[str]: ...
 
 
 @overload
-def list_repo_remotes(fullpath: str, withurl: Literal[True]) -> list[tuple[str, ...]]: ...
+def list_repo_remotes(fullpath: StrPath, withurl: Literal[True]) -> list[tuple[str, ...]]: ...
 
 
 # withurl decides whether callers get bare remote names or (name, url) pairs,
 # so overload it the same way run_shell_command() overloads decode.
-def list_repo_remotes(fullpath: str, withurl: bool = False) -> list[str] | list[tuple[str, ...]]:
+def list_repo_remotes(fullpath: StrPath, withurl: bool = False) -> list[str] | list[tuple[str, ...]]:
     args = ['remote']
     if withurl:
         args.append('-v')
@@ -858,58 +891,57 @@ def list_repo_remotes(fullpath: str, withurl: bool = False) -> list[str] | list[
     return list(dict.fromkeys(tuple(line.split()[:2]) for line in out.splitlines()))
 
 
-def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
+def add_repo_to_objstore(obstrepo: StrPath, fullpath: StrPath) -> bool:
+    sibling = os.fspath(fullpath)
     virtref = objstore_virtref(fullpath)
     remotes = list_repo_remotes(obstrepo)
     if virtref in remotes:
         logger.debug('%s is already set up for objstore in %s', fullpath, obstrepo)
         return False
 
-    args = ['remote', 'add', virtref, fullpath, '--no-tags']
+    args = ['remote', 'add', virtref, sibling, '--no-tags']
     ecode, _out, _err = run_git_command(obstrepo, args)
     if ecode > 0:
         logger.critical('Could not add remote to %s', obstrepo)
         raise GrokError(f'Could not add remote to {obstrepo}')
     set_git_config(obstrepo, f'remote.{virtref}.fetch', f'+refs/*:refs/virtual/{virtref}/*')
-    telltale = os.path.join(obstrepo, 'grokmirror.objstore')
+    telltale = Path(obstrepo, 'grokmirror.objstore')
     knownsiblings = set()
-    if os.path.exists(telltale):
-        with open(telltale, encoding='utf-8') as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line[0] == '#':
-                    continue
-                if os.path.isdir(line):
-                    knownsiblings.add(line)
-    knownsiblings.add(fullpath)
-    with open(telltale, 'w', encoding='utf-8') as fh:
-        fh.write(OBST_PREAMBULE)
-        fh.write('\n'.join(sorted(knownsiblings)) + '\n')
+    if telltale.exists():
+        for line in telltale.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if not line or line[0] == '#':
+                continue
+            if Path(line).is_dir():
+                knownsiblings.add(line)
+    knownsiblings.add(sibling)
+    telltale.write_text(OBST_PREAMBULE + '\n'.join(sorted(knownsiblings)) + '\n', encoding='utf-8')
 
     return True
 
 
-def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: str) -> bool:
+def _fetch_objstore_repo_using_plumbing(srcrepo: StrPath, obstrepo: StrPath, virtref: str) -> bool:
     # Copies objects to objstore repos using direct git plumbing
     # as opposed to using "fetch". See discussion here:
     # http://lore.kernel.org/git/20200720173220.GB2045458@coredump.intra.peff.net
     # First, hardlink all objects and packs
-    srcobj = os.path.join(srcrepo, 'objects')
-    dstobj = os.path.join(obstrepo, 'objects')
+    srcobj = Path(srcrepo, 'objects')
+    dstobj = Path(obstrepo, 'objects')
     torm = set()
     for root, dirs, files in os.walk(srcobj, topdown=True):
         if 'info' in dirs:
             dirs.remove('info')
         subpath = os.path.relpath(root, srcobj)
         for file in files:
-            srcpath = os.path.join(root, file)
+            srcpath = Path(root, file)
             if file.endswith('.bitmap'):
                 torm.add(srcpath)
                 continue
-            # normpath because relpath says '.' for the top of the walk
-            dstpath = os.path.normpath(os.path.join(dstobj, subpath, file))
-            if not os.path.exists(dstpath):
-                pathlib.Path(os.path.dirname(dstpath)).mkdir(parents=True, exist_ok=True)
+            # relpath says '.' for the top of the walk, which Path() drops on
+            # its own -- the normpath() this used to need is gone with it.
+            dstpath = Path(dstobj, subpath, file)
+            if not dstpath.exists():
+                dstpath.parent.mkdir(parents=True, exist_ok=True)
                 os.link(srcpath, dstpath)
                 torm.add(srcpath)
 
@@ -958,21 +990,25 @@ def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: st
         logger.debug('Could not update-ref %s: %s', obstrepo, err)
         return False
 
-    for file in torm:
-        os.unlink(file)
+    for stale in torm:
+        stale.unlink()
 
     return True
 
 
 def fetch_objstore_repo(
-    obstrepo: str, fullpath: str | None = None, pack_refs: bool = False, use_plumbing: bool = False
+    obstrepo: StrPath, fullpath: StrPath | None = None, pack_refs: bool = False, use_plumbing: bool = False
 ) -> bool:
     my_remotes = list_repo_remotes(obstrepo, withurl=True)
     remotes: list[tuple[str, ...]]
     if fullpath:
-        virtref = objstore_virtref(fullpath)
-        if (virtref, fullpath) in my_remotes:
-            remotes = [(virtref, fullpath)]
+        # The remotes come back from git as strings, so the sibling has to be
+        # one too -- a Path would never match the tuple and every caller
+        # holding one would silently be told it is not a known sibling.
+        sibling = os.fspath(fullpath)
+        virtref = objstore_virtref(sibling)
+        if (virtref, sibling) in my_remotes:
+            remotes = [(virtref, sibling)]
         else:
             logger.debug('%s is not in remotes for %s', fullpath, obstrepo)
             return False
@@ -989,10 +1025,9 @@ def fetch_objstore_repo(
                 success = False
 
         if success:
-            r_fp = os.path.join(url, 'grokmirror.fingerprint')
-            if os.path.exists(r_fp):
-                l_fp = os.path.join(obstrepo, f'grokmirror.{virtref}.fingerprint')
-                shutil.copy(r_fp, l_fp)
+            r_fp = Path(url, 'grokmirror.fingerprint')
+            if r_fp.exists():
+                shutil.copy(r_fp, Path(obstrepo, f'grokmirror.{virtref}.fingerprint'))
             if pack_refs:
                 try:
                     with locked_repo(obstrepo, nonblocking=True):
@@ -1061,7 +1096,7 @@ def find_best_obstrepo(
             # Any of its member siblings match baselines?
             s_remotes = list_repo_remotes(path, withurl=True)
             for _virtref, childpath in s_remotes:
-                gitdir = '/' + os.path.relpath(childpath, toplevel)
+                gitdir = fullpath_to_gitdir(toplevel, childpath)
                 if baselinematch.match(gitdir):
                     # Use this one
                     return path
@@ -1076,11 +1111,11 @@ def find_best_obstrepo(
     return obstrepo
 
 
-def get_obstrepo_mapping(obstdir: str) -> dict[str, str]:
+def get_obstrepo_mapping(obstdir: StrPath) -> dict[str, str]:
     mapping: dict[str, str] = {}
-    if not os.path.isdir(obstdir):
+    if not Path(obstdir).is_dir():
         return mapping
-    for child in pathlib.Path(obstdir).iterdir():
+    for child in Path(obstdir).iterdir():
         if child.is_dir() and child.suffix == '.git':
             obstrepo = child.as_posix()
             ecode, out, _err = run_git_command(obstrepo, ['remote', '-v'])
@@ -1095,19 +1130,19 @@ def get_obstrepo_mapping(obstdir: str) -> dict[str, str]:
                 if url in mapping:
                     continue
                 # Does it still exist?
-                if not os.path.isdir(url):
+                if not Path(url).is_dir():
                     continue
                 mapping[url] = obstrepo
     return mapping
 
 
-def find_objstore_repo_for(obstdir: str, fullpath: str) -> str | None:
-    if not os.path.isdir(obstdir):
+def find_objstore_repo_for(obstdir: StrPath, fullpath: StrPath) -> str | None:
+    if not Path(obstdir).is_dir():
         return None
 
     logger.debug('Finding an objstore repo matching %s', fullpath)
     virtref = objstore_virtref(fullpath)
-    for child in pathlib.Path(obstdir).iterdir():
+    for child in Path(obstdir).iterdir():
         if child.is_dir() and child.suffix == '.git':
             obstrepo = child.as_posix()
             remotes = list_repo_remotes(obstrepo)
@@ -1119,11 +1154,11 @@ def find_objstore_repo_for(obstdir: str, fullpath: str) -> str | None:
     return None
 
 
-def get_forkgroups(obstdir: str, toplevel: str) -> dict[str, set[str]]:
+def get_forkgroups(obstdir: StrPath, toplevel: StrPath) -> dict[str, set[str]]:
     forkgroups: dict[str, set[str]] = {}
-    if not os.path.exists(obstdir):
+    if not Path(obstdir).exists():
         return forkgroups
-    for child in pathlib.Path(obstdir).iterdir():
+    for child in Path(obstdir).iterdir():
         if child.is_dir() and child.suffix == '.git':
             forkgroup = child.stem
             forkgroups[forkgroup] = set()
@@ -1132,23 +1167,23 @@ def get_forkgroups(obstdir: str, toplevel: str) -> dict[str, set[str]]:
             for virtref, url in remotes:
                 # Objstore remotes point at local child repos; anything not
                 # under our toplevel (as a path, not a string prefix) is not ours.
-                if not pathlib.PurePath(url).is_relative_to(toplevel):
+                if not PurePath(url).is_relative_to(toplevel):
                     continue
                 forkgroups[forkgroup].add(url)
     return forkgroups
 
 
 def get_repo_fingerprint(
-    toplevel: str, gitdir: str, force: bool = False, ignorerefs: list[str] | None = None
+    toplevel: StrPath, gitdir: str, force: bool = False, ignorerefs: list[str] | None = None
 ) -> str | None:
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    if not os.path.exists(fullpath):
+    fullpath = gitdir_to_fullpath(toplevel, gitdir)
+    if not fullpath.exists():
         logger.debug('Cannot fingerprint %s, as it does not exist', fullpath)
         return None
 
-    fpfile = os.path.join(fullpath, 'grokmirror.fingerprint')
-    if not force and os.path.exists(fpfile):
-        fingerprint = pathlib.Path(fpfile).read_text(encoding='utf-8')
+    fpfile = fullpath / 'grokmirror.fingerprint'
+    if not force and fpfile.exists():
+        fingerprint = fpfile.read_text(encoding='utf-8')
         logger.debug('Fingerprint for %s: %s', gitdir, fingerprint)
     else:
         logger.debug('Generating fingerprint for %s', gitdir)
@@ -1179,9 +1214,8 @@ def get_repo_fingerprint(
     return fingerprint
 
 
-def set_repo_fingerprint(toplevel: str, gitdir: str, fingerprint: str | None = None) -> str | None:
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-    fpfile = os.path.join(fullpath, 'grokmirror.fingerprint')
+def set_repo_fingerprint(toplevel: StrPath, gitdir: str, fingerprint: str | None = None) -> str | None:
+    fpfile = gitdir_to_fullpath(toplevel, gitdir) / 'grokmirror.fingerprint'
 
     if fingerprint is None:
         fingerprint = get_repo_fingerprint(toplevel, gitdir, force=True)
@@ -1192,22 +1226,22 @@ def set_repo_fingerprint(toplevel: str, gitdir: str, fingerprint: str | None = N
             logger.debug('No fingerprint to record for %s', gitdir)
             return None
 
-    pathlib.Path(fpfile).write_text(fingerprint, encoding='utf-8')
+    fpfile.write_text(fingerprint, encoding='utf-8')
 
     logger.debug('Recorded fingerprint for %s: %s', gitdir, fingerprint)
     return fingerprint
 
 
-def is_obstrepo(fullpath: str, obstdir: str | None = None) -> bool:
+def is_obstrepo(fullpath: StrPath, obstdir: StrPath | None = None) -> bool:
     if obstdir:
         # At this point, both should be normalized. Compare as paths, not as
         # strings: /srv/objstore-private/x.git is not inside /srv/objstore.
-        return pathlib.PurePath(fullpath).is_relative_to(obstdir)
+        return PurePath(fullpath).is_relative_to(obstdir)
     # Just check if it has a grokmirror.objstore file in the repo
-    return os.path.exists(os.path.join(fullpath, 'grokmirror.objstore'))
+    return Path(fullpath, 'grokmirror.objstore').exists()
 
 
-def manifest_lock(manifile: str) -> None:
+def manifest_lock(manifile: StrPath) -> None:
     global MANIFEST_LOCKH
     # The mutex is held across the blocking fcntl call. That is safe from
     # deadlock: if the check below passes, no thread of this process holds
@@ -1236,7 +1270,7 @@ def manifest_lock(manifile: str) -> None:
         logger.debug('Manifest lock obtained')
 
 
-def manifest_unlock(manifile: str) -> None:
+def manifest_unlock(manifile: StrPath) -> None:
     global MANIFEST_LOCKH
     with _MANIFEST_LOCKH_MUTEX:
         lockfh = MANIFEST_LOCKH
@@ -1262,9 +1296,10 @@ def locked_manifest(manifile: str) -> Iterator[None]:
         manifest_unlock(manifile)
 
 
-def read_manifest(manifile: str, wait: bool = False) -> Manifest:
+def read_manifest(manifile: StrPath, wait: bool = False) -> Manifest:
+    manipath = Path(manifile)
     while True:
-        if not wait or os.path.exists(manifile):
+        if not wait or manipath.exists():
             break
         logger.info(' manifest: manifest does not exist yet, waiting ...')
         # Unlock the manifest so other processes aren't waiting for us
@@ -1276,11 +1311,11 @@ def read_manifest(manifile: str, wait: bool = False) -> Manifest:
         if was_locked:
             manifest_lock(manifile)
 
-    if not os.path.exists(manifile):
+    if not manipath.exists():
         logger.info(' manifest: no local manifest, assuming initial run')
         return {}
 
-    opener = gzip.open if manifile.endswith('.gz') else open
+    opener = gzip.open if manipath.suffix == '.gz' else open
 
     logger.debug('Reading %s', manifile)
     with opener(manifile, 'rt', encoding='utf-8') as fh:
@@ -1298,11 +1333,12 @@ def read_manifest(manifile: str, wait: bool = False) -> Manifest:
     return manifest
 
 
-def write_manifest(manifile: str, manifest: Manifest, mtime: int | None = None, pretty: bool = False) -> None:
-    logger.debug('Writing new %s', manifile)
+def write_manifest(manifile: StrPath, manifest: Manifest, mtime: int | None = None, pretty: bool = False) -> None:
+    manipath = Path(manifile)
+    logger.debug('Writing new %s', manipath)
 
-    (dirname, basename) = os.path.split(manifile)
-    (fd, tmpfile) = tempfile.mkstemp(prefix=basename, dir=dirname)
+    (fd, tmpname) = tempfile.mkstemp(prefix=manipath.name, dir=manipath.parent)
+    tmpfile = Path(tmpname)
     fh = os.fdopen(fd, 'wb', 0)
     logger.debug('Created a temporary file in %s', tmpfile)
     logger.debug('Writing to %s', tmpfile)
@@ -1310,7 +1346,7 @@ def write_manifest(manifile: str, manifest: Manifest, mtime: int | None = None, 
         jdata = json.dumps(manifest, indent=2, sort_keys=True) if pretty else json.dumps(manifest)
 
         jbytes = jdata.encode('utf-8')
-        if manifile.endswith('.gz'):
+        if manipath.suffix == '.gz':
             gfh = gzip.GzipFile(fileobj=fh, mode='wb')
             gfh.write(jbytes)
             gfh.close()
@@ -1320,21 +1356,21 @@ def write_manifest(manifile: str, manifest: Manifest, mtime: int | None = None, 
         os.fsync(fd)
         fh.close()
         # mkstemp() always creates 0600, so put the umask back on
-        os.chmod(tmpfile, file_mode())
+        tmpfile.chmod(file_mode())
         if mtime is not None:
             logger.debug('Setting mtime to %s', mtime)
             os.utime(tmpfile, (mtime, mtime))
-        logger.debug('Moving %s to %s', tmpfile, manifile)
+        logger.debug('Moving %s to %s', tmpfile, manipath)
         # os.replace, not shutil.move: the whole tempfile dance exists to make
         # this step atomic, and shutil.move quietly degrades to copy+unlink.
         # Same directory as the target, so this can never cross a filesystem.
-        os.replace(tmpfile, manifile)
+        os.replace(tmpfile, manipath)
 
     finally:
         # If something failed, don't leave these trailing around
-        if os.path.exists(tmpfile):
+        if tmpfile.exists():
             logger.debug('Removing %s', tmpfile)
-            os.unlink(tmpfile)
+            tmpfile.unlink()
 
 
 class GrokConfigParser(ConfigParser):
@@ -1342,8 +1378,8 @@ class GrokConfigParser(ConfigParser):
     last_modified: int = 0
 
 
-def load_config_file(cfgfile: str) -> GrokConfigParser:
-    if not os.path.exists(cfgfile):
+def load_config_file(cfgfile: StrPath) -> GrokConfigParser:
+    if not Path(cfgfile).exists():
         raise GrokConfigError(f'File does not exist: {cfgfile}')
     config = GrokConfigParser(interpolation=ExtendedInterpolation())
     config.read(cfgfile, encoding='utf-8')
@@ -1357,7 +1393,7 @@ def load_config_file(cfgfile: str) -> GrokConfigParser:
     if not cfgtoplevel:
         raise GrokConfigError(f'Section [core] must define "toplevel" in: {cfgfile}')
 
-    toplevel = os.path.realpath(os.path.expanduser(cfgtoplevel))
+    toplevel = os.path.realpath(Path(cfgtoplevel).expanduser())
     if not os.access(toplevel, os.W_OK):
         raise GrokConfigError(f'Toplevel {toplevel} does not exist or is not writable')
     # Just in case we did expanduser
@@ -1365,15 +1401,15 @@ def load_config_file(cfgfile: str) -> GrokConfigParser:
 
     obstdir = config['core'].get('objstore', None)
     if obstdir is None:
-        obstdir = os.path.join(toplevel, 'objstore')
+        obstdir = str(Path(toplevel, 'objstore'))
         config['core']['objstore'] = obstdir
 
     # Handle some other defaults
     manifile = config['core'].get('manifest')
     if not manifile:
-        config['core']['manifest'] = os.path.join(toplevel, 'manifest.js.gz')
+        config['core']['manifest'] = str(Path(toplevel, 'manifest.js.gz'))
 
-    fstat = os.stat(cfgfile)
+    fstat = Path(cfgfile).stat()
     # stick last config file modification date into the config object,
     # so we can catch config file updates. Whole seconds, same as the old
     # fstat[8] indexing gave us -- it goes into the manifest status file and
@@ -1444,7 +1480,7 @@ def init_logger(subcommand: str, logfile: str | None, loglevel: int, verbose: bo
     logger.setLevel(logging.DEBUG)
 
     if logfile:
-        fh = logging.handlers.WatchedFileHandler(os.path.expanduser(logfile), encoding='utf-8')
+        fh = logging.handlers.WatchedFileHandler(Path(logfile).expanduser(), encoding='utf-8')
         formatter = logging.Formatter(subcommand + '[%(process)d] %(asctime)s - %(levelname)s - %(message)s')
         fh.setFormatter(formatter)
         fh.setLevel(loglevel)
