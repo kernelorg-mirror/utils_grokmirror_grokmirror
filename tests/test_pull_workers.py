@@ -199,3 +199,22 @@ def test_pull_worker_pulls_and_queues_spa_actions(origin: GrokTree, tree: GrokTr
     assert 'packrefs-all' in spa_actions
     # The lock was released for the next action on this repository.
     assert fullpath not in grokmirror.REPO_LOCKH
+
+
+@pytest.mark.parametrize('site', ['https://git.example.org/pub/scm', 'https://git.example.org/pub/scm/'])
+def test_remote_url_is_joined_as_a_url(origin: GrokTree, tree: GrokTree, site: str) -> None:
+    # [remote] site is a URL, and the remote URL used to be built with
+    # os.path.join(), which is only ever right for one by coincidence: the
+    # separator happens to match. Path() is not even that -- it collapses the
+    # '//' in 'https://' (or 'file://') down to one slash, so a conversion to
+    # pathlib would hand git a remote nothing can fetch from. Both spellings of
+    # site, with and without a trailing slash, must give the same URL.
+    cfgfile = tree.write_mirror_config(origin)
+    config = grokmirror.load_config_file(str(cfgfile))
+
+    fullpath = str(tree.path('test/one.git'))
+    assert grokmirror.setup_bare_repo(fullpath)
+    assert grokmirror.pull.fix_remotes(str(tree.toplevel), '/test/one.git', site, config)
+
+    url = git('remote', 'get-url', '_grokmirror', cwd=tree.path('test/one.git')).strip()
+    assert url == 'https://git.example.org/pub/scm/test/one.git'

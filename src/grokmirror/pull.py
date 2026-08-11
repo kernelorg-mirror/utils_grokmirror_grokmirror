@@ -142,7 +142,10 @@ def build_optimal_forkgroups(
 ) -> dict[str, set[str]]:
     r_forkgroups: dict[str, set[str]] = {}
     for gitdir in set(r_manifest.keys()):
-        fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+        # str(), not the Path: these sets get compared and merged with the ones
+        # get_forkgroups() builds, which are sets of strings. A Path in here
+        # would never match one and every fork would look like a new group.
+        fullpath = str(grokmirror.gitdir_to_fullpath(toplevel, gitdir))
         # our forkgroup info wins, because our own grok-fcsk may have found better siblings
         # unless we're cloning, in which case we have nothing to go by except remote info
         if gitdir in l_manifest:
@@ -158,7 +161,7 @@ def build_optimal_forkgroups(
 
         if reference and not forkgroup:
             # probably a grokmirror-1.x manifest
-            r_fullpath = os.path.join(toplevel, reference.lstrip('/'))
+            r_fullpath = str(grokmirror.gitdir_to_fullpath(toplevel, reference))
             for fg, fps in r_forkgroups.items():
                 if r_fullpath in fps:
                     forkgroup = fg
@@ -234,7 +237,7 @@ def _spa_repo(
     config: grokmirror.GrokConfigParser, toplevel: str, gitdir: str, actions: list[str], waiting: int = 0
 ) -> None:
     logger.debug('spa_worker: gitdir=%s, actions=%s', gitdir, actions)
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+    fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
     try:
         with grokmirror.locked_repo(fullpath, nonblocking=True):
             if waiting:
@@ -292,15 +295,15 @@ def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokCo
     purl = config['remote'].get('preload_bundle_url')
     if not purl:
         return
-    bname = os.path.basename(obstrepo).removesuffix('.git')
+    bname = Path(obstrepo).name.removesuffix('.git')
     obstdir = os.path.realpath(config['core']['objstore'])
     burl = '{}/{}.bundle'.format(purl.rstrip('/'), bname)
-    bfile = os.path.join(obstdir, f'{bname}.bundle')
+    bfile = Path(obstdir, f'{bname}.bundle')
     try:
         resp = ses.get_requests_session().get(burl, stream=True)
         resp.raise_for_status()
         logger.info(' objstore: downloading %s.bundle', bname)
-        with open(bfile, 'wb') as fh:
+        with bfile.open('wb') as fh:
             fh.writelines(resp.iter_content(chunk_size=8192))
         resp.close()
     # Deliberately broad: whatever went wrong mid-download, clean up and fall
@@ -309,12 +312,13 @@ def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokCo
     except Exception:  # noqa: BLE001
         # Make sure we don't leave .bundle files lying around
         # Should we add logic to resume downloads here in the future?
-        if os.path.exists(bfile):
-            os.unlink(bfile)
+        if bfile.exists():
+            bfile.unlink()
         return
 
     # Now we clone from it into the objstore repo
-    ecode, _out, _err = grokmirror.run_git_command(obstrepo, ['remote', 'add', '--mirror=fetch', '_preload', bfile])
+    args = ['remote', 'add', '--mirror=fetch', '_preload', str(bfile)]
+    ecode, _out, _err = grokmirror.run_git_command(obstrepo, args)
     if ecode == 0:
         logger.info(' objstore: preloading %s.bundle', bname)
         args = ['remote', 'update', '_preload']
@@ -329,7 +333,7 @@ def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokCo
             logger.info(' objstore: successful preload from %s.bundle', bname)
     # Regardless of what happened, we remove _preload and the bundle, then move on
     grokmirror.run_git_command(obstrepo, ['remote', 'rm', '_preload'])
-    os.unlink(bfile)
+    bfile.unlink()
 
 
 def pull_worker(
@@ -355,7 +359,7 @@ def pull_worker(
     objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
 
     logger.debug('pull_worker: gitdir=%s, action=%s', gitdir, action)
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+    fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
     success = True
     spa_actions = []
 
@@ -368,9 +372,9 @@ def pull_worker(
 
             if action == 'purge':
                 # Is it a symlink?
-                if os.path.islink(fullpath):
+                if fullpath.is_symlink():
                     logger.info('    purge: %s', gitdir)
-                    os.unlink(fullpath)
+                    fullpath.unlink()
                 else:
                     # is anything using us for alternates?
                     if ses.is_alt_repo(toplevel, gitdir):
@@ -485,26 +489,29 @@ def pull_worker(
         return None
 
     symlinks = repoinfo.get('symlinks')
-    if os.path.exists(fullpath) and symlinks:
+    if fullpath.exists() and symlinks:
         for symlink in symlinks:
-            target = os.path.join(toplevel, symlink.lstrip('/'))
+            target = grokmirror.gitdir_to_fullpath(toplevel, symlink)
 
-            if os.path.islink(target):
+            if target.is_symlink():
                 # are you pointing to where we need you?
-                if os.path.realpath(target) != fullpath:
+                # os.fspath() on the right-hand side: realpath() hands back a
+                # str, and a Path never compares equal to one, so every correct
+                # symlink would look wrong and get recreated on every run.
+                if os.path.realpath(target) != os.fspath(fullpath):
                     # Remove symlink and recreate below
                     logger.debug('Removed existing wrong symlink %s', target)
-                    os.unlink(target)
-            elif os.path.exists(target):
+                    target.unlink()
+            elif target.exists():
                 logger.warning(f'Deleted repo {target}, because it is now a symlink to {fullpath}')
                 shutil.rmtree(target)
 
             # Here we re-check if we still need to do anything
-            if not os.path.exists(target):
+            if not target.exists():
                 logger.info('  symlink: %s -> %s', symlink, gitdir)
                 # Make sure the leading dirs are in place; another worker may
                 # be placing a sibling symlink there at this very moment.
-                os.makedirs(os.path.dirname(target), exist_ok=True)
+                target.parent.mkdir(parents=True, exist_ok=True)
                 os.symlink(fullpath, target)
 
     if spa_actions:
@@ -532,7 +539,7 @@ def cull_manifest(manifest: grokmirror.Manifest, config: grokmirror.GrokConfigPa
 
 def fix_remotes(toplevel: str, gitdir: str, site: str, config: grokmirror.GrokConfigParser) -> bool:
     remotename = config['pull'].get('remotename', '_grokmirror')
-    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+    fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
     # Set our remote
     if remotename in grokmirror.list_repo_remotes(fullpath):
         logger.debug('\tremoving remote: %s', remotename)
@@ -541,8 +548,12 @@ def fix_remotes(toplevel: str, gitdir: str, site: str, config: grokmirror.GrokCo
             logger.critical('FATAL: Could not remove remote %s from %s', remotename, fullpath)
             return False
 
-    # set my remote URL
-    url = os.path.join(site, gitdir.lstrip('/'))
+    # set my remote URL. Joined by hand, the same way objstore_repo_preload()
+    # builds its bundle URL: site is a URL, not a path, and os.path.join()
+    # only happens to be right for one because the separator matches. Path()
+    # is not even that -- it collapses the '//' in 'https://' to a single
+    # slash and hands back a remote nothing can fetch from.
+    url = '{}/{}'.format(site.rstrip('/'), gitdir.lstrip('/'))
     ecode, _out, _err = grokmirror.run_git_command(fullpath, ['remote', 'add', '--mirror=fetch', remotename, url])
     if ecode > 0:
         logger.critical('FATAL: Could not set %s to %s in %s', remotename, url, fullpath)
@@ -556,7 +567,7 @@ def fix_remotes(toplevel: str, gitdir: str, site: str, config: grokmirror.GrokCo
     return True
 
 
-def set_repo_params(fullpath: str, repoinfo: grokmirror.RepoInfo) -> None:
+def set_repo_params(fullpath: grokmirror.StrPath, repoinfo: grokmirror.RepoInfo) -> None:
     owner = repoinfo.get('owner')
     description = repoinfo.get('description')
     head = repoinfo.get('head')
@@ -565,26 +576,26 @@ def set_repo_params(fullpath: str, repoinfo: grokmirror.RepoInfo) -> None:
         return
 
     if description is not None:
-        descfile = os.path.join(fullpath, 'description')
+        descfile = Path(fullpath, 'description')
         contents = None
-        if os.path.exists(descfile):
-            contents = Path(descfile).read_text(encoding='utf-8')
+        if descfile.exists():
+            contents = descfile.read_text(encoding='utf-8')
         if contents != description:
             logger.debug('Setting %s description to: %s', fullpath, description)
-            Path(descfile).write_text(description, encoding='utf-8')
+            descfile.write_text(description, encoding='utf-8')
 
     if owner is not None:
         logger.debug('Setting %s owner to: %s', fullpath, owner)
         grokmirror.set_git_config(fullpath, 'gitweb.owner', owner)
 
     if head is not None:
-        headfile = os.path.join(fullpath, 'HEAD')
+        headfile = Path(fullpath, 'HEAD')
         contents = None
-        if os.path.exists(headfile):
-            contents = Path(headfile).read_text(encoding='utf-8').rstrip()
+        if headfile.exists():
+            contents = headfile.read_text(encoding='utf-8').rstrip()
         if contents != head:
             logger.debug('Setting %s HEAD to: %s', fullpath, head)
-            Path(headfile).write_text(f'{head}\n', encoding='utf-8')
+            headfile.write_text(f'{head}\n', encoding='utf-8')
 
 
 def set_agefile(toplevel: str, gitdir: str, last_modified: int) -> None:
@@ -593,10 +604,9 @@ def set_agefile(toplevel: str, gitdir: str, last_modified: int) -> None:
     # set agefile, which can be used by cgit to show idle times
     # cgit recommends it to be yyyy-mm-dd hh:mm:ss
     cgit_fmt = time.strftime('%F %T', time.localtime(last_modified))
-    agefile = os.path.join(toplevel, gitdir.lstrip('/'), 'info/web/last-modified')
-    if not os.path.exists(os.path.dirname(agefile)):
-        os.makedirs(os.path.dirname(agefile))
-    Path(agefile).write_text(f'{cgit_fmt}\n', encoding='utf-8')
+    agefile = grokmirror.gitdir_to_fullpath(toplevel, gitdir) / 'info' / 'web' / 'last-modified'
+    agefile.parent.mkdir(parents=True, exist_ok=True)
+    agefile.write_text(f'{cgit_fmt}\n', encoding='utf-8')
     logger.debug('Wrote "%s" into %s', cgit_fmt, agefile)
 
 
@@ -605,6 +615,10 @@ def get_hookscripts(config: grokmirror.GrokConfigParser, hookname: str) -> list[
     # And sinker!
     hookline = config['pull'].get(hookname, '')
     for hookscript in hookline.splitlines():
+        # Deliberately os.path.expanduser() and not Path().expanduser(): this
+        # is a whole command line, arguments and all, not a path. Round-tripping
+        # it through Path would rewrite the arguments too -- '//' collapsed, a
+        # trailing slash dropped -- and only the leading '~' needs expanding.
         hookscript = os.path.expanduser(hookscript.strip())
         args = shlex.split(hookscript)
         if not args:
@@ -644,11 +658,12 @@ def run_post_work_complete_hook(config: grokmirror.GrokConfigParser) -> None:
             logger.info('Hook Stdout: %s', output)
 
 
-def run_post_update_hook(config: grokmirror.GrokConfigParser, fullpath: str) -> None:
+def run_post_update_hook(config: grokmirror.GrokConfigParser, fullpath: grokmirror.StrPath) -> None:
     hookscripts = get_hookscripts(config, 'post_update_hook')
     for args in hookscripts:
         logger.info('     hook: %s', ' '.join(args))
-        args.append(fullpath)
+        # os.fspath(): the hook argv is logged with ' '.join()
+        args.append(os.fspath(fullpath))
         logger.debug('Running: %s', ' '.join(args))
         _ecode, output, error = grokmirror.run_shell_command(args)
         if error:
@@ -657,7 +672,7 @@ def run_post_update_hook(config: grokmirror.GrokConfigParser, fullpath: str) -> 
             logger.info('Hook Stdout (%s): %s', fullpath, output)
 
 
-def pull_repo(fullpath: str, remotename: str) -> bool:
+def pull_repo(fullpath: grokmirror.StrPath, remotename: str) -> bool:
     args = ['remote', 'update', remotename, '--prune']
 
     retcode, _output, error = grokmirror.run_git_command(fullpath, args, timeout=grokmirror.REMOTE_TIMEOUT)
@@ -693,8 +708,9 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirro
     trimtop = config['pull'].get('projectslist_trimtop', '')
     add_symlinks = config['pull'].getboolean('projectslist_symlinks', False)
 
-    (dirname, basename) = os.path.split(plpath)
-    (fd, tmpfile) = tempfile.mkstemp(prefix=basename, dir=dirname)
+    plfile = Path(plpath)
+    (fd, tmpname) = tempfile.mkstemp(prefix=plfile.name, dir=plfile.parent)
+    tmpfile = Path(tmpname)
 
     try:
         fh = os.fdopen(fd, 'wb', 0)
@@ -720,14 +736,14 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirro
         os.fsync(fd)
         fh.close()
         # mkstemp() always creates 0600, so put the umask back on
-        os.chmod(tmpfile, grokmirror.file_mode())
+        tmpfile.chmod(grokmirror.file_mode())
         # os.replace for an actually atomic swap; see write_manifest()
-        os.replace(tmpfile, plpath)
+        os.replace(tmpfile, plfile)
 
     finally:
         # If something failed, don't leave tempfiles trailing around
-        if os.path.exists(tmpfile):
-            os.unlink(tmpfile)
+        if tmpfile.exists():
+            tmpfile.unlink()
 
     logger.info(' projlist: wrote %s', plpath)
 
@@ -777,9 +793,10 @@ def fill_todo_from_manifest(
             raise grokmirror.GrokManifestError(f'Empty manifest returned by {r_mani_cmd}')
 
     else:
-        r_mani_status_path = os.path.join(os.path.dirname(l_mani_path), f'.{os.path.basename(l_mani_path)}.remote')
+        l_mani_file = Path(l_mani_path)
+        r_mani_status_path = l_mani_file.parent / f'.{l_mani_file.name}.remote'
         try:
-            r_mani_status = json.loads(Path(r_mani_status_path).read_text(encoding='utf-8'))
+            r_mani_status = json.loads(r_mani_status_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             logger.debug('Could not read %s', r_mani_status_path)
             r_mani_status = {}
@@ -792,11 +809,11 @@ def fill_todo_from_manifest(
         logger.info(' manifest: fetching %s', r_mani_url)
         if r_mani_url.startswith('file:///'):
             r_mani_url = r_mani_url.removeprefix('file://')
-            if not os.path.exists(r_mani_url):
+            if not Path(r_mani_url).exists():
                 logger.critical('Remote manifest not found in %s! Quitting!', r_mani_url)
                 raise grokmirror.GrokManifestError(f'Remote manifest not found in {r_mani_url}')
 
-            fstat = os.stat(r_mani_url)
+            fstat = Path(r_mani_url).stat()
             r_last_modified = fstat[8]
             if r_last_fetched:
                 logger.debug('mtime on %s is: %s', r_mani_url, fstat[8])
@@ -870,7 +887,7 @@ def fill_todo_from_manifest(
                 raise grokmirror.GrokManifestError(f'Failed to parse {r_mani_url} ({ex})') from ex
 
         # Record for the next run
-        with open(r_mani_status_path, 'w', encoding='utf-8') as fh:
+        with r_mani_status_path.open('w', encoding='utf-8') as fh:
             r_mani_status = {
                 'source': r_mani_url,
                 'last-fetched': r_last_modified,
@@ -891,7 +908,7 @@ def fill_todo_from_manifest(
     # populate private/forkgroup info in r_culled
     for fg, siblings in forkgroups.items():
         for s_fullpath in siblings:
-            s_gitdir = '/' + os.path.relpath(s_fullpath, toplevel)
+            s_gitdir = grokmirror.fullpath_to_gitdir(toplevel, s_fullpath)
             if s_gitdir in r_culled:
                 r_culled[s_gitdir]['forkgroup'] = fg
                 r_culled[s_gitdir]['private'] = bool(privmatch.match(s_gitdir))
@@ -909,17 +926,17 @@ def fill_todo_from_manifest(
         if gitdir in seen:
             continue
         seen.add(gitdir)
-        fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+        fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
         forkgroup = repoinfo.get('forkgroup')
 
         # Is the directory in place?
-        if os.path.exists(fullpath):
+        if fullpath.exists():
             # Did grok-fsck request to reclone it?
-            rfile = os.path.join(fullpath, 'grokmirror.reclone')
-            if os.path.exists(rfile):
+            rfile = fullpath / 'grokmirror.reclone'
+            if rfile.exists():
                 logger.debug('Reclone requested for %s:', gitdir)
                 q_mani.put((gitdir, repoinfo, 'reclone'))
-                reason = Path(rfile).read_text(encoding='utf-8')
+                reason = rfile.read_text(encoding='utf-8')
                 logger.debug('  %s', reason)
                 continue
 
@@ -946,8 +963,10 @@ def fill_todo_from_manifest(
             if symlinks and isinstance(symlinks, list):
                 # Are all symlinks in place?
                 for symlink in symlinks:
-                    linkpath = os.path.join(toplevel, symlink.lstrip('/'))
-                    if not os.path.islink(linkpath) or os.path.realpath(linkpath) != fullpath:
+                    linkpath = grokmirror.gitdir_to_fullpath(toplevel, symlink)
+                    # os.fspath(), because realpath() returns a str and a Path
+                    # is never equal to one: see pull_worker()
+                    if not linkpath.is_symlink() or os.path.realpath(linkpath) != os.fspath(fullpath):
                         q_mani.put((gitdir, repoinfo, 'fix_params'))
                         break
 
@@ -970,8 +989,8 @@ def fill_todo_from_manifest(
             q_mani.put((gitdir, repoinfo, 'init'))
             continue
 
-        obstrepo = os.path.join(obstdir, f'{forkgroup}.git')
-        if os.path.isdir(obstrepo):
+        obstrepo = Path(obstdir, f'{forkgroup}.git')
+        if obstrepo.is_dir():
             # Init with an existing obstrepo, easy case
             q_mani.put((gitdir, repoinfo, 'init'))
             continue
@@ -981,7 +1000,7 @@ def fill_todo_from_manifest(
         found_existing = False
         public_siblings = set()
         for s_fullpath in forkgroups[forkgroup]:
-            s_gitdir = '/' + os.path.relpath(s_fullpath, toplevel)
+            s_gitdir = grokmirror.fullpath_to_gitdir(toplevel, s_fullpath)
             if s_gitdir == gitdir:
                 continue
 
@@ -990,7 +1009,7 @@ def fill_todo_from_manifest(
                 # Can't use this sibling for anything, as it's private
                 continue
 
-            if os.path.isdir(s_fullpath):
+            if Path(s_fullpath).is_dir():
                 found_existing = True
                 if s_gitdir not in to_migrate:
                     # Plan to migrate it to objstore
@@ -1025,7 +1044,7 @@ def fill_todo_from_manifest(
         to_purge = set()
         found_repos = 0
         for founddir in ses.find_all_gitdirs(toplevel, exclude_objstore=True):
-            gitdir = '/' + os.path.relpath(founddir, toplevel)
+            gitdir = grokmirror.fullpath_to_gitdir(toplevel, founddir)
             found_repos += 1
 
             if gitdir not in r_culled and gitdir not in all_symlinks:
@@ -1180,10 +1199,10 @@ def pull_mirror(
 
     sockfile = config['pull'].get('socket')
     if sockfile and not runonce:
-        if os.path.exists(sockfile):
-            mode = os.stat(sockfile).st_mode
+        if Path(sockfile).exists():
+            mode = Path(sockfile).stat().st_mode
             if stat.S_ISSOCK(mode):
-                os.unlink(sockfile)
+                Path(sockfile).unlink()
             else:
                 raise grokmirror.GrokError(f'File exists but is not a socket: {sockfile}')
 
@@ -1269,7 +1288,8 @@ def pull_mirror(
             pass
         # Was it a clone, and are all other clones done?
         if post_clone_hook and q_action == 'init':
-            cloned.append(os.path.join(toplevel, gitdir.lstrip('/')))
+            # str(), because the list is handed to the hook as its stdin
+            cloned.append(str(grokmirror.gitdir_to_fullpath(toplevel, gitdir)))
             more_clones = False
             for _qgd, qqa in actions:
                 if qqa == 'init':
@@ -1343,7 +1363,7 @@ def pull_mirror(
             held: deque[tuple[str, grokmirror.RepoInfo, str]] = deque()
             while todo:
                 (gitdir, repoinfo, q_action) = todo.popleft()
-                fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+                fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
                 forkgroup = repoinfo.get('forkgroup')
                 if gitdir in busy or (forkgroup is not None and forkgroup in busy):
                     # Hold it until the repository blocking it is done
@@ -1390,8 +1410,9 @@ def pull_mirror(
                     submit((gitdir, repoinfo, 'pull', q_action))
                     continue
 
-                obstrepo = os.path.join(obstdir, f'{forkgroup}.git')
-                if os.path.isdir(obstrepo):
+                # str(), to match what setup_objstore_repo() returns above
+                obstrepo = str(Path(obstdir, f'{forkgroup}.git'))
+                if Path(obstrepo).is_dir():
                     logger.debug('clone %s with existing obstrepo %s', gitdir, obstrepo)
                     grokmirror.set_altrepo(fullpath, obstrepo)
                     if not repoinfo.get('private'):

@@ -209,7 +209,7 @@ class GrokSession:
             self._requests.close()
             self._requests = None
 
-    def get_altrepo_map(self, toplevel: str, refresh: bool = False) -> dict[str, set[str]]:
+    def get_altrepo_map(self, toplevel: StrPath, refresh: bool = False) -> dict[str, set[str]]:
         key = os.path.realpath(toplevel)
         if key not in self._alt_repo_maps or refresh:
             logger.info('   search: finding all repos using alternates')
@@ -227,7 +227,7 @@ class GrokSession:
             self._alt_repo_maps[key] = amap
         return self._alt_repo_maps[key]
 
-    def is_alt_repo(self, toplevel: str, refrepo: str) -> bool:
+    def is_alt_repo(self, toplevel: StrPath, refrepo: str) -> bool:
         amap = self.get_altrepo_map(toplevel)
 
         looking_for = os.path.realpath(gitdir_to_fullpath(toplevel, refrepo))
@@ -235,7 +235,7 @@ class GrokSession:
 
     def find_all_gitdirs(
         self,
-        toplevel: str,
+        toplevel: StrPath,
         ignore: Collection[str] | None = None,
         normalize: bool = False,
         exclude_objstore: bool = True,
@@ -605,7 +605,7 @@ def is_bare_git_repo(path: StrPath) -> bool:
     return False
 
 
-def get_repo_timestamp(toplevel: str, gitdir: str) -> int:
+def get_repo_timestamp(toplevel: StrPath, gitdir: str) -> int:
     ts = 0
 
     tsfile = gitdir_to_fullpath(toplevel, gitdir) / 'grokmirror.timestamp'
@@ -622,7 +622,7 @@ def get_repo_timestamp(toplevel: str, gitdir: str) -> int:
     return ts
 
 
-def set_repo_timestamp(toplevel: str, gitdir: str, ts: int) -> None:
+def set_repo_timestamp(toplevel: StrPath, gitdir: str, ts: int) -> None:
     tsfile = gitdir_to_fullpath(toplevel, gitdir) / 'grokmirror.timestamp'
 
     # int() keeps the truncating behaviour the old '%d' formatting had
@@ -631,7 +631,7 @@ def set_repo_timestamp(toplevel: str, gitdir: str, ts: int) -> None:
     logger.debug('Recorded timestamp for %s: %s', gitdir, ts)
 
 
-def get_repo_obj_info(fullpath: str) -> dict[str, str]:
+def get_repo_obj_info(fullpath: StrPath) -> dict[str, str]:
     args = ['count-objects', '-v']
     _retcode, output, _error = run_git_command(fullpath, args)
     obj_info = {}
@@ -643,7 +643,9 @@ def get_repo_obj_info(fullpath: str) -> dict[str, str]:
     return obj_info
 
 
-def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: list[str] | None = None) -> RepoInfo:
+def get_repo_defs(
+    toplevel: StrPath, gitdir: str, usenow: bool = False, ignorerefs: list[str] | None = None
+) -> RepoInfo:
     fullpath = gitdir_to_fullpath(toplevel, gitdir)
     description = None
     try:
@@ -736,7 +738,9 @@ def set_altrepo(fullpath: StrPath, altdir: StrPath) -> None:
         logger.critical('objdir %s does not exist, not setting alternates file %s', objpath, altfile)
 
 
-def get_rootsets(ses: GrokSession, toplevel: str, obstdir: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+def get_rootsets(
+    ses: GrokSession, toplevel: StrPath, obstdir: StrPath
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     top_roots: dict[str, set[str]] = {}
     obst_roots: dict[str, set[str]] = {}
     topdirs = ses.find_all_gitdirs(toplevel, normalize=True, exclude_objstore=True)
@@ -1042,9 +1046,11 @@ def fetch_objstore_repo(
     return success
 
 
-def is_private_repo(config: ConfigParser, fullpath: str) -> bool:
+def is_private_repo(config: ConfigParser, fullpath: StrPath) -> bool:
     privmasks = config['core'].get('private', '')
-    return bool(compile_globs(privmasks.splitlines()).match(fullpath))
+    # os.fspath(), because this is a glob match against the path *as text*,
+    # and re never matches a Path.
+    return bool(compile_globs(privmasks.splitlines()).match(os.fspath(fullpath)))
 
 
 def find_siblings(
@@ -1282,7 +1288,7 @@ def manifest_unlock(manifile: StrPath) -> None:
 
 
 @contextmanager
-def locked_manifest(manifile: str) -> Iterator[None]:
+def locked_manifest(manifile: StrPath) -> Iterator[None]:
     """Hold the exclusive manifest lock for the duration of the with block.
 
     The lock is released however the block exits. Note that read_manifest's
@@ -1419,7 +1425,7 @@ def load_config_file(cfgfile: StrPath) -> GrokConfigParser:
     return config
 
 
-def is_precious(fullpath: str) -> bool:
+def is_precious(fullpath: StrPath) -> bool:
     args = ['config', '--get', 'extensions.preciousObjects']
     _retcode, output, _error = run_git_command(fullpath, args)
     return output.strip().lower() in ('yes', 'true', '1')
