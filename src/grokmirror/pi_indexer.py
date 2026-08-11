@@ -114,7 +114,7 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
             newsgroup = None
             listid = None
             addresses = []
-            for line in origins.split('\n'):
+            for line in origins.splitlines():
                 line = line.strip()
                 if not line or line.startswith((';', '#', '[publicinbox')):
                     continue
@@ -259,11 +259,7 @@ def cmd_init(opts: argparse.Namespace) -> None:
             if os.path.exists(os.path.join(pdir, 'xap15')):
                 shutil.rmtree(os.path.join(pdir, 'xap15'))
     elif not sys.stdin.isatty():
-        repos = []
-        for line in sys.stdin.read().split('\n'):
-            if not line:
-                continue
-            repos.append(line)
+        repos = [line for line in sys.stdin.read().splitlines() if line]
         inboxdirs = get_inboxdirs(repos)
     else:
         logger.info('Nothing to do')

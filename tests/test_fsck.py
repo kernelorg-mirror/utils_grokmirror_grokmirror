@@ -184,3 +184,26 @@ def test_unreachable_mailhost_does_not_lose_the_report(tree: GrokTree) -> None:
     output = res.stdout + res.stderr
     assert 'Could not send the report' in output
     assert 'Report follows' in output
+
+
+def test_plumbing_fetch_survives_a_sibling_that_lost_every_ref(tree: GrokTree) -> None:
+    # With objstore_uses_plumbing, the refs on both sides are compared as sets of
+    # "<objectname> <refname>" lines. A sibling whose refs have all gone away
+    # gives git nothing to print, and split('\n') turned that empty output into a
+    # set holding one empty string -- which then failed to unpack into obj/ref and
+    # took down the whole fsck run with a ValueError.
+    repo = tree.add_repo('test/one.git')
+    obstrepo = grokmirror.setup_objstore_repo(str(tree.objstore))
+    virtref = grokmirror.objstore_virtref(str(repo))
+    grokmirror.add_repo_to_objstore(obstrepo, str(repo))
+
+    assert grokmirror.fetch_objstore_repo(obstrepo, str(repo), use_plumbing=True)
+    assert git('for-each-ref', '--format=%(refname)', f'refs/virtual/{virtref}', cwd=obstrepo)
+
+    for refname in git('for-each-ref', '--format=%(refname)', cwd=repo).splitlines():
+        git('update-ref', '-d', refname, cwd=repo)
+
+    assert grokmirror.fetch_objstore_repo(obstrepo, str(repo), use_plumbing=True)
+
+    # The stale virtual refs are gone, not left behind pointing at nothing.
+    assert not git('for-each-ref', '--format=%(refname)', f'refs/virtual/{virtref}', cwd=obstrepo)

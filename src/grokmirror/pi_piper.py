@@ -46,6 +46,9 @@ def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list[tuple[s
 
     newrevs = []
     if out:
+        # Deliberately not splitlines(): a commit subject may contain \v, \f or
+        # U+0085, and git's oneline output does not escape them. splitlines()
+        # would break such a line in two and the unpacking below would fail.
         for line in out.split('\n'):
             (commit_id, logmsg) = line.split(' ', 1)
             logger.debug('commit_id=%s, subject=%s', commit_id, logmsg)

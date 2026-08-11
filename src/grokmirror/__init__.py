@@ -604,10 +604,9 @@ def get_repo_obj_info(fullpath: str) -> dict[str, str]:
     _retcode, output, _error = run_git_command(fullpath, args)
     obj_info = {}
 
-    if output:
-        for line in output.split('\n'):
-            key, value = line.split(':')
-            obj_info[key] = value.strip()
+    for line in output.splitlines():
+        key, value = line.split(':')
+        obj_info[key] = value.strip()
 
     return obj_info
 
@@ -734,7 +733,7 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
     rfile = os.path.join(fullpath, 'grokmirror.roots')
     if not force and os.path.exists(rfile):
         content = pathlib.Path(rfile).read_text(encoding='utf-8')
-        roots = set(content.split('\n'))
+        roots = set(content.splitlines())
     else:
         logger.debug('Generating roots for %s', fullpath)
         ecode, out, _err = run_git_command(fullpath, ['rev-list', '--max-parents=0', '--all'])
@@ -749,7 +748,7 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
         # save it for future use
         pathlib.Path(rfile).write_text(out, encoding='utf-8')
         logger.debug('Wrote %s', rfile)
-        roots = set(out.split('\n'))
+        roots = set(out.splitlines())
 
     return roots
 
@@ -858,11 +857,11 @@ def list_repo_remotes(fullpath: str, withurl: bool = False) -> list[str] | list[
         return []
 
     if not withurl:
-        return out.split('\n')
+        return out.splitlines()
 
     # git remote -v lists every remote twice (fetch and push), so dedupe --
     # via dict.fromkeys rather than a set, to keep git's ordering.
-    return list(dict.fromkeys(tuple(line.split()[:2]) for line in out.split('\n')))
+    return list(dict.fromkeys(tuple(line.split()[:2]) for line in out.splitlines()))
 
 
 def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
@@ -920,41 +919,38 @@ def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: st
                 os.link(srcpath, dstpath)
                 torm.add(srcpath)
 
-    # Now we generate a list of refs on both sides
+    # Now we generate a list of refs on both sides. splitlines() rather than
+    # split('\n') matters here: a repository with no refs at all gives us an
+    # empty string, and split('\n') would turn that into a set holding one
+    # empty string, which the "obj, ref =" unpacking below cannot cope with.
     srcargs = ['for-each-ref', f'--format=%(objectname) refs/virtual/{virtref}/%(refname:lstrip=1)']
     ecode, out, err = run_git_command(srcrepo, srcargs)
     if ecode > 0:
         logger.debug('Could not for-each-ref %s: %s', srcrepo, err)
         return False
-    srcset = set(out.strip().split('\n'))
+    srcset = set(out.splitlines())
 
     dstargs = ['for-each-ref', '--format=%(objectname) %(refname)', f'refs/virtual/{virtref}']
     ecode, out, err = run_git_command(obstrepo, dstargs)
     if ecode > 0:
         logger.debug('Could not for-each-ref %s: %s', obstrepo, err)
         return False
-    dstset = set(out.strip().split('\n'))
+    dstset = set(out.splitlines())
 
     # Now we create a stdin list of commands for update-ref
     mapping: dict[str, str] = {}
-    newset = srcset.difference(dstset)
-    if newset:
-        for refline in newset:
-            obj, ref = refline.split(' ', 1)
-            mapping[ref] = obj
+    for refline in srcset.difference(dstset):
+        obj, ref = refline.split(' ', 1)
+        mapping[ref] = obj
 
     cmdlines = []
-    oldset = dstset.difference(srcset)
-    if oldset:
-        for refline in oldset:
-            if not refline:
-                continue
-            obj, ref = refline.split(' ', 1)
-            if ref in mapping:
-                cmdlines.append(f'update {ref} {mapping[ref]} {obj}')
-                mapping.pop(ref)
-            else:
-                cmdlines.append(f'delete {ref} {obj}')
+    for refline in dstset.difference(srcset):
+        obj, ref = refline.split(' ', 1)
+        if ref in mapping:
+            cmdlines.append(f'update {ref} {mapping[ref]} {obj}')
+            mapping.pop(ref)
+        else:
+            cmdlines.append(f'delete {ref} {obj}')
 
     cmdlines.extend(f'create {ref} {obj}' for ref, obj in mapping.items())
 
@@ -1019,7 +1015,7 @@ def fetch_objstore_repo(
 
 def is_private_repo(config: ConfigParser, fullpath: str) -> bool:
     privmasks = config['core'].get('private', '')
-    return bool(compile_globs(privmasks.split('\n')).match(fullpath))
+    return bool(compile_globs(privmasks.splitlines()).match(fullpath))
 
 
 def find_siblings(
@@ -1097,8 +1093,7 @@ def get_obstrepo_mapping(obstdir: str) -> dict[str, str]:
             if ecode > 0:
                 # weird
                 continue
-            lines = out.split('\n')
-            for line in lines:
+            for line in out.splitlines():
                 chunks = line.split()
                 if len(chunks) < 2:
                     continue
@@ -1171,7 +1166,7 @@ def get_repo_fingerprint(
         if ignorerefs:
             hasher = hashlib.sha1()
             ignorematch = compile_globs(ignorerefs)
-            for line in out.split('\n'):
+            for line in out.splitlines():
                 _rhash, rname = line.split(maxsplit=1)
                 if ignorematch.match(rname):
                     continue

@@ -95,7 +95,7 @@ def get_blob_set(fullpath: str) -> tuple[set[tuple[str, int]], int]:
     if retcode == 0:
         with open(blobcache, 'w', encoding='utf-8') as fh:
             fh.write('# Blobs and sizes used for sibling calculation\n')
-            for line in output.split('\n'):
+            for line in output.splitlines():
                 if ' blob ' not in line:
                     continue
                 chunks = line.strip().split()
@@ -203,7 +203,7 @@ def check_reclone_error(
     toplevel = os.path.realpath(config['core']['toplevel'])
     # Drop blank patterns: every line "contains" the empty string, so a blank
     # entry (or an unset option) would request a reclone for any error at all.
-    errlist = [x.strip() for x in config['fsck'].get('reclone_on_errors', '').split('\n') if x.strip()]
+    errlist = [x.strip() for x in config['fsck'].get('reclone_on_errors', '').splitlines() if x.strip()]
     for line in errors:
         for estring in errlist:
             if estring in line:
@@ -308,10 +308,10 @@ def is_safe_to_prune(ses: grokmirror.GrokSession, fullpath: str, config: grokmir
 def remove_ignored_errors(output: str, config: grokmirror.GrokConfigParser) -> list[str]:
     # Drop blank patterns: every line "contains" the empty string, so a blank
     # entry (or an unset option) would silence every error the run produced.
-    ierrors = {x.strip() for x in config['fsck'].get('ignore_errors', '').split('\n') if x.strip()}
+    ierrors = {x.strip() for x in config['fsck'].get('ignore_errors', '').splitlines() if x.strip()}
     debug = []
     warn = []
-    for line in output.split('\n'):
+    for line in output.splitlines():
         line = line.strip()
         # ignore any blank linkes
         if not line:
@@ -692,7 +692,7 @@ def fsck_mirror(
     queued = 0
     logger.info('Analyzing %s (%s repos)', toplevel, len(status))
     stattime = time.time()
-    baselines = [x.strip() for x in config['fsck'].get('baselines', '').split('\n')]
+    baselines = [x.strip() for x in config['fsck'].get('baselines', '').splitlines()]
     for fullpath in list(status):
         # Give me a status every 5 seconds
         if time.time() - stattime >= 5:
@@ -971,7 +971,7 @@ def fsck_mirror(
     queued = 0
     logger.info('Analyzing %s (%s repos)', obstdir, len(obstrepos))
     objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
-    islandcorematch = grokmirror.compile_globs(config['fsck'].get('islandcores', '').split('\n'))
+    islandcorematch = grokmirror.compile_globs(config['fsck'].get('islandcores', '').splitlines())
     baselinematch = grokmirror.compile_globs(baselines)
     stattime = time.time()
     for obstrepo in obstrepos:
@@ -1104,8 +1104,8 @@ def fsck_mirror(
         args = ['for-each-ref', '--format=%(refname)', 'refs/virtual/']
         trimmed_virtrefs = set()
         ecode, out, _err = grokmirror.run_git_command(obstrepo, args)
-        if ecode == 0 and out:
-            for line in out.split('\n'):
+        if ecode == 0:
+            for line in out.splitlines():
                 chunks = line.split('/')
                 if len(chunks) < 3:
                     # Where did this come from?

@@ -64,6 +64,12 @@ v3.0 (TBD)
   regular expression instead of being matched pattern-by-pattern against
   every repository, which cuts a large amount of work out of grok-pull and
   grok-fsck runs over big manifests
+- Fix grok-fsck dying with a ValueError when objstore_uses_plumbing is on
+  and a sibling repository has lost every one of its refs; its stale refs
+  in the objstore repo are now cleaned up as they should be
+- Fix grok-fsck reading a "baselines" setting that is not configured as a
+  single blank baseline, which made it run an extra "git remote -v" over
+  every objstore candidate for no reason
 - Fix grok-bundle mangling repository names that contain ".git" somewhere
   other than at the end: a repository named foo.github.io.git used to be
   bundled into a directory called "foohub.io"

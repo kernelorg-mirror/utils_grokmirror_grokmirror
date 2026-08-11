@@ -515,8 +515,8 @@ def pull_worker(
 def cull_manifest(manifest: grokmirror.Manifest, config: grokmirror.GrokConfigParser) -> grokmirror.Manifest:
     # Compiled once for the whole manifest: this used to be every include
     # times every exclude, for every repository the origin publishes.
-    included = grokmirror.compile_globs(config['pull'].get('include', '*').split('\n'))
-    excluded = grokmirror.compile_globs(config['pull'].get('exclude', '').split('\n'))
+    included = grokmirror.compile_globs(config['pull'].get('include', '*').splitlines())
+    excluded = grokmirror.compile_globs(config['pull'].get('exclude', '').splitlines())
 
     culled = {}
 
@@ -548,7 +548,7 @@ def fix_remotes(toplevel: str, gitdir: str, site: str, config: grokmirror.GrokCo
         logger.critical('FATAL: Could not set %s to %s in %s', remotename, url, fullpath)
         return False
 
-    if grokmirror.compile_globs(config['pull'].get('ffonly', '').split('\n')).match(gitdir):
+    if grokmirror.compile_globs(config['pull'].get('ffonly', '').splitlines()).match(gitdir):
         grokmirror.set_git_config(fullpath, f'remote.{remotename}.fetch', 'refs/*:refs/*')
         logger.debug('\tset %s as %s (ff-only)', remotename, url)
     else:
@@ -604,7 +604,7 @@ def get_hookscripts(config: grokmirror.GrokConfigParser, hookname: str) -> list[
     hookscripts = []
     # And sinker!
     hookline = config['pull'].get(hookname, '')
-    for hookscript in hookline.split('\n'):
+    for hookscript in hookline.splitlines():
         hookscript = os.path.expanduser(hookscript.strip())
         args = shlex.split(hookscript)
         if not args:
@@ -670,7 +670,7 @@ def pull_repo(fullpath: str, remotename: str) -> bool:
         # Put things we recognize into debug
         debug = []
         warn = []
-        for line in error.split('\n'):
+        for line in error.splitlines():
             if line.startswith(('From ', 'remote: warning:')) or '-> ' in line or 'ControlSocket' in line:
                 debug.append(line)
             elif not success:
@@ -887,7 +887,7 @@ def fill_todo_from_manifest(
 
     obstdir = os.path.realpath(config['core']['objstore'])
     forkgroups = build_optimal_forkgroups(l_manifest, r_culled, toplevel, obstdir)
-    privmatch = grokmirror.compile_globs(config['core'].get('private', '').split('\n'))
+    privmatch = grokmirror.compile_globs(config['core'].get('private', '').splitlines())
 
     # populate private/forkgroup info in r_culled
     for fg, siblings in forkgroups.items():
@@ -1021,8 +1021,8 @@ def fill_todo_from_manifest(
         q_mani.put((gitdir, repoinfo, 'init'))
 
     if config['pull'].getboolean('purge', False):
-        nopurgematch = grokmirror.compile_globs(config['pull'].get('nopurge', '').split('\n'))
-        ffonlymatch = grokmirror.compile_globs(config['pull'].get('ffonly', '').split('\n'))
+        nopurgematch = grokmirror.compile_globs(config['pull'].get('nopurge', '').splitlines())
+        ffonlymatch = grokmirror.compile_globs(config['pull'].get('ffonly', '').splitlines())
         to_purge = set()
         found_repos = 0
         for founddir in ses.find_all_gitdirs(toplevel, exclude_objstore=True):
