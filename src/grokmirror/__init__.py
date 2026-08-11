@@ -537,7 +537,7 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
     try:
         descfile = os.path.join(fullpath, 'description')
         contents = pathlib.Path(descfile).read_bytes().strip()
-        if len(contents) and contents.find(b'edit this file') < 0:
+        if contents and b'edit this file' not in contents:
             # We don't need to tell mirrors to edit this file
             description = contents.decode(errors='replace')
     except OSError:
@@ -1065,7 +1065,9 @@ def get_forkgroups(obstdir: str, toplevel: str) -> dict[str, set[str]]:
             obstrepo = child.as_posix()
             remotes = list_repo_remotes(obstrepo, withurl=True)
             for virtref, url in remotes:
-                if url.find(toplevel) != 0:
+                # Objstore remotes point at local child repos; anything not
+                # under our toplevel (as a path, not a string prefix) is not ours.
+                if not pathlib.PurePath(url).is_relative_to(toplevel):
                     continue
                 forkgroups[forkgroup].add(url)
     return forkgroups
@@ -1137,8 +1139,9 @@ def set_repo_fingerprint(toplevel: str, gitdir: str, fingerprint: str | None = N
 
 def is_obstrepo(fullpath: str, obstdir: str | None = None) -> bool:
     if obstdir:
-        # At this point, both should be normalized
-        return fullpath.find(obstdir) == 0
+        # At this point, both should be normalized. Compare as paths, not as
+        # strings: /srv/objstore-private/x.git is not inside /srv/objstore.
+        return pathlib.PurePath(fullpath).is_relative_to(obstdir)
     # Just check if it has a grokmirror.objstore file in the repo
     return os.path.exists(os.path.join(fullpath, 'grokmirror.objstore'))
 
@@ -1216,7 +1219,7 @@ def read_manifest(manifile: str, wait: bool = False) -> dict:
         logger.info(' manifest: no local manifest, assuming initial run')
         return {}
 
-    opener = gzip.open if manifile.find('.gz') > 0 else open
+    opener = gzip.open if manifile.endswith('.gz') else open
 
     logger.debug('Reading %s', manifile)
     with opener(manifile, 'rt', encoding='utf-8') as fh:

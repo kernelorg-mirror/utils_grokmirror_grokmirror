@@ -670,12 +670,7 @@ def pull_repo(fullpath: str, remotename: str) -> bool:
         debug = []
         warn = []
         for line in error.split('\n'):
-            if (
-                line.find('From ') == 0
-                or line.find('-> ') > 0
-                or line.find('remote: warning:') == 0
-                or line.find('ControlSocket') >= 0
-            ):
+            if line.startswith(('From ', 'remote: warning:')) or '-> ' in line or 'ControlSocket' in line:
                 debug.append(line)
             elif not success:
                 warn.append(line)
@@ -796,8 +791,8 @@ def fill_todo_from_manifest(
         # No manifest_command, so pull_mirror() made sure we have a manifest URL
         r_mani_url = config['remote']['manifest']
         logger.info(' manifest: fetching %s', r_mani_url)
-        if r_mani_url.find('file:///') == 0:
-            r_mani_url = r_mani_url.replace('file://', '')
+        if r_mani_url.startswith('file:///'):
+            r_mani_url = r_mani_url.removeprefix('file://')
             if not os.path.exists(r_mani_url):
                 logger.critical('Remote manifest not found in %s! Quitting!', r_mani_url)
                 raise grokmirror.GrokManifestError(f'Remote manifest not found in {r_mani_url}')
@@ -853,7 +848,7 @@ def fill_todo_from_manifest(
             # with .gz. XXX: some http servers will auto-deflate such files.
             jdata: str | bytes
             try:
-                if r_mani_url.rfind('.gz') > 0:
+                if r_mani_url.endswith('.gz'):
                     import io
 
                     with gzip.GzipFile(fileobj=io.BytesIO(res.content)) as gzfh:

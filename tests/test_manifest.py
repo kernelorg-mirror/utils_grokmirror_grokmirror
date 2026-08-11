@@ -13,9 +13,13 @@ failing.
 
 from __future__ import annotations
 
+import os
 import shutil
+from pathlib import Path
 
 import pytest
+
+import grokmirror.manifest
 
 from support import BASE_TIMESTAMP, DECOY_URL, GrokTree, git
 
@@ -130,6 +134,28 @@ def test_a_repo_replaced_by_a_symlink_loses_its_own_entry(tree: GrokTree) -> Non
     manifest = tree.read_manifest()
     assert sorted(manifest) == ['/test/one.git']
     assert manifest['/test/one.git']['symlinks'] == ['/test/two.git']
+
+
+def test_symlink_target_embedding_the_toplevel_path_is_still_outside(tmp_path: Path) -> None:
+    # The outside-toplevel check used to be a string *containment* test, so a
+    # target whose path merely contained the toplevel string somewhere in the
+    # middle passed it, and set_symlinks() happily recorded a symlink entry
+    # for a repository that lives outside the tree being mirrored. (The
+    # simple case, a target sharing no path text with the toplevel, is
+    # covered by test_symlink_pointing_outside_toplevel_is_ignored below.)
+    toplevel = tmp_path / 'top'
+    toplevel.mkdir()
+    # An outside directory whose path embeds the toplevel path mid-string.
+    evil_repo = Path(str(tmp_path / 'evil') + str(toplevel)) / 'foo.git'
+    evil_repo.mkdir(parents=True)
+    link = toplevel / 'link.git'
+    link.symlink_to(evil_repo)
+
+    key = '/' + os.path.relpath(evil_repo, toplevel)
+    manifest: dict = {key: {}}
+    grokmirror.manifest.set_symlinks(manifest, str(toplevel), [str(link)])
+
+    assert 'symlinks' not in manifest[key]
 
 
 def test_symlink_is_listed_on_a_full_walk(tree: GrokTree) -> None:

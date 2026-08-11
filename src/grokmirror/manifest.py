@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import pathlib
 import sys
 import time
 
@@ -83,7 +84,9 @@ def set_symlinks(manifest: dict, toplevel: str, symlinks: list[str]) -> None:
             logger.critical(' manifest: symlink %s is broken, ignored', symlink)
             continue
         relative = '/' + os.path.relpath(symlink, toplevel)
-        if target.find(toplevel) < 0:
+        # A path comparison, not a string search: the old containment test
+        # accepted any target whose path merely mentioned the toplevel.
+        if not pathlib.PurePath(target).is_relative_to(toplevel):
             logger.critical(' manifest: symlink %s points outside toplevel, ignored', relative)
             continue
         tgtgitdir = '/' + os.path.relpath(target, toplevel)

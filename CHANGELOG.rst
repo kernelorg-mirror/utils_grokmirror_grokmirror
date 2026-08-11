@@ -35,6 +35,17 @@ v3.0 (TBD)
   deliberately not limited, since those can legitimately run for days
 - Fix grok-fsck keeping the manifest locked for the rest of the run when
   the status file could not be parsed
+- Fix grok-fsck treating a blank line in reclone_on_errors as "reclone on
+  any error at all", and a blank line in ignore_errors as "ignore every
+  error"; blank patterns are now dropped instead of matching everything
+- Path containment checks (is a repo inside the objstore? does a symlink
+  point outside the toplevel?) now compare paths instead of string
+  prefixes, so e.g. /srv/objstore-private is no longer considered to be
+  inside /srv/objstore, and a symlink target that merely mentions the
+  toplevel somewhere in its path no longer passes as internal
+- Only treat a manifest file or URL ending in .gz as gzipped, instead of
+  one containing ".gz" anywhere in its path (a plain-text manifest under
+  a directory like /srv/my.gz-mirrors/ used to crash the reader)
 - Locking a repository or the manifest a second time from the same process
   is now reported as an error instead of silently succeeding; fcntl locks
   cannot protect a process from itself, and re-locking the manifest used

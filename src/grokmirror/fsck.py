@@ -97,7 +97,7 @@ def get_blob_set(fullpath: str) -> tuple[set[tuple[str, int]], int]:
         with open(blobcache, 'w', encoding='utf-8') as fh:
             fh.write('# Blobs and sizes used for sibling calculation\n')
             for line in output.split('\n'):
-                if line.find(' blob ') < 0:
+                if ' blob ' not in line:
                     continue
                 chunks = line.strip().split()
                 fh.write(f'{chunks[0]} {chunks[2]}\n')
@@ -201,10 +201,12 @@ def check_reclone_error(
 ) -> None:
     reclone = None
     toplevel = os.path.realpath(config['core']['toplevel'])
-    errlist = config['fsck'].get('reclone_on_errors', '').split('\n')
+    # Drop blank patterns: every line "contains" the empty string, so a blank
+    # entry (or an unset option) would request a reclone for any error at all.
+    errlist = [x.strip() for x in config['fsck'].get('reclone_on_errors', '').split('\n') if x.strip()]
     for line in errors:
         for estring in errlist:
-            if line.find(estring) != -1:
+            if estring in line:
                 # is this repo used for alternates?
                 gitdir = '/' + os.path.relpath(fullpath, toplevel).lstrip('/')
                 if ses.is_alt_repo(toplevel, gitdir):
@@ -304,7 +306,9 @@ def is_safe_to_prune(ses: grokmirror.GrokSession, fullpath: str, config: grokmir
 
 
 def remove_ignored_errors(output: str, config: grokmirror.GrokConfigParser) -> list[str]:
-    ierrors = {x.strip() for x in config['fsck'].get('ignore_errors', '').split('\n')}
+    # Drop blank patterns: every line "contains" the empty string, so a blank
+    # entry (or an unset option) would silence every error the run produced.
+    ierrors = {x.strip() for x in config['fsck'].get('ignore_errors', '').split('\n') if x.strip()}
     debug = []
     warn = []
     for line in output.split('\n'):
@@ -314,7 +318,7 @@ def remove_ignored_errors(output: str, config: grokmirror.GrokConfigParser) -> l
             continue
         ignored = False
         for estring in ierrors:
-            if line.find(estring) != -1:
+            if estring in line:
                 ignored = True
                 debug.append(line)
                 break
@@ -801,7 +805,7 @@ def fsck_mirror(
             set_repo_reclone(fullpath, 'Alternates repository gone')
             continue
 
-        elif altdir.find(obstdir) != 0:
+        elif not grokmirror.is_obstrepo(altdir, obstdir):
             # We have an alternates repo, but it's not an objstore repo
             # Probably left over from grokmirror-1.x
             # Do we have any matching obstrepos?
@@ -868,7 +872,7 @@ def fsck_mirror(
 
                 refresh_obst_roots(obst_roots, obstrepo)
 
-        elif altdir.find(obstdir) == 0 and not is_private:
+        elif grokmirror.is_obstrepo(altdir, obstdir) and not is_private:
             # Make sure this repo is properly set up with obstrepo
             # (e.g. it could have been cloned/copied and obstrepo is not tracking it yet)
             obstrepo = altdir

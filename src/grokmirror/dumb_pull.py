@@ -45,7 +45,7 @@ def git_remote_update(args: list[str], fullpath: str) -> None:
         debug = []
         warn = []
         for line in error.split('\n'):
-            if line.find('From ') == 0 or line.find('-> ') > 0:
+            if line.startswith('From ') or '-> ' in line:
                 debug.append(line)
             else:
                 warn.append(line)

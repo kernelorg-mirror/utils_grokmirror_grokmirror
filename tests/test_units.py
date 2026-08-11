@@ -17,6 +17,7 @@ import pathlib
 import pickle
 import subprocess
 import threading
+from configparser import ExtendedInterpolation
 from pathlib import Path
 from typing import IO
 
@@ -392,6 +393,65 @@ class TestRepackLevel:
         assert grokmirror.get_repack_level(self.obj_info(count=100)) == 0
 
 
+class TestIsObstrepo:
+    """is_obstrepo(path, obstdir) asks whether a path is inside the objstore."""
+
+    def test_repo_inside_obstdir(self, tmp_path: Path) -> None:
+        obstdir = str(tmp_path / 'objstore')
+        assert grokmirror.is_obstrepo(str(tmp_path / 'objstore' / 'x.git'), obstdir)
+
+    def test_sibling_sharing_a_name_prefix_is_not_inside(self, tmp_path: Path) -> None:
+        # A string-prefix check said /srv/objstore-private/x.git was inside
+        # /srv/objstore. Directory containment is not string containment.
+        obstdir = str(tmp_path / 'objstore')
+        assert not grokmirror.is_obstrepo(str(tmp_path / 'objstore-private' / 'x.git'), obstdir)
+
+
+class TestFsckErrorClassification:
+    """Blank patterns must not classify anything.
+
+    Splitting an empty config value on newlines yields [''], and every
+    string "contains" the empty string, so an unset ignore_errors used to
+    swallow every error into the debug log, and an unset reclone_on_errors
+    used to request a reclone for any error at all. The two masked each
+    other just well enough to go unnoticed.
+    """
+
+    @staticmethod
+    def _config(toplevel: Path) -> grokmirror.GrokConfigParser:
+        config = grokmirror.GrokConfigParser(interpolation=ExtendedInterpolation())
+        config.read_dict({'core': {'toplevel': str(toplevel)}, 'fsck': {}})
+        return config
+
+    def test_empty_ignore_errors_ignores_nothing(self, tmp_path: Path) -> None:
+        config = self._config(tmp_path)
+        warn = grokmirror.fsck.remove_ignored_errors('error: it went badly', config)
+        assert warn == ['error: it went badly']
+
+    def test_configured_ignore_pattern_still_matches_substring(self, tmp_path: Path) -> None:
+        config = self._config(tmp_path)
+        config['fsck']['ignore_errors'] = 'went badly\ndangling commit'
+        warn = grokmirror.fsck.remove_ignored_errors('error: it went badly\nerror: novel problem', config)
+        assert warn == ['error: novel problem']
+
+    def test_empty_reclone_on_errors_reclones_nothing(self, tmp_path: Path) -> None:
+        repo = tmp_path / 'mirror' / 'test.git'
+        repo.mkdir(parents=True)
+        config = self._config(tmp_path / 'mirror')
+        ses = grokmirror.GrokSession()
+        grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: any error at all'])
+        assert not (repo / 'grokmirror.reclone').exists()
+
+    def test_configured_reclone_pattern_triggers_reclone(self, tmp_path: Path) -> None:
+        repo = tmp_path / 'mirror' / 'test.git'
+        repo.mkdir(parents=True)
+        config = self._config(tmp_path / 'mirror')
+        config['fsck']['reclone_on_errors'] = 'fatal: bad tree object'
+        ses = grokmirror.GrokSession()
+        grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: bad tree object deadbeef'])
+        assert (repo / 'grokmirror.reclone').exists()
+
+
 class TestRunShellCommand:
     """run_shell_command() is the choke point for every external command.
 
@@ -447,6 +507,16 @@ class TestReadManifest:
 
     def test_plain(self, tmp_path: Path) -> None:
         manifile = tmp_path / 'manifest.js'
+        manifile.write_text('{"/test/one.git": {"modified": 5}}')
+        assert grokmirror.read_manifest(str(manifile))['/test/one.git']['modified'] == 5
+
+    def test_gz_in_the_directory_name_does_not_mean_gzip(self, tmp_path: Path) -> None:
+        # The opener used to be picked by looking for '.gz' anywhere in the
+        # path, so a plain-text manifest under /srv/my.gz-mirrors/ was fed
+        # to gzip and blew up.
+        mdir = tmp_path / 'my.gz-mirrors'
+        mdir.mkdir()
+        manifile = mdir / 'manifest.js'
         manifile.write_text('{"/test/one.git": {"modified": 5}}')
         assert grokmirror.read_manifest(str(manifile))['/test/one.git']['modified'] == 5
 
