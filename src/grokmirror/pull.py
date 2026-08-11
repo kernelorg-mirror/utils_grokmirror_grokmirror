@@ -113,9 +113,11 @@ class Handler(StreamRequestHandler):
         config = server.config
         # load_config_file() guarantees [core]manifest is set
         manifile = config['core']['manifest']
-        while True:
-            # noinspection PyBroadException
-            try:
+        # The try is outside the loop, not inside it: every way out of the
+        # handler is a return, so catching per-iteration bought nothing.
+        # noinspection PyBroadException
+        try:
+            while True:
                 gitdir = self.rfile.readline().strip().decode()
                 # Do we know anything about this path?
                 manifest = grokmirror.read_manifest(manifile)
@@ -131,10 +133,10 @@ class Handler(StreamRequestHandler):
                     return
                 else:
                     return
-            except Exception:  # noqa: BLE001
-                # Anything at all going wrong on this connection (a short read,
-                # undecodable input, an unreadable manifest) just drops it.
-                return
+        except Exception:  # noqa: BLE001
+            # Anything at all going wrong on this connection (a short read,
+            # undecodable input, an unreadable manifest) just drops it.
+            return
 
 
 def build_optimal_forkgroups(

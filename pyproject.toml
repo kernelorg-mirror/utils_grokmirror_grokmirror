@@ -124,6 +124,8 @@ extend-select = [
     "FURB103", # write-whole-file: open()+write() -> Path.write_text/write_bytes
     "FURB113", # repeated-append -> one extend()
     "I",
+    "PERF",
+    "PIE",
     "PLC1802", # len-test: `if len(x)` as a condition -> `if x`
     "PLW1514", # unspecified-encoding: text-mode I/O must say encoding=
     "PTH", # os.path and friends -> pathlib
