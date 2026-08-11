@@ -255,7 +255,7 @@ class GrokSession:
         logger.debug('Ignore list: %s', ' '.join(ignore))
         ignorematch = compile_globs(ignore)
         gitdirs = set()
-        for root, dirs, files in os.walk(toplevel, topdown=True):
+        for root, dirs, _files in os.walk(toplevel, topdown=True):
             if not dirs:
                 continue
 
@@ -1171,7 +1171,7 @@ def get_forkgroups(obstdir: StrPath, toplevel: StrPath) -> dict[str, set[str]]:
             forkgroups[forkgroup] = set()
             obstrepo = child.as_posix()
             remotes = list_repo_remotes(obstrepo, withurl=True)
-            for virtref, url in remotes:
+            for _virtref, url in remotes:
                 # Objstore remotes point at local child repos; anything not
                 # under our toplevel (as a path, not a string prefix) is not ours.
                 if not PurePath(url).is_relative_to(toplevel):

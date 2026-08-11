@@ -118,7 +118,8 @@ preview = true
 explicit-preview-rules = true
 extend-select = [
     "ARG",
-    "B904", # raise inside except must use "from" to keep the original cause
+    "B", # bugbear: likely bugs and design problems (includes B904)
+    "EM",
     "FURB",
     "FURB101", # read-whole-file: open()+read() -> Path.read_text/read_bytes
     "FURB103", # write-whole-file: open()+write() -> Path.write_text/write_bytes
@@ -129,8 +130,20 @@ extend-select = [
     "PL",
     "PTH", # os.path and friends -> pathlib
     "SIM",
+    "TRY", # tryceratops: exception handling antipatterns
 ]
 ignore = [
+    # The exception-message rules all want the same thing at ~60 raise sites:
+    # either a `msg = f'...'` temporary before every raise, or the message text
+    # moved into the exception class. Neither buys anything here. The messages
+    # are one-line, one-use strings that go straight into a cron log, and
+    # GrokError is deliberately a plain carrier for them -- the tree's contract
+    # is that command() prints "ERROR: <message>" and exits 1. Keeping the text
+    # at the raise site is what makes that readable.
+    "EM101", # raw-string-in-exception
+    "EM102", # f-string-in-exception
+    "EM103", # dot-format-in-exception
+    "TRY003", # raise-vanilla-args (same sites, same reason)
     # The complexity rules all fire on the same handful of functions --
     # fsck_mirror(), pull_mirror(), pull_repo() -- which are long because they
     # are the top-level run loops, not because they grew by accident. Splitting

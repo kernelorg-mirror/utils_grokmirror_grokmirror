@@ -86,9 +86,10 @@ def get_blob_set(fullpath: grokmirror.StrPath) -> tuple[set[tuple[str, int]], in
                 bsize = int(chunks[1])
                 size += bsize
                 bset.add((bhash, bsize))
-        return bset, size
     except FileNotFoundError:
         pass
+    else:
+        return bset, size
 
     # This only makes sense for repos not using alternates, so make sure you check first
     logger.info(' bloblist: %s', fullpath)
@@ -116,9 +117,7 @@ def check_sibling_repos_by_blobs(
     iset = bset1.intersection(bset2)
     if not iset:
         return False
-    isize = 0
-    for bhash, bsize in iset:
-        isize += bsize
+    isize = sum(bsize for _bhash, bsize in iset)
     # Both repos should share at least ratio % of blobs in them
     ratio1 = int(isize / bsize1 * 100)
     logger.debug('isize=%s, bsize1=%s, ratio1=%s', isize, bsize1, ratio1)
@@ -864,11 +863,7 @@ def fsck_mirror(
             # (e.g. it could have been cloned/copied and obstrepo is not tracking it yet)
             obstrepo = altdir
             s_remotes = grokmirror.list_repo_remotes(obstrepo, withurl=True)
-            found = False
-            for virtref, childpath in s_remotes:
-                if childpath == fullpath:
-                    found = True
-                    break
+            found = any(childpath == fullpath for _virtref, childpath in s_remotes)
             if not found:
                 # Set it up properly
                 grokmirror.add_repo_to_objstore(obstrepo, fullpath)
@@ -1075,7 +1070,7 @@ def fsck_mirror(
             br.sort()
             refpref = ' '.join(br)
             # Go through all remotes and set their alternateRefsPrefixes
-            for s_virtref, s_childpath in my_remotes:
+            for _s_virtref, s_childpath in my_remotes:
                 # is it already set to that?
                 entries = grokmirror.get_config_from_git(s_childpath, r'core\.alternate*')
                 if entries.get('alternaterefsprefixes') != refpref:
