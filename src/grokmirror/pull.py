@@ -264,7 +264,7 @@ def spa_worker(config: grokmirror.GrokConfigParser, q_spa: mp.Queue, pauseonload
         logger.info('      spa: %s (done: %s)', gitdir, ', '.join(done))
 
 
-def objstore_repo_preload(config: grokmirror.GrokConfigParser, obstrepo: str) -> None:
+def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokConfigParser, obstrepo: str) -> None:
     purl = config['remote'].get('preload_bundle_url')
     if not purl:
         return
@@ -273,8 +273,7 @@ def objstore_repo_preload(config: grokmirror.GrokConfigParser, obstrepo: str) ->
     burl = '{}/{}.bundle'.format(purl.rstrip('/'), bname)
     bfile = os.path.join(obstdir, f'{bname}.bundle')
     try:
-        sess = grokmirror.get_requests_session()
-        resp = sess.get(burl, stream=True)
+        resp = ses.get_requests_session().get(burl, stream=True)
         resp.raise_for_status()
         logger.info(' objstore: downloading %s.bundle', bname)
         with open(bfile, 'wb') as fh:
@@ -309,7 +308,13 @@ def objstore_repo_preload(config: grokmirror.GrokConfigParser, obstrepo: str) ->
     os.unlink(bfile)
 
 
-def pull_worker(config: grokmirror.GrokConfigParser, q_pull: mp.Queue, q_spa: mp.Queue, q_done: mp.Queue) -> None:
+def pull_worker(
+    ses: grokmirror.GrokSession,
+    config: grokmirror.GrokConfigParser,
+    q_pull: mp.Queue,
+    q_spa: mp.Queue,
+    q_done: mp.Queue,
+) -> None:
     toplevel = os.path.realpath(config['core']['toplevel'])
     obstdir = os.path.realpath(config['core']['objstore'])
     maxretries = config['pull'].getint('retries', 3)
@@ -344,7 +349,7 @@ def pull_worker(config: grokmirror.GrokConfigParser, q_pull: mp.Queue, q_spa: mp
                         os.unlink(fullpath)
                     else:
                         # is anything using us for alternates?
-                        if grokmirror.is_alt_repo(toplevel, gitdir):
+                        if ses.is_alt_repo(toplevel, gitdir):
                             logger.debug('Not purging %s because it is used by other repos via alternates', fullpath)
                         else:
                             logger.info('    purge: %s', gitdir)
@@ -386,7 +391,7 @@ def pull_worker(config: grokmirror.GrokConfigParser, q_pull: mp.Queue, q_spa: mp
                         o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
                         if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
                             # Try to preload the objstore repo directly
-                            objstore_repo_preload(config, obstrepo)
+                            objstore_repo_preload(ses, config, obstrepo)
 
                     if r_fp != my_fp:
                         # Make sure we have the remote set up
@@ -728,7 +733,11 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: dict) -> 
 
 
 def fill_todo_from_manifest(
-    config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomtime: bool = False, forcepurge: bool = False
+    ses: grokmirror.GrokSession,
+    config: grokmirror.GrokConfigParser,
+    q_mani: mp.Queue,
+    nomtime: bool = False,
+    forcepurge: bool = False,
 ) -> None:
     # l_ = local, r_ = remote
     l_mani_path = config['core']['manifest']
@@ -803,7 +812,7 @@ def fill_todo_from_manifest(
                 raise grokmirror.GrokManifestError(f'Empty manifest in {r_mani_url}')
 
         else:
-            session = grokmirror.get_requests_session()
+            session = ses.get_requests_session()
 
             # Find out if we need to run at all first
             headers = {}
@@ -847,8 +856,10 @@ def fill_todo_from_manifest(
                     jdata = res.content
 
                 res.close()
-                # Don't hold session open, since we don't refetch manifest very frequently
-                session.close()
+                # Don't hold the session open, since we don't refetch the
+                # manifest very frequently. The session object forgets the
+                # closed requests.Session, so a later call starts a fresh one.
+                ses.close_requests_session()
                 r_manifest = json.loads(jdata)
 
             # Deliberately broad: anything at all going wrong while fetching or
@@ -1025,7 +1036,7 @@ def fill_todo_from_manifest(
         nopurge = config['pull'].get('nopurge', '').split('\n')
         to_purge = set()
         found_repos = 0
-        for founddir in grokmirror.find_all_gitdirs(toplevel, exclude_objstore=True):
+        for founddir in ses.find_all_gitdirs(toplevel, exclude_objstore=True):
             gitdir = '/' + os.path.relpath(founddir, toplevel)
             found_repos += 1
 
@@ -1072,47 +1083,45 @@ def fill_todo_from_manifest(
 
 def update_manifest(config: grokmirror.GrokConfigParser, entries: list) -> None:
     manifile = config['core']['manifest']
-    grokmirror.manifest_lock(manifile)
-    manifest = grokmirror.read_manifest(manifile)
-    changed = False
-    while len(entries):
-        gitdir, repoinfo, action, success = entries.pop()
-        if not success:
-            continue
-        if action == 'purge':
-            # Remove entry from manifest
+    with grokmirror.locked_manifest(manifile):
+        manifest = grokmirror.read_manifest(manifile)
+        changed = False
+        while len(entries):
+            gitdir, repoinfo, action, success = entries.pop()
+            if not success:
+                continue
+            if action == 'purge':
+                # Remove entry from manifest
+                try:
+                    manifest.pop(gitdir)
+                    changed = True
+                except KeyError:
+                    pass
+                continue
+
             try:
-                manifest.pop(gitdir)
-                changed = True
+                # does not belong in the manifest
+                repoinfo.pop('private')
             except KeyError:
                 pass
-            continue
-
-        try:
-            # does not belong in the manifest
-            repoinfo.pop('private')
-        except KeyError:
-            pass
-        for key, val in dict(repoinfo).items():
-            # Clean up grok-2.0 null values
-            if key in ('head', 'forkgroup') and val is None:
-                repoinfo.pop(key)
-        # Make sure 'reference' is present to prevent grok-1.x breakage
-        if 'reference' not in repoinfo:
-            repoinfo['reference'] = None
-        manifest[gitdir] = repoinfo
-        changed = True
-    if changed:
-        if 'manifest' in config:
-            pretty = config['manifest'].getboolean('pretty', False)
-        else:
-            pretty = False
-        grokmirror.write_manifest(manifile, manifest, pretty=pretty)
-        logger.info(' manifest: wrote %s (%d entries)', manifile, len(manifest))
-        # write out projects.list, if asked to
-        write_projects_list(config, manifest)
-
-    grokmirror.manifest_unlock(manifile)
+            for key, val in dict(repoinfo).items():
+                # Clean up grok-2.0 null values
+                if key in ('head', 'forkgroup') and val is None:
+                    repoinfo.pop(key)
+            # Make sure 'reference' is present to prevent grok-1.x breakage
+            if 'reference' not in repoinfo:
+                repoinfo['reference'] = None
+            manifest[gitdir] = repoinfo
+            changed = True
+        if changed:
+            if 'manifest' in config:
+                pretty = config['manifest'].getboolean('pretty', False)
+            else:
+                pretty = False
+            grokmirror.write_manifest(manifile, manifest, pretty=pretty)
+            logger.info(' manifest: wrote %s (%d entries)', manifile, len(manifest))
+            # write out projects.list, if asked to
+            write_projects_list(config, manifest)
 
 
 def socket_worker(config: grokmirror.GrokConfigParser, q_mani: mp.Queue, sockfile: str) -> None:
@@ -1152,10 +1161,12 @@ def showstats(
     logger.info('      ---:  %s', ', '.join(stats))
 
 
-def manifest_worker(config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomtime: bool = False) -> None:
+def manifest_worker(
+    ses: grokmirror.GrokSession, config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomtime: bool = False
+) -> None:
     starttime = int(time.time())
     try:
-        fill_todo_from_manifest(config, q_mani, nomtime=nomtime)
+        fill_todo_from_manifest(ses, config, q_mani, nomtime=nomtime)
     except (OSError, grokmirror.GrokManifestError) as ex:
         # Whatever went wrong was already logged in detail where it happened,
         # so just say so and fall through to the usual pacing below: a broken
@@ -1191,6 +1202,10 @@ def pull_mirror(
     obstdir = os.path.realpath(config['core']['objstore'])
     refresh = config['pull'].getint('refresh', 300)
 
+    # Workers get a copy of this through mp.Process args; the alternates
+    # caches travel with it, so they don't each re-walk the toplevel.
+    ses = grokmirror.GrokSession()
+
     q_mani: mp.Queue = mp.Queue()
     q_todo: mp.Queue = mp.Queue()
     q_pull: mp.Queue = mp.Queue()
@@ -1218,7 +1233,7 @@ def pull_mirror(
     # Run in the main thread if we have runonce
     if runonce:
         try:
-            fill_todo_from_manifest(config, q_mani, nomtime=nomtime, forcepurge=forcepurge)
+            fill_todo_from_manifest(ses, config, q_mani, nomtime=nomtime, forcepurge=forcepurge)
         except (OSError, grokmirror.GrokManifestError) as ex:
             # Already logged in detail. A mirror run from cron should report the
             # problem and exit non-zero, not print a traceback at the admin.
@@ -1274,7 +1289,7 @@ def pull_mirror(
                 dws.append(dw)
 
             if not q_pull.empty() and len(pws) < pull_threads:
-                pw = mp.Process(target=pull_worker, args=(config, q_pull, q_spa, q_done))
+                pw = mp.Process(target=pull_worker, args=(ses, config, q_pull, q_spa, q_done))
                 pw.daemon = True
                 pw.start()
                 pws.append(pw)
@@ -1346,7 +1361,7 @@ def pull_mirror(
                     update_manifest(config, done)
                     if post_work_hook:
                         run_post_work_complete_hook(config)
-                mw = mp.Process(target=manifest_worker, args=(config, q_mani, nomtime))
+                mw = mp.Process(target=manifest_worker, args=(ses, config, q_mani, nomtime))
                 nomtime = False
                 mw.daemon = True
                 mw.start()

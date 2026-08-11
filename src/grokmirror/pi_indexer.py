@@ -64,7 +64,7 @@ def index_pi_inbox(fullpath: str, opts: argparse.Namespace) -> bool:
     return success
 
 
-def init_pi_inbox(gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
+def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
     # for boost values, we look at the number of entries
     boosts = []
     if opts.listid_priority:
@@ -92,8 +92,7 @@ def init_pi_inbox(gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
             origin_host = opts.origin_host.rstrip('/')
             rconfig = f'{origin_host}/{inboxname}/_/text/config/raw'
             try:
-                ses = grokmirror.get_requests_session()
-                res = ses.get(rconfig)
+                res = ses.get_requests_session().get(rconfig)
                 res.raise_for_status()
                 origins = res.text
             # Deliberately broad: any failure to fetch origins info just skips this
@@ -218,6 +217,7 @@ def process_inboxdirs(inboxdirs: set[str], opts: argparse.Namespace, init: bool 
         sys.exit(0)
 
     # Init all new repos first, and then index them one by one
+    ses = grokmirror.GrokSession()
     toindex = set()
     for inboxdir in inboxdirs:
         gdir, pdir = get_git_pi_dir(opts, inboxdir)
@@ -228,7 +228,7 @@ def process_inboxdirs(inboxdirs: set[str], opts: argparse.Namespace, init: bool 
         # init_pi_inbox() call into a boolean chain.
         if init and not os.path.exists(msgmapdbf):  # noqa: SIM102
             # Initialize this public-inbox repo
-            if not init_pi_inbox(gdir, pdir, opts):
+            if not init_pi_inbox(ses, gdir, pdir, opts):
                 logger.critical('Could not init %s', inboxdir)
                 continue
         if os.path.exists(msgmapdbf):

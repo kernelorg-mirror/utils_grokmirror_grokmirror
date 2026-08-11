@@ -13,6 +13,8 @@ import errno
 import gzip
 import json
 import os
+import pathlib
+import pickle
 import subprocess
 from pathlib import Path
 from typing import IO
@@ -148,6 +150,151 @@ class TestLockedRepo:
         assert target not in grokmirror.REPO_LOCKH
         assert len(seen) == 1
         assert seen[0].closed
+
+
+class TestDoubleLocking:
+    """Locking what this process already holds is a bug, and now says so.
+
+    fcntl locks cannot protect a process from itself: taking the same lock a
+    second time succeeds instantly, and closing either handle silently drops
+    both locks. Worse, manifest_lock() used to overwrite the stored handle,
+    so the "held" lock quietly evaporated as soon as the replaced handle was
+    garbage-collected.
+    """
+
+    def test_repo_double_lock_raises(self, tmp_path: Path) -> None:
+        target = str(tmp_path / 'repo.git')
+        with grokmirror.locked_repo(target), pytest.raises(grokmirror.GrokLockError, match='already locked'):
+            grokmirror.lock_repo(target)
+        # The refusal must not have clobbered the original lock's bookkeeping
+        assert target not in grokmirror.REPO_LOCKH
+
+    def test_manifest_double_lock_raises(self, tmp_path: Path) -> None:
+        manifile = str(tmp_path / 'manifest.js.gz')
+        with grokmirror.locked_manifest(manifile), pytest.raises(grokmirror.GrokLockError, match='already locked'):
+            grokmirror.manifest_lock(manifile)
+        assert grokmirror.MANIFEST_LOCKH is None
+
+
+class TestLockedManifest:
+    """locked_manifest() must release the lock however the block exits."""
+
+    def test_releases_on_success(self, tmp_path: Path) -> None:
+        manifile = str(tmp_path / 'manifest.js.gz')
+        with grokmirror.locked_manifest(manifile):
+            assert grokmirror.MANIFEST_LOCKH is not None
+        assert grokmirror.MANIFEST_LOCKH is None
+
+    def test_releases_on_exception(self, tmp_path: Path) -> None:
+        # grok-fsck used to keep the manifest locked when it bailed out on an
+        # unparseable status file: the early return skipped the manual
+        # manifest_unlock() call.
+        manifile = str(tmp_path / 'manifest.js.gz')
+        with pytest.raises(grokmirror.GrokError, match='boom'), grokmirror.locked_manifest(manifile):
+            raise grokmirror.GrokError('boom')
+        assert grokmirror.MANIFEST_LOCKH is None
+
+
+def fake_bare_repo(path: Path, altrepo: Path | None = None) -> Path:
+    """The bare minimum that is_bare_git_repo() accepts, no git needed."""
+    (path / 'objects' / 'info').mkdir(parents=True)
+    (path / 'refs').mkdir()
+    (path / 'HEAD').write_text('ref: refs/heads/master\n', encoding='utf-8')
+    if altrepo is not None:
+        (path / 'objects' / 'info' / 'alternates').write_text(f'{altrepo}/objects\n', encoding='utf-8')
+    return path
+
+
+class TestGrokSession:
+    """GrokSession carries the per-run state that used to be module globals."""
+
+    def test_requests_session_is_memoized(self) -> None:
+        ses = grokmirror.GrokSession()
+        first = ses.get_requests_session()
+        assert first.headers['User-Agent'] == f'grokmirror/{grokmirror.VERSION}'
+        assert ses.get_requests_session() is first
+
+    def test_close_forgets_the_session(self) -> None:
+        # grok-pull closes the HTTP session after fetching the remote
+        # manifest. With the old module global the *closed* session stayed
+        # memoized, so any later caller would get a dead object.
+        ses = grokmirror.GrokSession()
+        first = ses.get_requests_session()
+        ses.close_requests_session()
+        assert ses.get_requests_session() is not first
+
+    def test_close_without_open_is_fine(self) -> None:
+        grokmirror.GrokSession().close_requests_session()
+
+    def test_altrepo_map_and_is_alt_repo(self, tmp_path: Path) -> None:
+        tmp_path = tmp_path.resolve()
+        shared = fake_bare_repo(tmp_path / 'objstore' / 'shared.git')
+        child = fake_bare_repo(tmp_path / 'toplevel' / 'child.git', altrepo=shared)
+        fake_bare_repo(tmp_path / 'toplevel' / 'loner.git')
+
+        ses = grokmirror.GrokSession()
+        assert ses.get_altrepo_map(str(tmp_path)) == {str(shared): {str(child)}}
+        assert ses.is_alt_repo(str(tmp_path), 'objstore/shared.git')
+        assert not ses.is_alt_repo(str(tmp_path), 'toplevel/loner.git')
+
+    def test_altrepo_map_is_cached_per_toplevel(self, tmp_path: Path) -> None:
+        # The old module-level cache ignored which toplevel it was built
+        # from: whoever asked first won, and every later caller got that
+        # same answer regardless of the path they passed.
+        tmp_path = tmp_path.resolve()
+        shared = fake_bare_repo(tmp_path / 'shared.git')
+        fake_bare_repo(tmp_path / 'a' / 'child.git', altrepo=shared)
+        (tmp_path / 'b').mkdir()
+
+        ses = grokmirror.GrokSession()
+        assert ses.get_altrepo_map(str(tmp_path / 'a'))
+        assert not ses.get_altrepo_map(str(tmp_path / 'b'))
+
+    def test_refresh_rescans(self, tmp_path: Path) -> None:
+        tmp_path = tmp_path.resolve()
+        shared = fake_bare_repo(tmp_path / 'shared.git')
+        toplevel = tmp_path / 'toplevel'
+        toplevel.mkdir()
+
+        ses = grokmirror.GrokSession()
+        assert not ses.get_altrepo_map(str(toplevel))
+        child = fake_bare_repo(toplevel / 'child.git', altrepo=shared)
+        # The cached answer stays stale until a refresh is asked for
+        assert not ses.get_altrepo_map(str(toplevel))
+        assert ses.get_altrepo_map(str(toplevel), refresh=True) == {str(shared): {str(child)}}
+
+    def test_find_all_gitdirs_primes_the_altrepo_map(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        tmp_path = tmp_path.resolve()
+        shared = fake_bare_repo(tmp_path / 'shared.git')
+        child = fake_bare_repo(tmp_path / 'toplevel' / 'child.git', altrepo=shared)
+
+        ses = grokmirror.GrokSession()
+        assert ses.find_all_gitdirs(str(tmp_path / 'toplevel')) == {str(child)}
+
+        # The walk doubles as the alternates scan, so asking for the map now
+        # must not kick off a second sweep of the tree.
+        def no_glob(_self: pathlib.Path, _pattern: str) -> None:
+            raise AssertionError('the cache was primed, nothing should be rescanning')
+
+        monkeypatch.setattr(pathlib.Path, 'glob', no_glob)
+        assert ses.get_altrepo_map(str(tmp_path / 'toplevel')) == {str(shared): {str(child)}}
+
+    def test_survives_pickling(self, tmp_path: Path) -> None:
+        # Workers receive the session through mp.Process args, which pickles
+        # it under the forkserver and spawn start methods (forkserver is the
+        # Linux default since Python 3.14). The live HTTP session must be
+        # dropped; the alternates caches must come along.
+        tmp_path = tmp_path.resolve()
+        shared = fake_bare_repo(tmp_path / 'shared.git')
+        child = fake_bare_repo(tmp_path / 'toplevel' / 'child.git', altrepo=shared)
+
+        ses = grokmirror.GrokSession()
+        ses.get_requests_session()
+        ses.get_altrepo_map(str(tmp_path / 'toplevel'))
+
+        clone = pickle.loads(pickle.dumps(ses))
+        assert clone._requests is None
+        assert clone.get_altrepo_map(str(tmp_path / 'toplevel')) == {str(shared): {str(child)}}
 
 
 class TestMergeSiblings:

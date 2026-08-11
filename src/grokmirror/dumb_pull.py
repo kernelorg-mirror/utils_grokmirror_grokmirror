@@ -191,6 +191,8 @@ def dumb_pull(
     loglevel = logging.INFO
     grokmirror.init_logger('dumb-pull', logfile, loglevel, verbose)
 
+    ses = grokmirror.GrokSession()
+
     if remotes is None:
         remotes = ['*']
 
@@ -208,7 +210,7 @@ def dumb_pull(
 
         else:
             logger.debug('Finding all git repos in %s', entry)
-            for founddir in grokmirror.find_all_gitdirs(entry):
+            for founddir in ses.find_all_gitdirs(entry):
                 didwork = dumb_pull_repo(founddir, remotes, svn=svn)
                 if didwork:
                     run_post_update_hook(posthook, founddir)

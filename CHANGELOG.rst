@@ -19,6 +19,13 @@ v3.0 (TBD)
   during grok-pull could previously leave the repository locked for the
   life of the daemon, and a repository with no remotes left grok-dumb-pull
   holding its lock
+- Fix grok-fsck keeping the manifest locked for the rest of the run when
+  the status file could not be parsed
+- Locking a repository or the manifest a second time from the same process
+  is now reported as an error instead of silently succeeding; fcntl locks
+  cannot protect a process from itself, and re-locking the manifest used
+  to quietly drop the lock the process believed it still held
+- Fix grok-pi-piper labeling its log entries as coming from grok-pull
 - Fix grok-manifest traceback when purging repositories that no longer
   exist on disk (broken since v2.0.0)
 - Fix grok-manifest not removing a repository from the manifest when it

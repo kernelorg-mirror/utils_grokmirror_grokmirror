@@ -40,6 +40,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 VERSION = '3.0-dev'
+
+# The process-wide lock registries. These stay module-level on purpose: POSIX
+# fcntl locks belong to the (process, file) pair, not to any Python object.
+# Closing any descriptor for a locked file drops all of the process's locks
+# on it, and re-locking from the same process always succeeds, so scoping
+# these to anything narrower than the process would fake an isolation the
+# OS does not provide. Per-run state lives on GrokSession instead.
 MANIFEST_LOCKH: IO[str] | None = None
 REPO_LOCKH: dict[str, IO[str]] = {}
 GITBIN = '/usr/bin/git'
@@ -48,11 +55,6 @@ GITBIN = '/usr/bin/git'
 # child of this one, so the handlers init_logger() attaches here serve the
 # whole package. No rebinding needed anywhere.
 logger = logging.getLogger(__name__)
-
-_alt_repo_map: dict[str, set[str]] | None = None
-
-# Used to store our requests session
-REQSESSION = None
 
 OBST_PREAMBULE = (
     '# WARNING: This is a grokmirror object storage repository.\n'
@@ -92,16 +94,132 @@ class GrokMissingRevisionsError(GrokError):
     """Revisions we expected to find in a repository are not there."""
 
 
-def get_requests_session() -> requests.Session:
-    global REQSESSION
-    if REQSESSION is None:
-        REQSESSION = requests.session()
-        retry = Retry(connect=3, backoff_factor=0.5)
-        adapter = HTTPAdapter(max_retries=retry)
-        REQSESSION.mount('http://', adapter)
-        REQSESSION.mount('https://', adapter)
-        REQSESSION.headers.update({'User-Agent': f'grokmirror/{VERSION}'})
-    return REQSESSION
+class GrokSession:
+    """Per-run state shared by one grokmirror command.
+
+    Holds what used to live in module globals: the memoized HTTP session
+    and the alternates-map caches, the latter keyed by the toplevel they
+    were walked from (the old single global served whatever toplevel was
+    asked for first). Each command() entry point creates one and threads
+    it through; worker processes receive a copy through mp.Process args.
+
+    Filesystem lock handles deliberately do NOT live here: fcntl locks
+    belong to the process, so the registries next to them are module-level
+    (see the comment above MANIFEST_LOCKH).
+    """
+
+    def __init__(self) -> None:
+        self._requests: requests.Session | None = None
+        self._alt_repo_maps: dict[str, dict[str, set[str]]] = {}
+
+    def __getstate__(self) -> dict:
+        # A live HTTP session cannot cross a process boundary; the
+        # alternates caches can, and save each worker a toplevel re-walk.
+        state = self.__dict__.copy()
+        state['_requests'] = None
+        return state
+
+    def get_requests_session(self) -> requests.Session:
+        if self._requests is None:
+            self._requests = requests.session()
+            retry = Retry(connect=3, backoff_factor=0.5)
+            adapter = HTTPAdapter(max_retries=retry)
+            self._requests.mount('http://', adapter)
+            self._requests.mount('https://', adapter)
+            self._requests.headers.update({'User-Agent': f'grokmirror/{VERSION}'})
+        return self._requests
+
+    def close_requests_session(self) -> None:
+        # Forget the session as well as closing it, so a later call gets a
+        # fresh one instead of the closed husk.
+        if self._requests is not None:
+            self._requests.close()
+            self._requests = None
+
+    def get_altrepo_map(self, toplevel: str, refresh: bool = False) -> dict[str, set[str]]:
+        key = os.path.realpath(toplevel)
+        if key not in self._alt_repo_maps or refresh:
+            logger.info('   search: finding all repos using alternates')
+            amap: dict[str, set[str]] = {}
+            tp = pathlib.Path(toplevel)
+            for subp in tp.glob('**/*.git'):
+                if subp.is_symlink():
+                    # Don't care about symlinks for altrepo mapping
+                    continue
+                fullpath = subp.resolve().as_posix()
+                altrepo = get_altrepo(fullpath)
+                if not altrepo:
+                    continue
+                amap.setdefault(altrepo, set()).add(fullpath)
+            self._alt_repo_maps[key] = amap
+        return self._alt_repo_maps[key]
+
+    def is_alt_repo(self, toplevel: str, refrepo: str) -> bool:
+        amap = self.get_altrepo_map(toplevel)
+
+        looking_for = os.path.realpath(os.path.join(toplevel, refrepo.strip('/')))
+        return looking_for in amap
+
+    def find_all_gitdirs(
+        self,
+        toplevel: str,
+        ignore: Collection[str] | None = None,
+        normalize: bool = False,
+        exclude_objstore: bool = True,
+    ) -> set[str]:
+        # Opportunistically build the alternates map while we walk, unless
+        # one is already cached for this toplevel.
+        key = os.path.realpath(toplevel)
+        amap: dict[str, set[str]] = {}
+        build_amap = key not in self._alt_repo_maps
+
+        if ignore is None:
+            ignore = set()
+
+        logger.info('   search: finding all repos in %s', toplevel)
+        logger.debug('Ignore list: %s', ' '.join(ignore))
+        gitdirs = set()
+        for root, dirs, files in os.walk(toplevel, topdown=True):
+            if not len(dirs):
+                continue
+
+            torm = set()
+            for name in dirs:
+                fullpath = os.path.join(root, name)
+                # Should we ignore this dir?
+                ignored = False
+                for ignoredir in ignore:
+                    if fnmatch.fnmatch(fullpath, ignoredir):
+                        torm.add(name)
+                        ignored = True
+                        break
+                if ignored:
+                    continue
+                if not is_bare_git_repo(fullpath):
+                    continue
+                if exclude_objstore and os.path.exists(os.path.join(fullpath, 'grokmirror.objstore')):
+                    continue
+                if normalize:
+                    fullpath = os.path.realpath(fullpath)
+
+                logger.debug('Found %s', os.path.join(root, name))
+                gitdirs.add(fullpath)
+                torm.add(name)
+
+                if build_amap:
+                    altrepo = get_altrepo(fullpath)
+                    if not altrepo:
+                        continue
+                    amap.setdefault(altrepo, set()).add(fullpath)
+
+            for name in torm:
+                # don't recurse into the found *.git dirs
+                dirs.remove(name)
+
+        if build_amap:
+            self._alt_repo_maps[key] = amap
+
+        return gitdirs
 
 
 def get_config_from_git(fullpath: str | None, regexp: str, defaults: dict[str, str] | None = None) -> dict[str, str]:
@@ -220,6 +338,12 @@ def _lockname(fullpath: str) -> str:
 
 
 def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
+    if fullpath in REPO_LOCKH:
+        # A second lock would succeed instantly (fcntl locks cannot protect
+        # a process from itself) and the first unlock_repo() would release
+        # both, so a double lock is always a bug in the caller.
+        raise GrokLockError(f'{fullpath} is already locked by this process')
+
     repolock = _lockname(fullpath)
 
     logger.debug('Attempting to exclusive-lock %s', repolock)
@@ -416,11 +540,11 @@ def set_altrepo(fullpath: str, altdir: str) -> None:
         logger.critical('objdir %s does not exist, not setting alternates file %s', objpath, altfile)
 
 
-def get_rootsets(toplevel: str, obstdir: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+def get_rootsets(ses: GrokSession, toplevel: str, obstdir: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     top_roots: dict[str, set[str]] = {}
     obst_roots: dict[str, set[str]] = {}
-    topdirs = find_all_gitdirs(toplevel, normalize=True, exclude_objstore=True)
-    obstdirs = find_all_gitdirs(obstdir, normalize=True, exclude_objstore=False)
+    topdirs = ses.find_all_gitdirs(toplevel, normalize=True, exclude_objstore=True)
+    obstdirs = ses.find_all_gitdirs(obstdir, normalize=True, exclude_objstore=False)
     for fullpath in topdirs:
         roots = get_repo_roots(fullpath)
         if roots:
@@ -928,33 +1052,6 @@ def set_repo_fingerprint(toplevel: str, gitdir: str, fingerprint: str | None = N
     return fingerprint
 
 
-def get_altrepo_map(toplevel: str, refresh: bool = False) -> dict[str, set[str]]:
-    global _alt_repo_map
-    if _alt_repo_map is None or refresh:
-        logger.info('   search: finding all repos using alternates')
-        _alt_repo_map = {}
-        tp = pathlib.Path(toplevel)
-        for subp in tp.glob('**/*.git'):
-            if subp.is_symlink():
-                # Don't care about symlinks for altrepo mapping
-                continue
-            fullpath = subp.resolve().as_posix()
-            altrepo = get_altrepo(fullpath)
-            if not altrepo:
-                continue
-            if altrepo not in _alt_repo_map:
-                _alt_repo_map[altrepo] = set()
-            _alt_repo_map[altrepo].add(fullpath)
-    return _alt_repo_map
-
-
-def is_alt_repo(toplevel: str, refrepo: str) -> bool:
-    amap = get_altrepo_map(toplevel)
-
-    looking_for = os.path.realpath(os.path.join(toplevel, refrepo.strip('/')))
-    return looking_for in amap
-
-
 def is_obstrepo(fullpath: str, obstdir: str | None = None) -> bool:
     if obstdir:
         # At this point, both should be normalized
@@ -963,71 +1060,18 @@ def is_obstrepo(fullpath: str, obstdir: str | None = None) -> bool:
     return os.path.exists(os.path.join(fullpath, 'grokmirror.objstore'))
 
 
-def find_all_gitdirs(
-    toplevel: str, ignore: Collection[str] | None = None, normalize: bool = False, exclude_objstore: bool = True
-) -> set[str]:
-    global _alt_repo_map
-    if _alt_repo_map is None:
-        _alt_repo_map = {}
-        build_amap = True
-    else:
-        build_amap = False
-
-    if ignore is None:
-        ignore = set()
-
-    logger.info('   search: finding all repos in %s', toplevel)
-    logger.debug('Ignore list: %s', ' '.join(ignore))
-    gitdirs = set()
-    for root, dirs, files in os.walk(toplevel, topdown=True):
-        if not len(dirs):
-            continue
-
-        torm = set()
-        for name in dirs:
-            fullpath = os.path.join(root, name)
-            # Should we ignore this dir?
-            ignored = False
-            for ignoredir in ignore:
-                if fnmatch.fnmatch(fullpath, ignoredir):
-                    torm.add(name)
-                    ignored = True
-                    break
-            if ignored:
-                continue
-            if not is_bare_git_repo(fullpath):
-                continue
-            if exclude_objstore and os.path.exists(os.path.join(fullpath, 'grokmirror.objstore')):
-                continue
-            if normalize:
-                fullpath = os.path.realpath(fullpath)
-
-            logger.debug('Found %s', os.path.join(root, name))
-            gitdirs.add(fullpath)
-            torm.add(name)
-
-            if build_amap:
-                altrepo = get_altrepo(fullpath)
-                if not altrepo:
-                    continue
-                if altrepo not in _alt_repo_map:
-                    _alt_repo_map[altrepo] = set()
-                _alt_repo_map[altrepo].add(fullpath)
-
-        for name in torm:
-            # don't recurse into the found *.git dirs
-            dirs.remove(name)
-
-    return gitdirs
-
-
 def manifest_lock(manifile: str) -> None:
     global MANIFEST_LOCKH
     if MANIFEST_LOCKH is not None:
-        logger.debug('Manifest %s already locked', manifile)
+        # Opening a second handle would not block (fcntl locks cannot
+        # protect a process from itself), and worse: the moment the
+        # replaced handle got garbage-collected, the lock would silently
+        # drop while we believed we still held it.
+        raise GrokLockError(f'Manifest {manifile} is already locked by this process')
 
     manilock = _lockname(manifile)
     # Deliberately not a context manager: released by manifest_unlock().
+    # Callers should prefer locked_manifest().
     MANIFEST_LOCKH = open(manilock, 'w', encoding='utf-8')  # noqa: SIM115
     logger.debug('Attempting to lock %s', manilock)
     lockf(MANIFEST_LOCKH, LOCK_EX)
@@ -1043,6 +1087,21 @@ def manifest_unlock(manifile: str) -> None:
         # noinspection PyUnresolvedReferences
         MANIFEST_LOCKH.close()
         MANIFEST_LOCKH = None
+
+
+@contextmanager
+def locked_manifest(manifile: str) -> Iterator[None]:
+    """Hold the exclusive manifest lock for the duration of the with block.
+
+    The lock is released however the block exits. Note that read_manifest's
+    wait loop drops and re-takes this lock while it waits for the manifest
+    to appear, which is why the lock handle lives at module level.
+    """
+    manifest_lock(manifile)
+    try:
+        yield
+    finally:
+        manifest_unlock(manifile)
 
 
 def read_manifest(manifile: str, wait: bool = False) -> dict:

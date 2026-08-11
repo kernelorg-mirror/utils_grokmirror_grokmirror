@@ -284,88 +284,88 @@ def grok_manifest(
     if ignore is None:
         ignore = []
 
-    grokmirror.manifest_lock(manifile)
-    manifest = grokmirror.read_manifest(manifile, wait=wait)
+    ses = grokmirror.GrokSession()
 
-    toplevel = os.path.realpath(toplevel)
+    with grokmirror.locked_manifest(manifile):
+        manifest = grokmirror.read_manifest(manifile, wait=wait)
 
-    # If manifest is empty, don't use current timestamp
-    if not len(manifest):
-        usenow = False
+        toplevel = os.path.realpath(toplevel)
 
-    if remove and len(paths):
-        # Remove the repos as required, write new manfiest and exit
-        for fullpath in paths:
-            repo = '/' + os.path.relpath(fullpath, toplevel)
-            if repo in manifest:
-                manifest.pop(repo)
-                logger.info(' manifest: removed %s', repo)
-            else:
-                # Is it in any of the symlinks?
-                found = False
-                for gitdir in manifest:
-                    if 'symlinks' in manifest[gitdir] and repo in manifest[gitdir]['symlinks']:
-                        found = True
-                        manifest[gitdir]['symlinks'].remove(repo)
-                        if not len(manifest[gitdir]['symlinks']):
-                            manifest[gitdir].pop('symlinks')
-                        logger.info(' manifest: removed symlink %s->%s', repo, gitdir)
-                if not found:
-                    logger.info(' manifest: %s not in manifest', repo)
+        # If manifest is empty, don't use current timestamp
+        if not len(manifest):
+            usenow = False
 
-        # XXX: need to add logic to make sure we don't break the world
-        #      by removing a repository used as a reference for others
-        grokmirror.write_manifest(manifile, manifest, pretty=pretty)
-        grokmirror.manifest_unlock(manifile)
-        return 0
-
-    gitdirs: list[str] = []
-
-    if purge or not len(paths) or not len(manifest):
-        # We automatically purge when we do a full tree walk
-        gitdirs.extend(grokmirror.find_all_gitdirs(toplevel, ignore=ignore, exclude_objstore=True))
-        purge_manifest(manifest, toplevel, gitdirs)
-
-    if len(manifest) and len(paths):
-        # limit ourselves to passed dirs only when there is something
-        # in the manifest. This precaution makes sure we regenerate the
-        # whole file when there is nothing in it or it can't be parsed.
-        for apath in paths:
-            arealpath = os.path.realpath(apath)
-            if apath != arealpath and os.path.islink(apath):
-                gitdirs.append(apath)
-            else:
-                gitdirs.append(arealpath)
-
-    symlinks = []
-    tofetch = set()
-    for gitdir in gitdirs:
-        # check to make sure this gitdir is ok to export
-        if check_export_ok and not os.path.exists(os.path.join(gitdir, 'git-daemon-export-ok')):
-            # is it curently in the manifest?
-            repo = '/' + os.path.relpath(gitdir, toplevel)
-            if repo in list(manifest):
-                logger.info(' manifest: removed %s (no longer exported)', repo)
-                manifest.pop(repo)
+        if remove and len(paths):
+            # Remove the repos as required, write new manfiest and exit
+            for fullpath in paths:
+                repo = '/' + os.path.relpath(fullpath, toplevel)
+                if repo in manifest:
+                    manifest.pop(repo)
+                    logger.info(' manifest: removed %s', repo)
+                else:
+                    # Is it in any of the symlinks?
+                    found = False
+                    for gitdir in manifest:
+                        if 'symlinks' in manifest[gitdir] and repo in manifest[gitdir]['symlinks']:
+                            found = True
+                            manifest[gitdir]['symlinks'].remove(repo)
+                            if not len(manifest[gitdir]['symlinks']):
+                                manifest[gitdir].pop('symlinks')
+                            logger.info(' manifest: removed symlink %s->%s', repo, gitdir)
+                    if not found:
+                        logger.info(' manifest: %s not in manifest', repo)
 
             # XXX: need to add logic to make sure we don't break the world
             #      by removing a repository used as a reference for others
-            #      also make sure we clean up any dangling symlinks
-            continue
+            grokmirror.write_manifest(manifile, manifest, pretty=pretty)
+            return 0
 
-        if os.path.islink(gitdir):
-            symlinks.append(gitdir)
-        else:
-            update_manifest(manifest, toplevel, gitdir, usenow, ignorerefs)
-            if fetchobst:
-                # Do it after we're done with manifest, to avoid keeping it locked
-                tofetch.add(gitdir)
+        gitdirs: list[str] = []
 
-    if len(symlinks):
-        set_symlinks(manifest, toplevel, symlinks)
+        if purge or not len(paths) or not len(manifest):
+            # We automatically purge when we do a full tree walk
+            gitdirs.extend(ses.find_all_gitdirs(toplevel, ignore=ignore, exclude_objstore=True))
+            purge_manifest(manifest, toplevel, gitdirs)
 
-    grokmirror.write_manifest(manifile, manifest, pretty=pretty)
-    grokmirror.manifest_unlock(manifile)
+        if len(manifest) and len(paths):
+            # limit ourselves to passed dirs only when there is something
+            # in the manifest. This precaution makes sure we regenerate the
+            # whole file when there is nothing in it or it can't be parsed.
+            for apath in paths:
+                arealpath = os.path.realpath(apath)
+                if apath != arealpath and os.path.islink(apath):
+                    gitdirs.append(apath)
+                else:
+                    gitdirs.append(arealpath)
+
+        symlinks = []
+        tofetch = set()
+        for gitdir in gitdirs:
+            # check to make sure this gitdir is ok to export
+            if check_export_ok and not os.path.exists(os.path.join(gitdir, 'git-daemon-export-ok')):
+                # is it curently in the manifest?
+                repo = '/' + os.path.relpath(gitdir, toplevel)
+                if repo in list(manifest):
+                    logger.info(' manifest: removed %s (no longer exported)', repo)
+                    manifest.pop(repo)
+
+                # XXX: need to add logic to make sure we don't break the world
+                #      by removing a repository used as a reference for others
+                #      also make sure we clean up any dangling symlinks
+                continue
+
+            if os.path.islink(gitdir):
+                symlinks.append(gitdir)
+            else:
+                update_manifest(manifest, toplevel, gitdir, usenow, ignorerefs)
+                if fetchobst:
+                    # Do it after we're done with manifest, to avoid keeping it locked
+                    tofetch.add(gitdir)
+
+        if len(symlinks):
+            set_symlinks(manifest, toplevel, symlinks)
+
+        grokmirror.write_manifest(manifile, manifest, pretty=pretty)
 
     fetched = set()
     for gitdir in tofetch:
