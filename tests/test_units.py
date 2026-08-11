@@ -10,6 +10,7 @@ in this tree were exactly that kind of input.
 from __future__ import annotations
 
 import errno
+import fnmatch
 import gzip
 import json
 import os
@@ -20,12 +21,13 @@ import subprocess
 import threading
 from configparser import ExtendedInterpolation
 from pathlib import Path
-from typing import IO
+from typing import IO, ClassVar
 
 import pytest
 
 import grokmirror
 import grokmirror.fsck
+import grokmirror.pull
 
 KIB = 1
 MIB = 1024
@@ -451,6 +453,105 @@ class TestFsckErrorClassification:
         ses = grokmirror.GrokSession()
         grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: bad tree object deadbeef'])
         assert (repo / 'grokmirror.reclone').exists()
+
+
+class TestCompileGlobs:
+    """compile_globs() replaces the per-pattern fnmatch loops.
+
+    Every config option that takes globs (include, exclude, private, nopurge,
+    ffonly, baselines, islandcores, ignore) is tested against every repository,
+    so these lists are compiled into one regex. The semantics have to stay
+    exactly what a "for pattern in patterns: fnmatch()" loop gave.
+    """
+
+    @pytest.mark.parametrize(
+        ('patterns', 'name', 'matched'),
+        [
+            pytest.param(['/test/*'], '/test/one.git', True, id='simple'),
+            pytest.param(['/test/*'], '/other/one.git', False, id='no-match'),
+            pytest.param(['*'], '/anything.git', True, id='star'),
+            pytest.param(['/a/*', '/b/*'], '/b/two.git', True, id='second-alternative'),
+            # fnmatch anchors both ends: a prefix is not a match.
+            pytest.param(['/test'], '/test/one.git', False, id='prefix-is-not-a-match'),
+            pytest.param(['*/one.git'], '/test/one.git', True, id='suffix-glob'),
+            # A blank pattern matched nothing under fnmatch, and still does.
+            pytest.param([''], '/test/one.git', False, id='blank-pattern'),
+            pytest.param(['', '/test/*'], '/test/one.git', True, id='blank-alongside-a-real-one'),
+            pytest.param([], '/test/one.git', False, id='empty-list'),
+            pytest.param([' /test/* '], '/test/one.git', True, id='surrounding-whitespace'),
+        ],
+    )
+    def test_matching(self, patterns: list[str], name: str, matched: bool) -> None:
+        assert bool(grokmirror.compile_globs(patterns).match(name)) is matched
+
+    def test_agrees_with_fnmatch(self) -> None:
+        # The property that matters: same answer as the loop it replaced.
+        patterns = ['/test/*', '*/linux.git', '/pub/scm/*/torvalds/*', 'relative/*.git']
+        names = [
+            '/test/one.git',
+            '/test/deep/two.git',
+            '/other/linux.git',
+            '/pub/scm/linux/kernel/git/torvalds/linux.git',
+            'relative/thing.git',
+            '/nothing/matches/this.git',
+            '',
+        ]
+        matcher = grokmirror.compile_globs(patterns)
+        for name in names:
+            expected = any(fnmatch.fnmatch(name, x) for x in patterns)
+            assert bool(matcher.match(name)) is expected, name
+
+    def test_special_characters_are_not_regex(self) -> None:
+        # A repo path is not a regular expression: the dot has to be literal.
+        matcher = grokmirror.compile_globs(['/test/one.git'])
+        assert matcher.match('/test/one.git')
+        assert not matcher.match('/test/oneXgit')
+
+
+class TestCullManifest:
+    """cull_manifest() applies [pull]include/exclude to the remote manifest."""
+
+    @staticmethod
+    def _config(include: str | None = None, exclude: str | None = None) -> grokmirror.GrokConfigParser:
+        config = grokmirror.GrokConfigParser(interpolation=ExtendedInterpolation())
+        config.read_dict({'core': {}, 'pull': {}})
+        if include is not None:
+            config['pull']['include'] = include
+        if exclude is not None:
+            config['pull']['exclude'] = exclude
+        return config
+
+    MANIFEST: ClassVar[dict[str, dict[str, object]]] = {
+        '/test/one.git': {'fingerprint': 'aaa'},
+        '/test/two.git': {'fingerprint': 'bbb'},
+        '/other/three.git': {'fingerprint': 'ccc'},
+    }
+
+    def test_default_includes_everything(self) -> None:
+        culled = grokmirror.pull.cull_manifest(dict(self.MANIFEST), self._config())
+        assert set(culled) == set(self.MANIFEST)
+
+    def test_include_and_exclude(self) -> None:
+        config = self._config(include='/test/*', exclude='/test/two.git')
+        culled = grokmirror.pull.cull_manifest(dict(self.MANIFEST), config)
+        assert set(culled) == {'/test/one.git'}
+
+    def test_multiple_patterns(self) -> None:
+        config = self._config(include='/test/one.git\n/other/*')
+        culled = grokmirror.pull.cull_manifest(dict(self.MANIFEST), config)
+        assert set(culled) == {'/test/one.git', '/other/three.git'}
+
+    def test_blank_exclude_excludes_nothing(self) -> None:
+        # The reclone_on_errors shape: an option present but empty must not
+        # turn into "matches everything".
+        config = self._config(exclude='')
+        culled = grokmirror.pull.cull_manifest(dict(self.MANIFEST), config)
+        assert set(culled) == set(self.MANIFEST)
+
+    def test_repo_without_a_fingerprint_is_skipped(self) -> None:
+        manifest = {**self.MANIFEST, '/test/broken.git': {'modified': 5}}
+        culled = grokmirror.pull.cull_manifest(manifest, self._config())
+        assert '/test/broken.git' not in culled
 
 
 class TestRunShellCommand:

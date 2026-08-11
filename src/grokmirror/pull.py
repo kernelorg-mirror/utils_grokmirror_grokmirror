@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import calendar
-import fnmatch
 import gzip
 import json
 import logging
@@ -498,8 +497,10 @@ def pull_worker(
 
 
 def cull_manifest(manifest: dict, config: grokmirror.GrokConfigParser) -> dict:
-    includes = config['pull'].get('include', '*').split('\n')
-    excludes = config['pull'].get('exclude', '').split('\n')
+    # Compiled once for the whole manifest: this used to be every include
+    # times every exclude, for every repository the origin publishes.
+    included = grokmirror.compile_globs(config['pull'].get('include', '*').split('\n'))
+    excluded = grokmirror.compile_globs(config['pull'].get('exclude', '').split('\n'))
 
     culled = {}
 
@@ -507,19 +508,8 @@ def cull_manifest(manifest: dict, config: grokmirror.GrokConfigParser) -> dict:
         if not repoinfo.get('fingerprint'):
             logger.critical('Repo without fingerprint info (skipped): %s', gitdir)
             continue
-        # does it fall under include?
-        for include in includes:
-            if fnmatch.fnmatch(gitdir, include):
-                # Yes, but does it fall under excludes?
-                excluded = False
-                for exclude in excludes:
-                    if fnmatch.fnmatch(gitdir, exclude):
-                        excluded = True
-                        break
-                if excluded:
-                    continue
-
-                culled[gitdir] = repoinfo
+        if included.match(gitdir) and not excluded.match(gitdir):
+            culled[gitdir] = repoinfo
 
     return culled
 
@@ -542,12 +532,7 @@ def fix_remotes(toplevel: str, gitdir: str, site: str, config: grokmirror.GrokCo
         logger.critical('FATAL: Could not set %s to %s in %s', remotename, url, fullpath)
         return False
 
-    ffonly = False
-    for globpatt in {x.strip() for x in config['pull'].get('ffonly', '').split('\n')}:
-        if fnmatch.fnmatch(gitdir, globpatt):
-            ffonly = True
-            break
-    if ffonly:
+    if grokmirror.compile_globs(config['pull'].get('ffonly', '').split('\n')).match(gitdir):
         grokmirror.set_git_config(fullpath, f'remote.{remotename}.fetch', 'refs/*:refs/*')
         logger.debug('\tset %s as %s (ff-only)', remotename, url)
     else:
@@ -886,22 +871,15 @@ def fill_todo_from_manifest(
 
     obstdir = os.path.realpath(config['core']['objstore'])
     forkgroups = build_optimal_forkgroups(l_manifest, r_culled, toplevel, obstdir)
-    privmasks = {x.strip() for x in config['core'].get('private', '').split('\n')}
+    privmatch = grokmirror.compile_globs(config['core'].get('private', '').split('\n'))
 
     # populate private/forkgroup info in r_culled
     for forkgroup, siblings in forkgroups.items():
         for s_fullpath in siblings:
             s_gitdir = '/' + os.path.relpath(s_fullpath, toplevel)
-
-            is_private = False
-            for privmask in privmasks:
-                # Does this repo match privrepo
-                if fnmatch.fnmatch(s_gitdir, privmask):
-                    is_private = True
-                    break
             if s_gitdir in r_culled:
                 r_culled[s_gitdir]['forkgroup'] = forkgroup
-                r_culled[s_gitdir]['private'] = is_private
+                r_culled[s_gitdir]['private'] = bool(privmatch.match(s_gitdir))
 
     seen = set()
     to_migrate = set()
@@ -993,13 +971,7 @@ def fill_todo_from_manifest(
                 continue
 
             # can't simply rely on r_culled 'private' info, as this repo may only exist locally
-            is_private = False
-            for privmask in privmasks:
-                # Does this repo match privrepo
-                if fnmatch.fnmatch(s_gitdir, privmask):
-                    is_private = True
-                    break
-            if is_private:
+            if privmatch.match(s_gitdir):
                 # Can't use this sibling for anything, as it's private
                 continue
 
@@ -1033,7 +1005,8 @@ def fill_todo_from_manifest(
         q_mani.put((gitdir, repoinfo, 'init'))
 
     if config['pull'].getboolean('purge', False):
-        nopurge = config['pull'].get('nopurge', '').split('\n')
+        nopurgematch = grokmirror.compile_globs(config['pull'].get('nopurge', '').split('\n'))
+        ffonlymatch = grokmirror.compile_globs(config['pull'].get('ffonly', '').split('\n'))
         to_purge = set()
         found_repos = 0
         for founddir in ses.find_all_gitdirs(toplevel, exclude_objstore=True):
@@ -1041,19 +1014,11 @@ def fill_todo_from_manifest(
             found_repos += 1
 
             if gitdir not in r_culled and gitdir not in all_symlinks:
-                exclude = False
-                for entry in nopurge:
-                    if fnmatch.fnmatch(gitdir, entry):
-                        exclude = True
-                        break
                 # Refuse to purge ffonly repos
-                for globpatt in {x.strip() for x in config['pull'].get('ffonly', '').split('\n')}:
-                    if fnmatch.fnmatch(gitdir, globpatt):
-                        # Woah, these are not supposed to be deleted, ever
-                        logger.critical('Refusing to purge ffonly repo %s', gitdir)
-                        exclude = True
-                        break
-                if not exclude:
+                if ffonlymatch.match(gitdir):
+                    # Woah, these are not supposed to be deleted, ever
+                    logger.critical('Refusing to purge ffonly repo %s', gitdir)
+                elif not nopurgematch.match(gitdir):
                     logger.debug('Adding %s to to_purge', gitdir)
                     to_purge.add(gitdir)
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 import fnmatch
+import functools
 import gzip
 import hashlib
 import json
@@ -24,13 +25,14 @@ import logging
 import logging.handlers
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterable, Iterator
 from configparser import ConfigParser, ExtendedInterpolation
 from contextlib import contextmanager
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
@@ -207,6 +209,7 @@ class GrokSession:
 
         logger.info('   search: finding all repos in %s', toplevel)
         logger.debug('Ignore list: %s', ' '.join(ignore))
+        ignorematch = compile_globs(ignore)
         gitdirs = set()
         for root, dirs, files in os.walk(toplevel, topdown=True):
             if not len(dirs):
@@ -216,13 +219,8 @@ class GrokSession:
             for name in dirs:
                 fullpath = os.path.join(root, name)
                 # Should we ignore this dir?
-                ignored = False
-                for ignoredir in ignore:
-                    if fnmatch.fnmatch(fullpath, ignoredir):
-                        torm.add(name)
-                        ignored = True
-                        break
-                if ignored:
+                if ignorematch.match(fullpath):
+                    torm.add(name)
                     continue
                 if not is_bare_git_repo(fullpath):
                     continue
@@ -249,6 +247,32 @@ class GrokSession:
             self._alt_repo_maps[key] = amap
 
         return gitdirs
+
+
+def compile_globs(patterns: Iterable[str]) -> re.Pattern[str]:
+    """Compile shell globs from a config option into one regular expression.
+
+    Every one of these lists is tested against every repository, and several
+    of them from inside another loop, so on a kernel.org-sized manifest a
+    plain "for pattern in patterns: fnmatch()" is hundreds of thousands of
+    calls per refresh. One alternation matches them all in a single pass.
+
+    Blank patterns are dropped, and an empty list gives back a pattern that
+    matches nothing -- which is what fnmatch() did with a blank glob anyway,
+    so an unset config option still means "nothing matches" (as opposed to
+    the surprise in reclone_on_errors, where a blank pattern matched
+    everything). POSIX only, like fnmatch.fnmatchcase(): no case folding.
+    """
+    return _compile_globs(tuple(patterns))
+
+
+@functools.lru_cache(maxsize=128)
+def _compile_globs(patterns: tuple[str, ...]) -> re.Pattern[str]:
+    # Memoized on the pattern tuple so the callers that rebuild their list per
+    # repository (is_private_repo() and friends) do not pay for it every time.
+    globs = [fnmatch.translate(x.strip()) for x in patterns if x.strip()]
+    # '(?!)' is the regex that can never match, for the empty list.
+    return re.compile('|'.join(globs) if globs else '(?!)')
 
 
 def file_mode(base: int = 0o666) -> int:
@@ -289,7 +313,10 @@ def set_git_config(fullpath: str, param: str, value: str, operation: str = '--re
     return ecode
 
 
+@functools.cache
 def git_newer_than(minver: str) -> bool:
+    # Cached because grok-fsck asks this once per repository, and the answer
+    # cannot change while we run: it forks git --version every single time.
     from packaging import version
 
     (_retcode, output, _error) = run_git_command(None, ['--version'])
@@ -798,12 +825,9 @@ def list_repo_remotes(fullpath: str, withurl: bool = False) -> list[str] | list[
     if not withurl:
         return out.split('\n')
 
-    remotes: list[tuple[str, ...]] = []
-    for line in out.split('\n'):
-        entry = tuple(line.split()[:2])
-        if entry not in remotes:
-            remotes.append(entry)
-    return remotes
+    # git remote -v lists every remote twice (fetch and push), so dedupe --
+    # via dict.fromkeys rather than a set, to keep git's ordering.
+    return list(dict.fromkeys(tuple(line.split()[:2]) for line in out.split('\n')))
 
 
 def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
@@ -884,7 +908,7 @@ def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: st
             obj, ref = refline.split(' ', 1)
             mapping[ref] = obj
 
-    commands = ''
+    cmdlines = []
     oldset = dstset.difference(srcset)
     if oldset:
         for refline in oldset:
@@ -892,14 +916,16 @@ def _fetch_objstore_repo_using_plumbing(srcrepo: str, obstrepo: str, virtref: st
                 continue
             obj, ref = refline.split(' ', 1)
             if ref in mapping:
-                commands += f'update {ref} {mapping[ref]} {obj}\n'
+                cmdlines.append(f'update {ref} {mapping[ref]} {obj}')
                 mapping.pop(ref)
             else:
-                commands += f'delete {ref} {obj}\n'
+                cmdlines.append(f'delete {ref} {obj}')
 
-    for ref, obj in mapping.items():
-        commands += f'create {ref} {obj}\n'
+    cmdlines.extend(f'create {ref} {obj}' for ref, obj in mapping.items())
 
+    # One join beats quadratic string concatenation: an objstore repo can hold
+    # refs for hundreds of forks.
+    commands = ''.join(f'{x}\n' for x in cmdlines)
     logger.debug('stdin=%s', commands)
     args = ['update-ref', '--stdin']
     ecode, out, err = run_git_command(obstrepo, args, stdin=commands.encode())
@@ -958,14 +984,7 @@ def fetch_objstore_repo(
 
 def is_private_repo(config: ConfigParser, fullpath: str) -> bool:
     privmasks = config['core'].get('private', '')
-    if not len(privmasks):
-        return False
-    for privmask in privmasks.split('\n'):
-        # Does this repo match privrepo
-        if fnmatch.fnmatch(fullpath, privmask.strip()):
-            return True
-
-    return False
+    return bool(compile_globs(privmasks.split('\n')).match(fullpath))
 
 
 def find_siblings(
@@ -1004,6 +1023,7 @@ def find_best_obstrepo(
         return None
     obstrepo = None
     bestratio = 0.0
+    baselinematch = compile_globs(baselines)
     for path, roots in obst_roots.items():
         if path == mypath or not roots:
             continue
@@ -1015,13 +1035,11 @@ def find_best_obstrepo(
         if len(baselines):
             # Any of its member siblings match baselines?
             s_remotes = list_repo_remotes(path, withurl=True)
-            for virtref, childpath in s_remotes:
+            for _virtref, childpath in s_remotes:
                 gitdir = '/' + os.path.relpath(childpath, toplevel)
-                for baseline in baselines:
-                    # Does this repo match a baseline
-                    if fnmatch.fnmatch(gitdir, baseline):
-                        # Use this one
-                        return path
+                if baselinematch.match(gitdir):
+                    # Use this one
+                    return path
 
         ratio = icount / len(roots)
         if ratio < minratio:
@@ -1117,14 +1135,10 @@ def get_repo_fingerprint(
 
         if ignorerefs:
             hasher = hashlib.sha1()
+            ignorematch = compile_globs(ignorerefs)
             for line in out.split('\n'):
                 _rhash, rname = line.split(maxsplit=1)
-                ignored = False
-                for ignoreref in ignorerefs:
-                    if fnmatch.fnmatch(rname, ignoreref):
-                        ignored = True
-                        break
-                if ignored:
+                if ignorematch.match(rname):
                     continue
                 hasher.update(line.encode() + b'\n')
 

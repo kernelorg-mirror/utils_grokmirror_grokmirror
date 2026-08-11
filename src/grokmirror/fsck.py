@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import fnmatch
 import gc
 import io
 import json
@@ -144,16 +143,18 @@ def find_siblings_by_blobs(ses: grokmirror.GrokSession, obstrepo: str, obstdir: 
 def merge_siblings(siblings: set[str], amap: dict[str, set[str]]) -> str | None:
     mdest = None
     rcount = 0
-    # Who has the most remotes?
+    # Who has the most remotes? Remember each answer: the merge loop below
+    # wants the very same list again, and every call forks a git.
+    remotes: dict[str, list[tuple[str, ...]]] = {}
     for sibling in set(siblings):
         if sibling not in amap or not len(amap[sibling]):
             # Orphaned sibling, ignore it -- it will get cleaned up
             siblings.remove(sibling)
             continue
-        s_remote_names = grokmirror.list_repo_remotes(sibling)
-        if len(s_remote_names) > rcount:
+        remotes[sibling] = grokmirror.list_repo_remotes(sibling, withurl=True)
+        if len(remotes[sibling]) > rcount:
             mdest = sibling
-            rcount = len(s_remote_names)
+            rcount = len(remotes[sibling])
 
     if mdest is None:
         # Every sibling turned out to be orphaned, so there is nothing to merge
@@ -164,8 +165,7 @@ def merge_siblings(siblings: set[str], amap: dict[str, set[str]]) -> str | None:
     siblings.remove(mdest)
     for sibling in siblings:
         logger.info('%s: merging into %s', os.path.basename(sibling), os.path.basename(mdest))
-        s_remotes = grokmirror.list_repo_remotes(sibling, withurl=True)
-        for virtref, childpath in s_remotes:
+        for virtref, childpath in remotes[sibling]:
             if childpath not in amap[sibling]:
                 # The child repo isn't even using us
                 args = ['remote', 'remove', virtref]
@@ -971,7 +971,8 @@ def fsck_mirror(
     queued = 0
     logger.info('Analyzing %s (%s repos)', obstdir, len(obstrepos))
     objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
-    islandcores = [x.strip() for x in config['fsck'].get('islandcores', '').split('\n')]
+    islandcorematch = grokmirror.compile_globs(config['fsck'].get('islandcores', '').split('\n'))
+    baselinematch = grokmirror.compile_globs(baselines)
     stattime = time.time()
     for obstrepo in obstrepos:
         if time.time() - stattime >= 5:
@@ -1060,28 +1061,18 @@ def fsck_mirror(
                 continue
 
             # Do we need to set any alternateRefsPrefixes?
-            for baseline in baselines:
-                # Does this repo match a baseline
-                if fnmatch.fnmatch(gitdir, baseline):
-                    baseline_refs.add(f'refs/virtual/{virtref}/heads/')
-                    break
+            if baselinematch.match(gitdir):
+                baseline_refs.add(f'refs/virtual/{virtref}/heads/')
 
             # Do we need to set islandCore?
-            if not set_islandcore:
-                is_islandcore = False
-                for islandcore in islandcores:
-                    # Does this repo match a baseline
-                    if fnmatch.fnmatch(gitdir, islandcore):
-                        is_islandcore = True
-                        break
-                if is_islandcore:
-                    set_islandcore = True
-                    # is it already set to that?
-                    entries = grokmirror.get_config_from_git(obstrepo, r'pack\.island*')
-                    if entries.get('islandcore') != virtref:
-                        new_islandcore = True
-                        logger.info(' reconfig: %s (islandCore to %s)', os.path.basename(obstrepo), virtref)
-                        grokmirror.set_git_config(obstrepo, 'pack.islandCore', virtref)
+            if not set_islandcore and islandcorematch.match(gitdir):
+                set_islandcore = True
+                # is it already set to that?
+                entries = grokmirror.get_config_from_git(obstrepo, r'pack\.island*')
+                if entries.get('islandcore') != virtref:
+                    new_islandcore = True
+                    logger.info(' reconfig: %s (islandCore to %s)', os.path.basename(obstrepo), virtref)
+                    grokmirror.set_git_config(obstrepo, 'pack.islandCore', virtref)
 
             if refrepo is None:
                 # Legacy "reference=" setting in manifest

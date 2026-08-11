@@ -54,6 +54,11 @@ v3.0 (TBD)
 - The manifest and projects.list are now swapped into place with
   os.replace() rather than shutil.move(), which silently degrades to
   copy-then-delete and defeats the atomicity the temporary file exists for
+- Config options that take shell globs (include, exclude, private, nopurge,
+  ffonly, baselines, islandcores, ignore) are now compiled into a single
+  regular expression instead of being matched pattern-by-pattern against
+  every repository, which cuts a large amount of work out of grok-pull and
+  grok-fsck runs over big manifests
 - Fix grok-bundle mangling repository names that contain ".git" somewhere
   other than at the end: a repository named foo.github.io.git used to be
   bundled into a directory called "foohub.io"

@@ -14,7 +14,6 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import argparse
-import fnmatch
 import logging
 import os
 import sys
@@ -57,16 +56,15 @@ def generate_bundles(
     # returns an empty list for it -- but only if we don't skip the split.
     git_args = gitargs.split()
     revlist_args = revlistargs.split()
+    # Manifest keys are absolute ('/test/one.git'), but -i is documented as
+    # accepting both spellings, so match each pattern with and without its
+    # leading slash.
+    includematch = grokmirror.compile_globs([p for x in include for p in (x, x.lstrip('/'))])
 
     for repo in manifest:
         logger.debug('Checking %s', repo)
         # Does it match our globbing pattern?
-        found = False
-        for tomatch in include:
-            if fnmatch.fnmatch(repo, tomatch) or fnmatch.fnmatch(repo, tomatch.lstrip('/')):
-                found = True
-                break
-        if not found:
+        if not includematch.match(repo):
             logger.debug('%s does not match include list, skipping', repo)
             continue
 
