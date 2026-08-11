@@ -25,8 +25,6 @@ import grokmirror
 
 logger = logging.getLogger(__name__)
 
-objstore_uses_plumbing = False
-
 
 def update_manifest(manifest: dict, toplevel: str, fullpath: str, usenow: bool, ignorerefs: list[str] | None) -> None:
     logger.debug('Examining %s', fullpath)
@@ -122,8 +120,6 @@ def purge_manifest(manifest: dict, toplevel: str, gitdirs: list[str]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    global objstore_uses_plumbing
-
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
         prog='grok-manifest',
@@ -225,6 +221,7 @@ def parse_args() -> argparse.Namespace:
 
     opts = op.parse_args()
 
+    opts.objstore_uses_plumbing = False
     if opts.cfgfile:
         config = grokmirror.load_config_file(opts.cfgfile)
         if not opts.manifile:
@@ -235,7 +232,7 @@ def parse_args() -> argparse.Namespace:
         if not opts.logfile:
             opts.logfile = config['core'].get('logfile')
 
-        objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+        opts.objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
 
         if 'manifest' in config:
             if not opts.ignore:
@@ -275,6 +272,7 @@ def grok_manifest(
     verbose: bool = False,
     fetchobst: bool = False,
     ignorerefs: list[str] | None = None,
+    objstore_uses_plumbing: bool = False,
 ) -> int:
     loglevel = logging.INFO
     grokmirror.init_logger('manifest', logfile, loglevel, verbose)
@@ -412,6 +410,7 @@ def command() -> int:
             verbose=opts.verbose,
             fetchobst=opts.fetchobst,
             ignorerefs=opts.ignore_refs,
+            objstore_uses_plumbing=opts.objstore_uses_plumbing,
         )
     except grokmirror.GrokError as ex:
         sys.stderr.write(f'ERROR: {ex}\n')
