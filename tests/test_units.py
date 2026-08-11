@@ -9,11 +9,13 @@ in this tree were exactly that kind of input.
 
 from __future__ import annotations
 
+import errno
 import gzip
 import json
 import os
 import subprocess
 from pathlib import Path
+from typing import IO
 
 import pytest
 
@@ -102,13 +104,50 @@ class TestLockName:
             code = (
                 'import sys, grokmirror\n'
                 f'try:\n    grokmirror.lock_repo({target!r}, nonblocking=True)\n'
-                'except BlockingIOError:\n    sys.exit(7)\n'
+                'except grokmirror.GrokLockError:\n    sys.exit(7)\n'
                 'sys.exit(0)\n'
             )
             res = subprocess.run(['python3', '-c', code], capture_output=True, text=True, check=False)
             assert res.returncode == 7, res.stderr
         finally:
             grokmirror.unlock_repo(target)
+
+
+class TestLockedRepo:
+    """locked_repo() must release the lock however the block exits."""
+
+    def test_releases_on_success(self, tmp_path: Path) -> None:
+        target = str(tmp_path / 'repo.git')
+        with grokmirror.locked_repo(target):
+            assert target in grokmirror.REPO_LOCKH
+        assert target not in grokmirror.REPO_LOCKH
+
+    def test_releases_on_exception(self, tmp_path: Path) -> None:
+        # This is how sys.exit() deep inside library code used to kill a
+        # process while it still held repository locks: an exception raised
+        # under a manual lock/unlock pair skipped the unlock.
+        target = str(tmp_path / 'repo.git')
+        with pytest.raises(grokmirror.GrokError, match='boom'), grokmirror.locked_repo(target):
+            raise grokmirror.GrokError('boom')
+        assert target not in grokmirror.REPO_LOCKH
+
+    def test_failed_lock_does_not_leak_the_handle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The nonblocking path fails routinely (it means "someone else is
+        # working on this repo"), so it must close the lockfile handle it
+        # just opened rather than leak it.
+        target = str(tmp_path / 'repo.git')
+        seen: list[IO[str]] = []
+
+        def deny(fh: IO[str], _flags: int) -> None:
+            seen.append(fh)
+            raise BlockingIOError(errno.EAGAIN, 'locked elsewhere')
+
+        monkeypatch.setattr(grokmirror, 'lockf', deny)
+        with pytest.raises(grokmirror.GrokLockError):
+            grokmirror.lock_repo(target, nonblocking=True)
+        assert target not in grokmirror.REPO_LOCKH
+        assert len(seen) == 1
+        assert seen[0].closed
 
 
 class TestMergeSiblings:

@@ -62,48 +62,46 @@ def dumb_pull_repo(gitdir: str, remotes: list[str], svn: bool = False) -> bool:
     old_revs = git_rev_parse_all(gitdir)
 
     try:
-        grokmirror.lock_repo(gitdir, nonblocking=True)
-    except OSError:
+        with grokmirror.locked_repo(gitdir, nonblocking=True):
+            if svn:
+                logger.debug('Using git-svn for %s', gitdir)
+
+                for remote in remotes:
+                    # arghie-argh-argh
+                    if remote == '*':
+                        remote = '--all'
+
+                    logger.info('Running git-svn fetch %s in %s', remote, gitdir)
+                    args = ['svn', 'fetch', remote]
+                    git_remote_update(args, gitdir)
+
+            else:
+                # Not an svn remote
+                myremotes = grokmirror.list_repo_remotes(gitdir)
+                if not len(myremotes):
+                    logger.info('Repository %s has no defined remotes!', gitdir)
+                    return False
+
+                logger.debug('existing remotes: %s', myremotes)
+                for remote in remotes:
+                    remotefound = False
+                    for myremote in myremotes:
+                        if fnmatch.fnmatch(myremote, remote):
+                            remotefound = True
+                            logger.debug('existing remote %s matches %s', myremote, remote)
+                            args = ['remote', 'update', myremote, '--prune']
+                            logger.info('Updating remote %s in %s', myremote, gitdir)
+
+                            git_remote_update(args, gitdir)
+
+                    if not remotefound:
+                        logger.info('Could not find any remotes matching %s in %s', remote, gitdir)
+
+            new_revs = git_rev_parse_all(gitdir)
+    except grokmirror.GrokLockError:
         logger.info('Could not obtain exclusive lock on %s', gitdir)
         logger.info('\tAssuming another process is running.')
         return False
-
-    if svn:
-        logger.debug('Using git-svn for %s', gitdir)
-
-        for remote in remotes:
-            # arghie-argh-argh
-            if remote == '*':
-                remote = '--all'
-
-            logger.info('Running git-svn fetch %s in %s', remote, gitdir)
-            args = ['svn', 'fetch', remote]
-            git_remote_update(args, gitdir)
-
-    else:
-        # Not an svn remote
-        myremotes = grokmirror.list_repo_remotes(gitdir)
-        if not len(myremotes):
-            logger.info('Repository %s has no defined remotes!', gitdir)
-            return False
-
-        logger.debug('existing remotes: %s', myremotes)
-        for remote in remotes:
-            remotefound = False
-            for myremote in myremotes:
-                if fnmatch.fnmatch(myremote, remote):
-                    remotefound = True
-                    logger.debug('existing remote %s matches %s', myremote, remote)
-                    args = ['remote', 'update', myremote, '--prune']
-                    logger.info('Updating remote %s in %s', myremote, gitdir)
-
-                    git_remote_update(args, gitdir)
-
-            if not remotefound:
-                logger.info('Could not find any remotes matching %s in %s', remote, gitdir)
-
-    new_revs = git_rev_parse_all(gitdir)
-    grokmirror.unlock_repo(gitdir)
 
     if old_revs == new_revs:
         logger.debug('No new revs, no updates')

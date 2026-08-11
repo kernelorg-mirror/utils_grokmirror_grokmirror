@@ -212,57 +212,55 @@ def spa_worker(config: grokmirror.GrokConfigParser, q_spa: mp.Queue, pauseonload
         logger.debug('spa_worker: gitdir=%s, actions=%s', gitdir, actions)
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
         try:
-            grokmirror.lock_repo(fullpath, nonblocking=True)
-        except OSError:
+            with grokmirror.locked_repo(fullpath, nonblocking=True):
+                if not q_spa.empty():
+                    logger.info('      spa: 1 active, %s waiting', q_spa.qsize())
+                else:
+                    logger.info('      spa: 1 active')
+
+                done = []
+                for action in actions:
+                    if action in done:
+                        continue
+                    done.append(action)
+                    if action == 'objstore':
+                        altrepo = grokmirror.get_altrepo(fullpath)
+                        if not altrepo:
+                            # Whatever queued this action expected us to have alternates,
+                            # and we don't. Passing None along would make git look at the
+                            # cwd instead of at an objstore repo.
+                            logger.debug('%s: no alternates, skipping objstore fetch', gitdir)
+                            continue
+                        # Should we use plumbing for this?
+                        use_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+                        grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=use_plumbing)
+
+                    elif action == 'repack':
+                        logger.debug('quick-repacking %s', fullpath)
+                        args = ['repack', '-Adlq']
+                        if 'fsck' in config:
+                            extraflags = config['fsck'].get('extra_repack_flags', '').split()
+                            if len(extraflags):
+                                args += extraflags
+                        ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
+                        if ecode > 0:
+                            logger.debug('Could not repack %s', fullpath)
+
+                    elif action == 'packrefs':
+                        args = ['pack-refs']
+                        ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
+                        if ecode > 0:
+                            logger.debug('Could not pack-refs %s', fullpath)
+
+                    elif action == 'packrefs-all':
+                        args = ['pack-refs', '--all']
+                        ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
+                        if ecode > 0:
+                            logger.debug('Could not pack-refs %s', fullpath)
+        except grokmirror.GrokLockError:
             # We'll get it during grok-fsck
             continue
 
-        if not q_spa.empty():
-            logger.info('      spa: 1 active, %s waiting', q_spa.qsize())
-        else:
-            logger.info('      spa: 1 active')
-
-        done = []
-        for action in actions:
-            if action in done:
-                continue
-            done.append(action)
-            if action == 'objstore':
-                altrepo = grokmirror.get_altrepo(fullpath)
-                if not altrepo:
-                    # Whatever queued this action expected us to have alternates,
-                    # and we don't. Passing None along would make git look at the
-                    # cwd instead of at an objstore repo.
-                    logger.debug('%s: no alternates, skipping objstore fetch', gitdir)
-                    continue
-                # Should we use plumbing for this?
-                use_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
-                grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=use_plumbing)
-
-            elif action == 'repack':
-                logger.debug('quick-repacking %s', fullpath)
-                args = ['repack', '-Adlq']
-                if 'fsck' in config:
-                    extraflags = config['fsck'].get('extra_repack_flags', '').split()
-                    if len(extraflags):
-                        args += extraflags
-                ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
-                if ecode > 0:
-                    logger.debug('Could not repack %s', fullpath)
-
-            elif action == 'packrefs':
-                args = ['pack-refs']
-                ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
-                if ecode > 0:
-                    logger.debug('Could not pack-refs %s', fullpath)
-
-            elif action == 'packrefs-all':
-                args = ['pack-refs', '--all']
-                ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
-                if ecode > 0:
-                    logger.debug('Could not pack-refs %s', fullpath)
-
-        grokmirror.unlock_repo(fullpath)
         logger.info('      spa: %s (done: %s)', gitdir, ', '.join(done))
 
 
@@ -333,130 +331,130 @@ def pull_worker(config: grokmirror.GrokConfigParser, q_pull: mp.Queue, q_spa: mp
         spa_actions = []
 
         try:
-            grokmirror.lock_repo(fullpath, nonblocking=True)
-        except OSError:
+            with grokmirror.locked_repo(fullpath, nonblocking=True):
+                altrepo = grokmirror.get_altrepo(fullpath)
+                obstrepo = None
+                if altrepo and grokmirror.is_obstrepo(altrepo, obstdir):
+                    obstrepo = altrepo
+
+                if action == 'purge':
+                    # Is it a symlink?
+                    if os.path.islink(fullpath):
+                        logger.info('    purge: %s', gitdir)
+                        os.unlink(fullpath)
+                    else:
+                        # is anything using us for alternates?
+                        if grokmirror.is_alt_repo(toplevel, gitdir):
+                            logger.debug('Not purging %s because it is used by other repos via alternates', fullpath)
+                        else:
+                            logger.info('    purge: %s', gitdir)
+                            shutil.rmtree(fullpath)
+
+                if action == 'fix_params':
+                    logger.info(' reconfig: %s', gitdir)
+                    set_repo_params(fullpath, repoinfo)
+
+                if action == 'fix_remotes':
+                    logger.info(' reorigin: %s', gitdir)
+                    success = fix_remotes(toplevel, gitdir, site, config)
+                    if success:
+                        set_repo_params(fullpath, repoinfo)
+                        action = 'pull'
+                    else:
+                        success = False
+
+                if action == 'reclone':
+                    logger.info('  reclone: %s', gitdir)
+                    try:
+                        altrepo = grokmirror.get_altrepo(fullpath)
+                        shutil.move(fullpath, f'{fullpath}.reclone')
+                        shutil.rmtree(f'{fullpath}.reclone')
+                        grokmirror.setup_bare_repo(fullpath)
+                        fix_remotes(toplevel, gitdir, site, config)
+                        set_repo_params(fullpath, repoinfo)
+                        if altrepo:
+                            grokmirror.set_altrepo(fullpath, altrepo)
+                        action = 'pull'
+                    except (OSError, PermissionError) as ex:
+                        logger.critical('Unable to remove %s: %s', fullpath, str(ex))
+                        success = False
+
+                if action in ('pull', 'objstore_migrate'):
+                    r_fp = repoinfo.get('fingerprint')
+                    my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+                    if obstrepo:
+                        o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
+                        if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
+                            # Try to preload the objstore repo directly
+                            objstore_repo_preload(config, obstrepo)
+
+                    if r_fp != my_fp:
+                        # Make sure we have the remote set up
+                        if action == 'pull' and remotename not in grokmirror.list_repo_remotes(fullpath):
+                            logger.info(' reorigin: %s', gitdir)
+                            fix_remotes(toplevel, gitdir, site, config)
+                        logger.info('    fetch: %s', gitdir)
+                        retries = 1
+                        while True:
+                            success = pull_repo(fullpath, remotename)
+                            if success:
+                                break
+                            retries += 1
+                            if retries > maxretries:
+                                break
+                            logger.info('  refetch: %s (try #%s)', gitdir, retries)
+
+                        if success:
+                            run_post_update_hook(config, fullpath)
+                            post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+                            repoinfo['fingerprint'] = post_pull_fp
+                            altrepo = grokmirror.get_altrepo(fullpath)
+                            if post_pull_fp != my_fp:
+                                grokmirror.set_repo_fingerprint(toplevel, gitdir, fingerprint=post_pull_fp)
+                                if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) and not repoinfo.get('private'):
+                                    # do we have any objects in the objstore repo?
+                                    o_obj_info = grokmirror.get_repo_obj_info(altrepo)
+                                    if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0':
+                                        # We fetch right now, as other repos may be waiting on these objects
+                                        logger.info(' objstore: %s', gitdir)
+                                        grokmirror.fetch_objstore_repo(
+                                            altrepo, fullpath, use_plumbing=objstore_uses_plumbing
+                                        )
+                                        if not objstore_uses_plumbing:
+                                            spa_actions.append('repack')
+                                    else:
+                                        # We lazy-fetch in the spa
+                                        spa_actions.append('objstore')
+                                        if my_fp is None and not objstore_uses_plumbing:
+                                            # Initial clone, trigger a repack after objstore
+                                            spa_actions.append('repack')
+
+                                if my_fp is None:
+                                    # This was the initial clone, so pack all refs
+                                    spa_actions.append('packrefs-all')
+
+                                if not grokmirror.is_precious(fullpath):
+                                    # See if doing a quick repack would be beneficial
+                                    obj_info = grokmirror.get_repo_obj_info(fullpath)
+                                    if grokmirror.get_repack_level(obj_info):
+                                        # We only do quick repacks, so we don't care about precise level
+                                        spa_actions.extend(('repack', 'packrefs'))
+
+                            modified = repoinfo.get('modified')
+                            if modified is not None:
+                                set_agefile(toplevel, gitdir, modified)
+                    else:
+                        logger.debug('FP match, not pulling %s', gitdir)
+
+                if action == 'objstore_migrate':
+                    spa_actions.extend(('objstore', 'repack'))
+
+        except grokmirror.GrokLockError:
             # Take a quick nap and put it back into queue
             logger.info('    defer: %s (locked)', gitdir)
             time.sleep(5)
             q_pull.put((gitdir, repoinfo, action, q_action))
             continue
-
-        altrepo = grokmirror.get_altrepo(fullpath)
-        obstrepo = None
-        if altrepo and grokmirror.is_obstrepo(altrepo, obstdir):
-            obstrepo = altrepo
-
-        if action == 'purge':
-            # Is it a symlink?
-            if os.path.islink(fullpath):
-                logger.info('    purge: %s', gitdir)
-                os.unlink(fullpath)
-            else:
-                # is anything using us for alternates?
-                if grokmirror.is_alt_repo(toplevel, gitdir):
-                    logger.debug('Not purging %s because it is used by other repos via alternates', fullpath)
-                else:
-                    logger.info('    purge: %s', gitdir)
-                    shutil.rmtree(fullpath)
-
-        if action == 'fix_params':
-            logger.info(' reconfig: %s', gitdir)
-            set_repo_params(fullpath, repoinfo)
-
-        if action == 'fix_remotes':
-            logger.info(' reorigin: %s', gitdir)
-            success = fix_remotes(toplevel, gitdir, site, config)
-            if success:
-                set_repo_params(fullpath, repoinfo)
-                action = 'pull'
-            else:
-                success = False
-
-        if action == 'reclone':
-            logger.info('  reclone: %s', gitdir)
-            try:
-                altrepo = grokmirror.get_altrepo(fullpath)
-                shutil.move(fullpath, f'{fullpath}.reclone')
-                shutil.rmtree(f'{fullpath}.reclone')
-                grokmirror.setup_bare_repo(fullpath)
-                fix_remotes(toplevel, gitdir, site, config)
-                set_repo_params(fullpath, repoinfo)
-                if altrepo:
-                    grokmirror.set_altrepo(fullpath, altrepo)
-                action = 'pull'
-            except (OSError, PermissionError) as ex:
-                logger.critical('Unable to remove %s: %s', fullpath, str(ex))
-                success = False
-
-        if action in ('pull', 'objstore_migrate'):
-            r_fp = repoinfo.get('fingerprint')
-            my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
-            if obstrepo:
-                o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
-                if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
-                    # Try to preload the objstore repo directly
-                    objstore_repo_preload(config, obstrepo)
-
-            if r_fp != my_fp:
-                # Make sure we have the remote set up
-                if action == 'pull' and remotename not in grokmirror.list_repo_remotes(fullpath):
-                    logger.info(' reorigin: %s', gitdir)
-                    fix_remotes(toplevel, gitdir, site, config)
-                logger.info('    fetch: %s', gitdir)
-                retries = 1
-                while True:
-                    success = pull_repo(fullpath, remotename)
-                    if success:
-                        break
-                    retries += 1
-                    if retries > maxretries:
-                        break
-                    logger.info('  refetch: %s (try #%s)', gitdir, retries)
-
-                if success:
-                    run_post_update_hook(config, fullpath)
-                    post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
-                    repoinfo['fingerprint'] = post_pull_fp
-                    altrepo = grokmirror.get_altrepo(fullpath)
-                    if post_pull_fp != my_fp:
-                        grokmirror.set_repo_fingerprint(toplevel, gitdir, fingerprint=post_pull_fp)
-                        if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) and not repoinfo.get('private'):
-                            # do we have any objects in the objstore repo?
-                            o_obj_info = grokmirror.get_repo_obj_info(altrepo)
-                            if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0':
-                                # We fetch right now, as other repos may be waiting on these objects
-                                logger.info(' objstore: %s', gitdir)
-                                grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=objstore_uses_plumbing)
-                                if not objstore_uses_plumbing:
-                                    spa_actions.append('repack')
-                            else:
-                                # We lazy-fetch in the spa
-                                spa_actions.append('objstore')
-                                if my_fp is None and not objstore_uses_plumbing:
-                                    # Initial clone, trigger a repack after objstore
-                                    spa_actions.append('repack')
-
-                        if my_fp is None:
-                            # This was the initial clone, so pack all refs
-                            spa_actions.append('packrefs-all')
-
-                        if not grokmirror.is_precious(fullpath):
-                            # See if doing a quick repack would be beneficial
-                            obj_info = grokmirror.get_repo_obj_info(fullpath)
-                            if grokmirror.get_repack_level(obj_info):
-                                # We only do quick repacks, so we don't care about precise level
-                                spa_actions.extend(('repack', 'packrefs'))
-
-                    modified = repoinfo.get('modified')
-                    if modified is not None:
-                        set_agefile(toplevel, gitdir, modified)
-            else:
-                logger.debug('FP match, not pulling %s', gitdir)
-
-        if action == 'objstore_migrate':
-            spa_actions.extend(('objstore', 'repack'))
-
-        grokmirror.unlock_repo(fullpath)
 
         symlinks = repoinfo.get('symlinks')
         if os.path.exists(fullpath) and symlinks:
@@ -1413,20 +1411,18 @@ def pull_mirror(
                 continue
 
             try:
-                grokmirror.lock_repo(fullpath, nonblocking=True)
-            except OSError:
+                with grokmirror.locked_repo(fullpath, nonblocking=True):
+                    if not grokmirror.setup_bare_repo(fullpath):
+                        logger.critical('Unable to bare-init %s', fullpath)
+                        q_done.put((gitdir, repoinfo, q_action, False))
+                        continue
+
+                    fix_remotes(toplevel, gitdir, config['remote']['site'], config)
+                    set_repo_params(fullpath, repoinfo)
+            except grokmirror.GrokLockError:
                 if not runonce:
                     q_todo.put((gitdir, repoinfo, q_action))
                 continue
-
-            if not grokmirror.setup_bare_repo(fullpath):
-                logger.critical('Unable to bare-init %s', fullpath)
-                q_done.put((gitdir, repoinfo, q_action, False))
-                continue
-
-            fix_remotes(toplevel, gitdir, config['remote']['site'], config)
-            set_repo_params(fullpath, repoinfo)
-            grokmirror.unlock_repo(fullpath)
 
             forkgroup = repoinfo.get('forkgroup')
             if not forkgroup:

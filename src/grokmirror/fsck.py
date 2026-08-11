@@ -555,6 +555,7 @@ def fsck_mirror(
     except OSError:
         logger.info('Could not obtain exclusive lock on %s', lockfile)
         logger.info('Assuming another process is running.')
+        flockh.close()
         return 0
 
     manifile = config['core']['manifest']
@@ -915,10 +916,9 @@ def fsck_mirror(
         if obj_info['garbage'] != '0' and not repack_level and is_safe_to_prune(fullpath, config):
             logger.info('  garbage: %s (%s files, %s KiB)', gitdir, obj_info['garbage'], obj_info['size-garbage'])
             try:
-                grokmirror.lock_repo(fullpath, nonblocking=True)
-                run_git_prune(fullpath, config)
-                grokmirror.unlock_repo(fullpath)
-            except OSError:
+                with grokmirror.locked_repo(fullpath, nonblocking=True):
+                    run_git_prune(fullpath, config)
+            except (OSError, grokmirror.GrokLockError):
                 pass
 
         if repack_level and (cfg_precious == 'always' and check_precious_objects(fullpath)):
@@ -1038,13 +1038,12 @@ def fsck_mirror(
 
             gitdir = '/' + os.path.relpath(childpath, toplevel)
             if fetch:
-                grokmirror.lock_repo(obstrepo, nonblocking=False)
-                logger.info('    fetch: %s -> %s', gitdir, os.path.basename(obstrepo))
-                success = grokmirror.fetch_objstore_repo(obstrepo, childpath, use_plumbing=objstore_uses_plumbing)
-                if not success and objstore_uses_plumbing:
-                    # Try using git porcelain
-                    grokmirror.fetch_objstore_repo(obstrepo, childpath)
-                grokmirror.unlock_repo(obstrepo)
+                with grokmirror.locked_repo(obstrepo):
+                    logger.info('    fetch: %s -> %s', gitdir, os.path.basename(obstrepo))
+                    success = grokmirror.fetch_objstore_repo(obstrepo, childpath, use_plumbing=objstore_uses_plumbing)
+                    if not success and objstore_uses_plumbing:
+                        # Try using git porcelain
+                        grokmirror.fetch_objstore_repo(obstrepo, childpath)
 
             if gitdir not in manifest:
                 continue
@@ -1193,47 +1192,45 @@ def fsck_mirror(
         # Wait till the repo is available and lock it for the duration of checks,
         # otherwise there may be false-positives if a mirrored repo is updated
         # in the middle of fsck or repack.
-        grokmirror.lock_repo(fullpath, nonblocking=False)
-        if action == 'repack':
-            # to_process only ever queues repacks with a level, so pin it down
-            # here rather than treating it as optional throughout. Falling back
-            # to a quick repack keeps this working if that ever stops being true.
-            level = repack_level or 1
-            if run_git_repack(fullpath, config, level):
-                status[fullpath]['lastrepack'] = todayiso
-                if level > 1:
-                    try:
-                        os.unlink(os.path.join(fullpath, 'grokmirror.repack'))
-                    except FileNotFoundError:
-                        pass
+        with grokmirror.locked_repo(fullpath):
+            if action == 'repack':
+                # to_process only ever queues repacks with a level, so pin it down
+                # here rather than treating it as optional throughout. Falling back
+                # to a quick repack keeps this working if that ever stops being true.
+                level = repack_level or 1
+                if run_git_repack(fullpath, config, level):
+                    status[fullpath]['lastrepack'] = todayiso
+                    if level > 1:
+                        try:
+                            os.unlink(os.path.join(fullpath, 'grokmirror.repack'))
+                        except FileNotFoundError:
+                            pass
 
-                    status[fullpath]['lastfullrepack'] = todayiso
-                    status[fullpath]['lastcheck'] = todayiso
-                    status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
-                    # Do we need to generate a preload bundle?
-                    if config['fsck'].get('preload_bundle_outdir') and grokmirror.is_obstrepo(fullpath, obstdir):
-                        gen_preload_bundle(fullpath, config)
-                    logger.info('     next: %s', status[fullpath]['nextcheck'])
-            else:
-                logger.warning('Repacking %s was unsuccessful', fullpath)
-                grokmirror.unlock_repo(fullpath)
-                continue
+                        status[fullpath]['lastfullrepack'] = todayiso
+                        status[fullpath]['lastcheck'] = todayiso
+                        status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
+                        # Do we need to generate a preload bundle?
+                        if config['fsck'].get('preload_bundle_outdir') and grokmirror.is_obstrepo(fullpath, obstdir):
+                            gen_preload_bundle(fullpath, config)
+                        logger.info('     next: %s', status[fullpath]['nextcheck'])
+                else:
+                    logger.warning('Repacking %s was unsuccessful', fullpath)
+                    continue
 
-        elif action == 'fsck':
-            run_git_fsck(fullpath, config, conn_only)
-            status[fullpath]['lastcheck'] = todayiso
-            status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
-            logger.info('     next: %s', status[fullpath]['nextcheck'])
+            elif action == 'fsck':
+                run_git_fsck(fullpath, config, conn_only)
+                status[fullpath]['lastcheck'] = todayiso
+                status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
+                logger.info('     next: %s', status[fullpath]['nextcheck'])
 
-        gitdir = '/' + os.path.relpath(fullpath, toplevel)
-        status[fullpath]['fingerprint'] = grokmirror.get_repo_fingerprint(toplevel, gitdir)
+            gitdir = '/' + os.path.relpath(fullpath, toplevel)
+            status[fullpath]['fingerprint'] = grokmirror.get_repo_fingerprint(toplevel, gitdir)
 
-        # noinspection PyTypeChecker
-        elapsed = int(time.time() - startt)
-        status[fullpath]['s_elapsed'] = elapsed
+            # noinspection PyTypeChecker
+            elapsed = int(time.time() - startt)
+            status[fullpath]['s_elapsed'] = elapsed
 
         # We're done with the repo now
-        grokmirror.unlock_repo(fullpath)
         total_checked += 1
         total_elapsed += elapsed
         saved = start_size - get_repo_size(fullpath)

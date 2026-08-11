@@ -377,12 +377,11 @@ def grok_manifest(
             continue
         if altrepo and grokmirror.is_obstrepo(altrepo):
             try:
-                grokmirror.lock_repo(altrepo, nonblocking=True)
-                logger.info(' manifest: objstore %s -> %s', gitdir, os.path.basename(altrepo))
-                grokmirror.fetch_objstore_repo(altrepo, gitdir, use_plumbing=objstore_uses_plumbing)
-                grokmirror.unlock_repo(altrepo)
+                with grokmirror.locked_repo(altrepo, nonblocking=True):
+                    logger.info(' manifest: objstore %s -> %s', gitdir, os.path.basename(altrepo))
+                    grokmirror.fetch_objstore_repo(altrepo, gitdir, use_plumbing=objstore_uses_plumbing)
                 fetched.add(altrepo)
-            except OSError:
+            except (OSError, grokmirror.GrokLockError):
                 # grok-fsck will fetch this one, then
                 pass
 

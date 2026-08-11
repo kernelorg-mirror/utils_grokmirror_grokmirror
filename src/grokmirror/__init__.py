@@ -29,8 +29,9 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from configparser import ConfigParser, ExtendedInterpolation
+from contextlib import contextmanager
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
 from typing import IO, Literal, overload
 
@@ -70,6 +71,15 @@ class GrokError(Exception):
 
 class GrokConfigError(GrokError):
     """The configuration file is missing, unparseable, or incomplete."""
+
+
+class GrokLockError(GrokError):
+    """A repository lock could not be obtained.
+
+    With nonblocking=True this is routine: it means another grokmirror
+    process is working on the repository, and the caller should skip it
+    or retry later.
+    """
 
 
 class GrokManifestError(GrokError):
@@ -212,7 +222,7 @@ def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
 
     logger.debug('Attempting to exclusive-lock %s', repolock)
     # Deliberately not a context manager: the handle is stashed in REPO_LOCKH
-    # and released by unlock_repo().
+    # and released by unlock_repo(). Callers should prefer locked_repo().
     lockfh = open(repolock, 'w', encoding='utf-8')  # noqa: SIM115
 
     if nonblocking:
@@ -220,7 +230,13 @@ def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
     else:
         flags = LOCK_EX
 
-    lockf(lockfh, flags)
+    try:
+        lockf(lockfh, flags)
+    except OSError as ex:
+        # Don't leak the just-opened handle: with nonblocking=True a held
+        # lock is a routine occurrence, not an error.
+        lockfh.close()
+        raise GrokLockError(f'Could not obtain exclusive lock on {repolock}') from ex
     REPO_LOCKH[fullpath] = lockfh
 
 
@@ -230,6 +246,21 @@ def unlock_repo(fullpath: str) -> None:
         lockf(REPO_LOCKH[fullpath], LOCK_UN)
         REPO_LOCKH[fullpath].close()
         del REPO_LOCKH[fullpath]
+
+
+@contextmanager
+def locked_repo(fullpath: str, nonblocking: bool = False) -> Iterator[None]:
+    """Hold the exclusive repository lock for the duration of the with block.
+
+    Raises GrokLockError if the lock cannot be obtained; with
+    nonblocking=True that happens without waiting whenever another process
+    holds the lock. The lock is released however the block exits.
+    """
+    lock_repo(fullpath, nonblocking=nonblocking)
+    try:
+        yield
+    finally:
+        unlock_repo(fullpath)
 
 
 def is_bare_git_repo(path: str) -> bool:
@@ -456,21 +487,20 @@ def setup_objstore_repo(obstdir: str, name: str | None = None) -> str:
     pathlib.Path(obstdir).mkdir(parents=True, exist_ok=True)
     obstrepo = os.path.join(obstdir, f'{name}.git')
     logger.debug('Creating objstore repo in %s', obstrepo)
-    lock_repo(obstrepo)
-    if not setup_bare_repo(obstrepo):
-        raise GrokError(f'Unable to set up an objstore repo in {obstrepo}')
-    # All our objects are precious -- we only turn this off when repacking
-    set_git_config(obstrepo, 'core.repositoryformatversion', '1')
-    set_git_config(obstrepo, 'extensions.preciousObjects', 'true')
-    # Set maximum compression, though perhaps we should make this configurable
-    set_git_config(obstrepo, 'pack.compression', '9')
-    # Set island configs
-    set_git_config(obstrepo, 'repack.useDeltaIslands', 'true')
-    set_git_config(obstrepo, 'repack.writeBitmaps', 'true')
-    set_git_config(obstrepo, 'pack.island', 'refs/virtual/([0-9a-f]+)/', operation='--add')
-    telltale = os.path.join(obstrepo, 'grokmirror.objstore')
-    pathlib.Path(telltale).write_text(OBST_PREAMBULE, encoding='utf-8')
-    unlock_repo(obstrepo)
+    with locked_repo(obstrepo):
+        if not setup_bare_repo(obstrepo):
+            raise GrokError(f'Unable to set up an objstore repo in {obstrepo}')
+        # All our objects are precious -- we only turn this off when repacking
+        set_git_config(obstrepo, 'core.repositoryformatversion', '1')
+        set_git_config(obstrepo, 'extensions.preciousObjects', 'true')
+        # Set maximum compression, though perhaps we should make this configurable
+        set_git_config(obstrepo, 'pack.compression', '9')
+        # Set island configs
+        set_git_config(obstrepo, 'repack.useDeltaIslands', 'true')
+        set_git_config(obstrepo, 'repack.writeBitmaps', 'true')
+        set_git_config(obstrepo, 'pack.island', 'refs/virtual/([0-9a-f]+)/', operation='--add')
+        telltale = os.path.join(obstrepo, 'grokmirror.objstore')
+        pathlib.Path(telltale).write_text(OBST_PREAMBULE, encoding='utf-8')
     return obstrepo
 
 
@@ -682,10 +712,9 @@ def fetch_objstore_repo(
                 shutil.copy(r_fp, l_fp)
             if pack_refs:
                 try:
-                    lock_repo(obstrepo, nonblocking=True)
-                    run_git_command(obstrepo, ['pack-refs'])
-                    unlock_repo(obstrepo)
-                except OSError:
+                    with locked_repo(obstrepo, nonblocking=True):
+                        run_git_command(obstrepo, ['pack-refs'])
+                except (OSError, GrokLockError):
                     # Next run will take care of it
                     pass
 

@@ -2,6 +2,7 @@
 # A hook to properly initialize and index mirrored public-inbox repositories.
 
 import argparse
+import contextlib
 import logging
 import os
 import pathlib
@@ -76,127 +77,126 @@ def init_pi_inbox(gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
     gitargs = ['show', 'refs/meta/origins:i']
     # We reverse because we want to give priority to the latest origins info
     success = True
-    for subrepo in reversed(pi_repos):
-        grokmirror.lock_repo(subrepo)
-        if not origins:
-            ec, out, err = grokmirror.run_git_command(subrepo, gitargs)
-            if out:
-                origins = out
-    inboxname = os.path.basename(gdir)
-    if not origins and opts.origin_host:
-        # Attempt to grab the config sample from remote
-        origin_host = opts.origin_host.rstrip('/')
-        rconfig = f'{origin_host}/{inboxname}/_/text/config/raw'
-        try:
-            ses = grokmirror.get_requests_session()
-            res = ses.get(rconfig)
-            res.raise_for_status()
-            origins = res.text
-        # Deliberately broad: any failure to fetch origins info just skips this
-        # inbox. But no longer a bare except: a Ctrl-C must not be swallowed.
-        except Exception:  # noqa: BLE001
-            logger.critical('ERROR: Not able to get origins info for %s, skipping', gdir)
-            success = False
-
-    if origins:
-        # Okay, let's process it
-        # Generate a config entry
-        if opts.local_toplevel:
-            local_toplevel = opts.local_toplevel.rstrip('/')
-            local_url = f'{local_toplevel}/{inboxname}'
-        else:
-            local_url = inboxname
-        extraopts = []
-        acceptopts = {'listid'}
-        if opts.extra_cfgopts:
-            acceptopts.update(opts.extra_cfgopts.split(','))
-        description = None
-        newsgroup = None
-        listid = None
-        addresses = []
-        for line in origins.split('\n'):
-            line = line.strip()
-            if not line or line.startswith((';', '#', '[publicinbox')):
-                continue
+    # The ExitStack releases every member lock when we are done, however
+    # we leave this block.
+    with contextlib.ExitStack() as stack:
+        for subrepo in reversed(pi_repos):
+            stack.enter_context(grokmirror.locked_repo(subrepo))
+            if not origins:
+                ec, out, err = grokmirror.run_git_command(subrepo, gitargs)
+                if out:
+                    origins = out
+        inboxname = os.path.basename(gdir)
+        if not origins and opts.origin_host:
+            # Attempt to grab the config sample from remote
+            origin_host = opts.origin_host.rstrip('/')
+            rconfig = f'{origin_host}/{inboxname}/_/text/config/raw'
             try:
-                opt, val = line.split('=', maxsplit=1)
-                opt = opt.strip()
-                val = val.strip()
-                if opt == 'address':
-                    addresses.append(val)
-                    continue
-                if opt == 'description':
-                    description = val
-                    continue
-                if opt == 'newsgroup':
-                    newsgroup = val
-                    continue
-                if opt == 'listid' and boosts:
-                    listid = val
-                    # Calculate the boost value
-                    boostval = 1
-                    for patt in boosts:
-                        if fnmatch(val, patt):
-                            boostval = boosts.index(patt) + 10
-                            break
-                    extraopts.append(('boost', str(boostval)))
-
-                if opt in acceptopts:
-                    logger.debug('Accepting extra opt %s=%s', opt, val)
-                    extraopts.append((opt, val))
-
-            except ValueError:
-                logger.critical('Invalid config line: %s', line)
+                ses = grokmirror.get_requests_session()
+                res = ses.get(rconfig)
+                res.raise_for_status()
+                origins = res.text
+            # Deliberately broad: any failure to fetch origins info just skips this
+            # inbox. But no longer a bare except: a Ctrl-C must not be swallowed.
+            except Exception:  # noqa: BLE001
+                logger.critical('ERROR: Not able to get origins info for %s, skipping', gdir)
                 success = False
 
-            if not success:
-                break
-
-        if not addresses:
-            addresses = [f'{inboxname}@localhost']
-        if not description:
-            if listid:
-                description = f'{listid} archive mirror'
+        if origins:
+            # Okay, let's process it
+            # Generate a config entry
+            if opts.local_toplevel:
+                local_toplevel = opts.local_toplevel.rstrip('/')
+                local_url = f'{local_toplevel}/{inboxname}'
             else:
-                description = f'{inboxname} archive mirror'
+                local_url = inboxname
+            extraopts = []
+            acceptopts = {'listid'}
+            if opts.extra_cfgopts:
+                acceptopts.update(opts.extra_cfgopts.split(','))
+            description = None
+            newsgroup = None
+            listid = None
+            addresses = []
+            for line in origins.split('\n'):
+                line = line.strip()
+                if not line or line.startswith((';', '#', '[publicinbox')):
+                    continue
+                try:
+                    opt, val = line.split('=', maxsplit=1)
+                    opt = opt.strip()
+                    val = val.strip()
+                    if opt == 'address':
+                        addresses.append(val)
+                        continue
+                    if opt == 'description':
+                        description = val
+                        continue
+                    if opt == 'newsgroup':
+                        newsgroup = val
+                        continue
+                    if opt == 'listid' and boosts:
+                        listid = val
+                        # Calculate the boost value
+                        boostval = 1
+                        for patt in boosts:
+                            if fnmatch(val, patt):
+                                boostval = boosts.index(patt) + 10
+                                break
+                        extraopts.append(('boost', str(boostval)))
 
-        if success:
-            if gdir != pdir:
-                # public-inbox databases are separate from the main git trees
-                pathlib.Path(pdir).mkdir(parents=True, exist_ok=True)
-                # Symlink the git subpath
-                if not os.path.islink(os.path.join(pdir, 'git')):
-                    os.symlink(os.path.join(gdir, 'git'), os.path.join(pdir, 'git'))
+                    if opt in acceptopts:
+                        logger.debug('Accepting extra opt %s=%s', opt, val)
+                        extraopts.append((opt, val))
 
-            # Now we run public-inbox-init
-            piargs = ['public-inbox-init', '-V2', '-L', opts.indexlevel]
-            if newsgroup:
-                piargs += ['--ng', newsgroup]
-            for opt, val in extraopts:
-                piargs += ['-c', f'{opt}={val}']
-            piargs += [inboxname, pdir, local_url]
-            piargs += addresses
-            logger.debug('piargs=%s', piargs)
-
-            env = {
-                'PI_CONFIG': opts.piconfig,
-                'PATH': os.getenv('PATH', '/bin:/usr/bin:/usr/local/bin'),
-            }
-            try:
-                ec, out, err = grokmirror.run_shell_command(piargs, env=env)
-                if ec > 0:
-                    logger.critical('Unable to init public-inbox repo %s: %s', pdir, err)
+                except ValueError:
+                    logger.critical('Invalid config line: %s', line)
                     success = False
-            except Exception as ex:  # noqa
-                logger.critical('Unable to init public-inbox repo %s: %s', pdir, ex)
-                success = False
 
-        if success:
-            pathlib.Path(pdir, 'description').write_text(description, encoding='utf-8')
+                if not success:
+                    break
 
-    # Unlock all members
-    for subrepo in pi_repos:
-        grokmirror.unlock_repo(subrepo)
+            if not addresses:
+                addresses = [f'{inboxname}@localhost']
+            if not description:
+                if listid:
+                    description = f'{listid} archive mirror'
+                else:
+                    description = f'{inboxname} archive mirror'
+
+            if success:
+                if gdir != pdir:
+                    # public-inbox databases are separate from the main git trees
+                    pathlib.Path(pdir).mkdir(parents=True, exist_ok=True)
+                    # Symlink the git subpath
+                    if not os.path.islink(os.path.join(pdir, 'git')):
+                        os.symlink(os.path.join(gdir, 'git'), os.path.join(pdir, 'git'))
+
+                # Now we run public-inbox-init
+                piargs = ['public-inbox-init', '-V2', '-L', opts.indexlevel]
+                if newsgroup:
+                    piargs += ['--ng', newsgroup]
+                for opt, val in extraopts:
+                    piargs += ['-c', f'{opt}={val}']
+                piargs += [inboxname, pdir, local_url]
+                piargs += addresses
+                logger.debug('piargs=%s', piargs)
+
+                env = {
+                    'PI_CONFIG': opts.piconfig,
+                    'PATH': os.getenv('PATH', '/bin:/usr/bin:/usr/local/bin'),
+                }
+                try:
+                    ec, out, err = grokmirror.run_shell_command(piargs, env=env)
+                    if ec > 0:
+                        logger.critical('Unable to init public-inbox repo %s: %s', pdir, err)
+                        success = False
+                except Exception as ex:  # noqa
+                    logger.critical('Unable to init public-inbox repo %s: %s', pdir, ex)
+                    success = False
+
+            if success:
+                pathlib.Path(pdir, 'description').write_text(description, encoding='utf-8')
 
     return success
 
