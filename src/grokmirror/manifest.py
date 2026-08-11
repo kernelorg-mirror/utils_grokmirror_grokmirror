@@ -18,9 +18,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import pathlib
 import sys
 import time
+from pathlib import Path
 
 import grokmirror
 
@@ -36,6 +36,10 @@ def update_manifest(
         logger.critical('Make sure it is a bare git repository.')
         raise grokmirror.GrokError(f'Not a bare git repository: {fullpath}')
 
+    # os.path.relpath, not Path.relative_to: manifest keys have to keep coming
+    # out as plain strings, and relative_to() raises for anything that is not
+    # under toplevel, where relpath walks up with '..'. Path grew walk_up in
+    # 3.12, which is well past our floor.
     gitdir = '/' + os.path.relpath(fullpath, toplevel)
     repoinfo = grokmirror.get_repo_defs(toplevel, gitdir, usenow=usenow, ignorerefs=ignorerefs)
     # Ignore it if it's an empty git repository
@@ -81,14 +85,14 @@ def update_manifest(
 
 def set_symlinks(manifest: grokmirror.Manifest, toplevel: str, symlinks: list[str]) -> None:
     for symlink in symlinks:
-        target = os.path.realpath(symlink)
-        if not os.path.exists(target):
+        target = Path(symlink).resolve()
+        if not target.exists():
             logger.critical(' manifest: symlink %s is broken, ignored', symlink)
             continue
         relative = '/' + os.path.relpath(symlink, toplevel)
         # A path comparison, not a string search: the old containment test
         # accepted any target whose path merely mentioned the toplevel.
-        if not pathlib.PurePath(target).is_relative_to(toplevel):
+        if not target.is_relative_to(toplevel):
             logger.critical(' manifest: symlink %s points outside toplevel, ignored', relative)
             continue
         tgtgitdir = '/' + os.path.relpath(target, toplevel)
@@ -119,7 +123,7 @@ def set_symlinks(manifest: grokmirror.Manifest, toplevel: str, symlinks: list[st
 
 def purge_manifest(manifest: grokmirror.Manifest, toplevel: str, gitdirs: list[str]) -> None:
     for oldrepo in list(manifest):
-        if os.path.join(toplevel, oldrepo.lstrip('/')) not in gitdirs:
+        if str(Path(toplevel, oldrepo.lstrip('/'))) not in gitdirs:
             logger.info(' manifest: purged %s (gone)', oldrepo)
             manifest.pop(oldrepo)
 
@@ -339,7 +343,7 @@ def grok_manifest(
             # whole file when there is nothing in it or it can't be parsed.
             for apath in paths:
                 arealpath = os.path.realpath(apath)
-                if apath != arealpath and os.path.islink(apath):
+                if apath != arealpath and Path(apath).is_symlink():
                     gitdirs.append(apath)
                 else:
                     gitdirs.append(arealpath)
@@ -348,7 +352,7 @@ def grok_manifest(
         tofetch = set()
         for gitdir in gitdirs:
             # check to make sure this gitdir is ok to export
-            if check_export_ok and not os.path.exists(os.path.join(gitdir, 'git-daemon-export-ok')):
+            if check_export_ok and not Path(gitdir, 'git-daemon-export-ok').exists():
                 # is it curently in the manifest?
                 repo = '/' + os.path.relpath(gitdir, toplevel)
                 if repo in list(manifest):
@@ -360,7 +364,7 @@ def grok_manifest(
                 #      also make sure we clean up any dangling symlinks
                 continue
 
-            if os.path.islink(gitdir):
+            if Path(gitdir).is_symlink():
                 symlinks.append(gitdir)
             else:
                 update_manifest(manifest, toplevel, gitdir, usenow, ignorerefs)
@@ -381,7 +385,7 @@ def grok_manifest(
         if altrepo and grokmirror.is_obstrepo(altrepo):
             try:
                 with grokmirror.locked_repo(altrepo, nonblocking=True):
-                    logger.info(' manifest: objstore %s -> %s', gitdir, os.path.basename(altrepo))
+                    logger.info(' manifest: objstore %s -> %s', gitdir, Path(altrepo).name)
                     grokmirror.fetch_objstore_repo(altrepo, gitdir, use_plumbing=objstore_uses_plumbing)
                 fetched.add(altrepo)
             except (OSError, grokmirror.GrokLockError):
