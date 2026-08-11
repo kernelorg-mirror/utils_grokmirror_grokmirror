@@ -45,11 +45,25 @@ import grokmirror
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
 
+# What travels on the internal queues and worklists. All of them are some
+# variation on "this repository, its manifest entry, and what to do with it".
+#
+# A work item carries a second action as well: an 'init' turns into a 'pull'
+# once the bare repository exists, but note_done() still has to account for it
+# as the init it was queued as, so both are passed along.
+ManiItem = tuple[str, grokmirror.RepoInfo, str]
+WorkItem = tuple[str, grokmirror.RepoInfo, str, str]
+# A finished work item and whether it succeeded, for update_manifest().
+DoneItem = tuple[str, grokmirror.RepoInfo, str, bool]
+# A repository and the post-pull treatments queued for it. None is the
+# sentinel that asks the spa worker to exit.
+SpaItem = tuple[str, list[str]]
+
 
 class SignalHandler:
     """Flush accumulated manifest updates and exit on SIGINT/SIGTERM."""
 
-    def __init__(self, config: grokmirror.GrokConfigParser, done: list) -> None:
+    def __init__(self, config: grokmirror.GrokConfigParser, done: list[DoneItem]) -> None:
         self.config = config
         self.done = done
 
@@ -87,7 +101,7 @@ class SignalHandler:
 
 class ThreadedUnixStreamServer(ThreadingMixIn, UnixStreamServer):
     # pull_mirror() sticks these onto the instance for Handler to pick up
-    q_mani: queue.Queue
+    q_mani: queue.Queue[ManiItem]
     config: grokmirror.GrokConfigParser
 
 
@@ -123,7 +137,9 @@ class Handler(StreamRequestHandler):
                 return
 
 
-def build_optimal_forkgroups(l_manifest: dict, r_manifest: dict, toplevel: str, obstdir: str) -> dict[str, set[str]]:
+def build_optimal_forkgroups(
+    l_manifest: grokmirror.Manifest, r_manifest: grokmirror.Manifest, toplevel: str, obstdir: str
+) -> dict[str, set[str]]:
     r_forkgroups: dict[str, set[str]] = {}
     for gitdir in set(r_manifest.keys()):
         fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
@@ -177,7 +193,7 @@ def build_optimal_forkgroups(l_manifest: dict, r_manifest: dict, toplevel: str, 
     return forkgroups
 
 
-def spa_worker(config: grokmirror.GrokConfigParser, q_spa: queue.Queue, pauseonload: bool) -> None:
+def spa_worker(config: grokmirror.GrokConfigParser, q_spa: queue.Queue[SpaItem | None], pauseonload: bool) -> None:
     """Run the queued post-pull treatments (objstore fetch, repack, pack-refs).
 
     Runs as a single thread for the life of the run, so the spa operations
@@ -319,8 +335,8 @@ def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokCo
 def pull_worker(
     ses: grokmirror.GrokSession,
     config: grokmirror.GrokConfigParser,
-    item: tuple,
-    q_spa: queue.Queue,
+    item: WorkItem,
+    q_spa: queue.Queue[SpaItem | None],
 ) -> bool | None:
     """Carry out one queued repository action in a pool thread.
 
@@ -496,7 +512,7 @@ def pull_worker(
     return success
 
 
-def cull_manifest(manifest: dict, config: grokmirror.GrokConfigParser) -> dict:
+def cull_manifest(manifest: grokmirror.Manifest, config: grokmirror.GrokConfigParser) -> grokmirror.Manifest:
     # Compiled once for the whole manifest: this used to be every include
     # times every exclude, for every repository the origin publishes.
     included = grokmirror.compile_globs(config['pull'].get('include', '*').split('\n'))
@@ -540,7 +556,7 @@ def fix_remotes(toplevel: str, gitdir: str, site: str, config: grokmirror.GrokCo
     return True
 
 
-def set_repo_params(fullpath: str, repoinfo: dict) -> None:
+def set_repo_params(fullpath: str, repoinfo: grokmirror.RepoInfo) -> None:
     owner = repoinfo.get('owner')
     description = repoinfo.get('description')
     head = repoinfo.get('head')
@@ -669,7 +685,7 @@ def pull_repo(fullpath: str, remotename: str) -> bool:
     return success
 
 
-def write_projects_list(config: grokmirror.GrokConfigParser, manifest: dict) -> None:
+def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirror.Manifest) -> None:
     plpath = config['pull'].get('projectslist', '')
     if not plpath:
         return
@@ -720,7 +736,7 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: dict) -> 
 def fill_todo_from_manifest(
     ses: grokmirror.GrokSession,
     config: grokmirror.GrokConfigParser,
-    q_mani: queue.Queue,
+    q_mani: queue.Queue[ManiItem],
     nomtime: bool = False,
     forcepurge: bool = False,
 ) -> None:
@@ -874,11 +890,11 @@ def fill_todo_from_manifest(
     privmatch = grokmirror.compile_globs(config['core'].get('private', '').split('\n'))
 
     # populate private/forkgroup info in r_culled
-    for forkgroup, siblings in forkgroups.items():
+    for fg, siblings in forkgroups.items():
         for s_fullpath in siblings:
             s_gitdir = '/' + os.path.relpath(s_fullpath, toplevel)
             if s_gitdir in r_culled:
-                r_culled[s_gitdir]['forkgroup'] = forkgroup
+                r_culled[s_gitdir]['forkgroup'] = fg
                 r_culled[s_gitdir]['private'] = bool(privmatch.match(s_gitdir))
 
     seen = set()
@@ -942,7 +958,7 @@ def fill_todo_from_manifest(
                 q_mani.put((gitdir, repoinfo, 'pull'))
                 continue
 
-            if my_fingerprint == repoinfo['fingerprint']:
+            if my_fingerprint == repoinfo.get('fingerprint'):
                 logger.debug('Fingerprints match, skipping %s', gitdir)
                 continue
 
@@ -995,7 +1011,7 @@ def fill_todo_from_manifest(
             q_mani.put((gitdir, repoinfo, 'init'))
             continue
 
-        if repoinfo['private'] and len(public_siblings):
+        if repoinfo.get('private') and len(public_siblings):
             # Clone public siblings first
             for s_gitdir in public_siblings:
                 if s_gitdir not in seen:
@@ -1041,12 +1057,14 @@ def fill_todo_from_manifest(
             else:
                 for gitdir in to_purge:
                     logger.debug('Queued %s for purging', gitdir)
-                    q_mani.put((gitdir, None, 'purge'))
+                    # An empty entry: there is nothing left on disk to describe,
+                    # and a purge only ever needs the path.
+                    q_mani.put((gitdir, {}, 'purge'))
         else:
             logger.debug('No repositories need purging')
 
 
-def update_manifest(config: grokmirror.GrokConfigParser, entries: list) -> None:
+def update_manifest(config: grokmirror.GrokConfigParser, entries: list[DoneItem]) -> None:
     manifile = config['core']['manifest']
     with grokmirror.locked_manifest(manifile):
         manifest = grokmirror.read_manifest(manifile)
@@ -1064,15 +1082,14 @@ def update_manifest(config: grokmirror.GrokConfigParser, entries: list) -> None:
                     pass
                 continue
 
-            try:
-                # does not belong in the manifest
-                repoinfo.pop('private')
-            except KeyError:
-                pass
-            for key, val in dict(repoinfo).items():
-                # Clean up grok-2.0 null values
-                if key in ('head', 'forkgroup') and val is None:
-                    repoinfo.pop(key)
+            # Our own local judgement about the mirror's config; it does not
+            # belong in the manifest we publish.
+            repoinfo.pop('private', None)
+            # Clean up grok-2.0 null values
+            if repoinfo.get('head') is None:
+                repoinfo.pop('head', None)
+            if repoinfo.get('forkgroup') is None:
+                repoinfo.pop('forkgroup', None)
             # Make sure 'reference' is present to prevent grok-1.x breakage
             if 'reference' not in repoinfo:
                 repoinfo['reference'] = None
@@ -1115,7 +1132,10 @@ def showstats(waiting: int, queued: int, active: int, spa: int, good: int, bad: 
 
 
 def manifest_worker(
-    ses: grokmirror.GrokSession, config: grokmirror.GrokConfigParser, q_mani: queue.Queue, nomtime: bool = False
+    ses: grokmirror.GrokSession,
+    config: grokmirror.GrokConfigParser,
+    q_mani: queue.Queue[ManiItem],
+    nomtime: bool = False,
 ) -> None:
     starttime = int(time.time())
     try:
@@ -1159,8 +1179,8 @@ def pull_mirror(
     # walked once for everybody.
     ses = grokmirror.GrokSession()
 
-    q_mani: queue.Queue = queue.Queue()
-    q_spa: queue.Queue = queue.Queue()
+    q_mani: queue.Queue[ManiItem] = queue.Queue()
+    q_spa: queue.Queue[SpaItem | None] = queue.Queue()
 
     sockfile = config['pull'].get('socket')
     if sockfile and not runonce:
@@ -1212,21 +1232,21 @@ def pull_mirror(
     pool = futures.ThreadPoolExecutor(max_workers=pull_threads, thread_name_prefix='pull_worker')
     # Submitted but unfinished work, mapping each future back to the item it
     # carries: a repository locked by another process goes back in line.
-    pending: dict[futures.Future, tuple] = {}
+    pending: dict[futures.Future[bool | None], WorkItem] = {}
     # Work that is ready to be handed to the pool. Plain supervisor-local
     # state: everything is put here by the loop below.
-    todo: deque = deque()
+    todo: deque[tuple[str, grokmirror.RepoInfo, str]] = deque()
     mws: list[threading.Thread] = []
     actions: set[tuple[str, str]] = set()
     busy: set[str] = set()
-    done: list = []
+    done: list[DoneItem] = []
     cloned: list[str] = []
     good = 0
     bad = 0
     post_clone_hook = config['pull'].get('post_clone_complete_hook')
     post_work_hook = config['pull'].get('post_work_complete_hook')
 
-    def enqueue(gitdir: str, repoinfo: dict | None, action: str) -> bool:
+    def enqueue(gitdir: str, repoinfo: grokmirror.RepoInfo, action: str) -> bool:
         if (gitdir, action) in actions:
             logger.debug('already in the queue: %s, %s', gitdir, action)
             return False
@@ -1238,14 +1258,14 @@ def pull_mirror(
         logger.debug('queued: %s, %s', gitdir, action)
         return True
 
-    def submit(item: tuple) -> None:
+    def submit(item: WorkItem) -> None:
         pending[pool.submit(pull_worker, ses, config, item, q_spa)] = item
 
     def show_pool_stats() -> None:
         active = sum(1 for f in pending if f.running())
         showstats(len(todo), len(pending) - active, active, q_spa.unfinished_tasks, good, bad)
 
-    def note_done(gitdir: str, repoinfo: dict, q_action: str, success: bool) -> None:
+    def note_done(gitdir: str, repoinfo: grokmirror.RepoInfo, q_action: str, success: bool) -> None:
         nonlocal good, bad, cloned
         try:
             actions.remove((gitdir, q_action))
@@ -1324,12 +1344,9 @@ def pull_mirror(
                 lastrun = int(time.time())
 
             # Finally, deal with the todo list
-            held: deque = deque()
+            held: deque[tuple[str, grokmirror.RepoInfo, str]] = deque()
             while todo:
                 (gitdir, repoinfo, q_action) = todo.popleft()
-                if repoinfo is None:
-                    repoinfo = {}
-
                 fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
                 forkgroup = repoinfo.get('forkgroup')
                 if gitdir in busy or (forkgroup is not None and forkgroup in busy):
@@ -1338,8 +1355,16 @@ def pull_mirror(
                     continue
 
                 if q_action == 'objstore_migrate':
+                    if not forkgroup:
+                        # fill_todo_from_manifest() only ever queues a migration
+                        # for a repository it has just given a forkgroup to, so
+                        # this should not be reachable -- but losing the whole
+                        # daemon to a KeyError over it would be worse.
+                        logger.critical('No forkgroup for %s, skipping objstore migration', gitdir)
+                        note_done(gitdir, repoinfo, q_action, False)
+                        continue
                     # Add forkgroup to busy, so we don't run any pulls until it's done
-                    busy.add(repoinfo['forkgroup'])
+                    busy.add(forkgroup)
                     obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
                     grokmirror.add_repo_to_objstore(obstrepo, fullpath)
                     grokmirror.set_altrepo(fullpath, obstrepo)
@@ -1373,7 +1398,7 @@ def pull_mirror(
                 if os.path.isdir(obstrepo):
                     logger.debug('clone %s with existing obstrepo %s', gitdir, obstrepo)
                     grokmirror.set_altrepo(fullpath, obstrepo)
-                    if not repoinfo['private']:
+                    if not repoinfo.get('private'):
                         grokmirror.add_repo_to_objstore(obstrepo, fullpath)
                     submit((gitdir, repoinfo, 'pull', q_action))
                     continue
@@ -1384,7 +1409,7 @@ def pull_mirror(
                 busy.add(forkgroup)
                 obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
                 grokmirror.set_altrepo(fullpath, obstrepo)
-                if not repoinfo['private']:
+                if not repoinfo.get('private'):
                     grokmirror.add_repo_to_objstore(obstrepo, fullpath)
                 submit((gitdir, repoinfo, 'pull', q_action))
             todo.extend(held)

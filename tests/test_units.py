@@ -521,7 +521,7 @@ class TestCullManifest:
             config['pull']['exclude'] = exclude
         return config
 
-    MANIFEST: ClassVar[dict[str, dict[str, object]]] = {
+    MANIFEST: ClassVar[grokmirror.Manifest] = {
         '/test/one.git': {'fingerprint': 'aaa'},
         '/test/two.git': {'fingerprint': 'bbb'},
         '/other/three.git': {'fingerprint': 'ccc'},
@@ -549,9 +549,80 @@ class TestCullManifest:
         assert set(culled) == set(self.MANIFEST)
 
     def test_repo_without_a_fingerprint_is_skipped(self) -> None:
-        manifest = {**self.MANIFEST, '/test/broken.git': {'modified': 5}}
+        manifest: grokmirror.Manifest = {**self.MANIFEST, '/test/broken.git': {'modified': 5}}
         culled = grokmirror.pull.cull_manifest(manifest, self._config())
         assert '/test/broken.git' not in culled
+
+
+class TestPullUpdateManifest:
+    """What grok-pull publishes back out after a round of work.
+
+    A mirror's own manifest is what its downstreams read, so this is where a
+    local-only key must be dropped and where the keys grokmirror-1.x clients
+    still insist on have to be present.
+    """
+
+    @staticmethod
+    def _config(tmp_path: Path) -> grokmirror.GrokConfigParser:
+        config = grokmirror.GrokConfigParser(interpolation=ExtendedInterpolation())
+        config.read_dict({'core': {'manifest': str(tmp_path / 'manifest.js')}, 'pull': {}})
+        return config
+
+    def _run(self, tmp_path: Path, entries: list[grokmirror.pull.DoneItem]) -> grokmirror.Manifest:
+        config = self._config(tmp_path)
+        grokmirror.pull.update_manifest(config, entries)
+        return grokmirror.read_manifest(config['core']['manifest'])
+
+    def test_private_is_never_published(self, tmp_path: Path) -> None:
+        # 'private' is this mirror's own reading of its [core] private config,
+        # not something the origin said. Publishing it would tell every
+        # downstream which of our repositories we consider private.
+        entry: grokmirror.RepoInfo = {'fingerprint': 'aaa', 'private': True}
+        manifest = self._run(tmp_path, [('/test/one.git', entry, 'pull', True)])
+        assert 'private' not in manifest['/test/one.git']
+        assert manifest['/test/one.git'].get('fingerprint') == 'aaa'
+
+    def test_null_head_and_forkgroup_are_dropped(self, tmp_path: Path) -> None:
+        # grok-2.0 wrote these out as nulls; there is no reason to keep
+        # publishing "we know nothing about this" as a key.
+        entry: grokmirror.RepoInfo = {'fingerprint': 'aaa', 'head': None, 'forkgroup': None}
+        manifest = self._run(tmp_path, [('/test/one.git', entry, 'pull', True)])
+        assert 'head' not in manifest['/test/one.git']
+        assert 'forkgroup' not in manifest['/test/one.git']
+
+    def test_real_head_and_forkgroup_survive(self, tmp_path: Path) -> None:
+        entry: grokmirror.RepoInfo = {'fingerprint': 'aaa', 'head': 'ref: refs/heads/main', 'forkgroup': 'fg1'}
+        manifest = self._run(tmp_path, [('/test/one.git', entry, 'pull', True)])
+        assert manifest['/test/one.git'].get('head') == 'ref: refs/heads/main'
+        assert manifest['/test/one.git'].get('forkgroup') == 'fg1'
+
+    def test_reference_is_always_written(self, tmp_path: Path) -> None:
+        # grokmirror-1.x clients read this key unconditionally, so it goes out
+        # even when there is nothing to point at.
+        entry: grokmirror.RepoInfo = {'fingerprint': 'aaa'}
+        manifest = self._run(tmp_path, [('/test/one.git', entry, 'pull', True)])
+        # Present, and explicitly null -- .get() alone could not tell the two apart.
+        assert 'reference' in manifest['/test/one.git']
+        assert manifest['/test/one.git'].get('reference') is None
+
+    def test_purge_removes_the_entry(self, tmp_path: Path) -> None:
+        config = self._config(tmp_path)
+        grokmirror.write_manifest(config['core']['manifest'], {'/test/one.git': {'fingerprint': 'aaa'}})
+        # A purge carries no repoinfo: there is nothing left on disk to describe.
+        grokmirror.pull.update_manifest(config, [('/test/one.git', {}, 'purge', True)])
+        assert grokmirror.read_manifest(config['core']['manifest']) == {}
+
+    def test_a_failed_action_changes_nothing(self, tmp_path: Path) -> None:
+        entry: grokmirror.RepoInfo = {'fingerprint': 'aaa'}
+        manifest = self._run(tmp_path, [('/test/one.git', entry, 'pull', False)])
+        assert manifest == {}
+
+    def test_the_entry_list_is_drained(self, tmp_path: Path) -> None:
+        # The caller keeps handing the same list back, so anything left in it
+        # would be published a second time on the next flush.
+        entries: list[grokmirror.pull.DoneItem] = [('/test/one.git', {'fingerprint': 'aaa'}, 'pull', True)]
+        grokmirror.pull.update_manifest(self._config(tmp_path), entries)
+        assert entries == []
 
 
 class TestRunShellCommand:
@@ -605,12 +676,12 @@ class TestReadManifest:
         manifile = tmp_path / 'manifest.js.gz'
         with gzip.open(manifile, 'wb') as fh:
             fh.write(json.dumps({'/test/one.git': {'modified': 5}}).encode())
-        assert grokmirror.read_manifest(str(manifile))['/test/one.git']['modified'] == 5
+        assert grokmirror.read_manifest(str(manifile))['/test/one.git'].get('modified') == 5
 
     def test_plain(self, tmp_path: Path) -> None:
         manifile = tmp_path / 'manifest.js'
         manifile.write_text('{"/test/one.git": {"modified": 5}}')
-        assert grokmirror.read_manifest(str(manifile))['/test/one.git']['modified'] == 5
+        assert grokmirror.read_manifest(str(manifile))['/test/one.git'].get('modified') == 5
 
     def test_gz_in_the_directory_name_does_not_mean_gzip(self, tmp_path: Path) -> None:
         # The opener used to be picked by looking for '.gz' anywhere in the
@@ -620,7 +691,7 @@ class TestReadManifest:
         mdir.mkdir()
         manifile = mdir / 'manifest.js'
         manifile.write_text('{"/test/one.git": {"modified": 5}}')
-        assert grokmirror.read_manifest(str(manifile))['/test/one.git']['modified'] == 5
+        assert grokmirror.read_manifest(str(manifile))['/test/one.git'].get('modified') == 5
 
     def test_missing_is_an_empty_manifest(self, tmp_path: Path) -> None:
         # A mirror's first run: no manifest yet, and that is not an error.
@@ -635,7 +706,9 @@ class TestReadManifest:
 
     def test_write_then_read_round_trip(self, tmp_path: Path) -> None:
         manifile = str(tmp_path / 'manifest.js.gz')
-        manifest = {'/test/one.git': {'modified': 5, 'fingerprint': 'abc', 'symlinks': ['/test/link.git']}}
+        manifest: grokmirror.Manifest = {
+            '/test/one.git': {'modified': 5, 'fingerprint': 'abc', 'symlinks': ['/test/link.git']}
+        }
         grokmirror.write_manifest(manifile, manifest)
         assert grokmirror.read_manifest(manifile) == manifest
 
@@ -673,7 +746,7 @@ class TestReadManifest:
 
     def test_pretty_manifest_is_still_readable(self, tmp_path: Path) -> None:
         manifile = str(tmp_path / 'manifest.js')
-        manifest = {'/test/two.git': {'modified': 2}, '/test/one.git': {'modified': 1}}
+        manifest: grokmirror.Manifest = {'/test/two.git': {'modified': 2}, '/test/one.git': {'modified': 1}}
         grokmirror.write_manifest(manifile, manifest, pretty=True)
         assert grokmirror.read_manifest(manifile) == manifest
         # Pretty means sorted and indented, which is the point of the option.

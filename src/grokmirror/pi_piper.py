@@ -31,7 +31,7 @@ def git_get_message_from_pi(fullpath: str, commit_id: str) -> bytes:
     return out
 
 
-def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list:
+def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list[tuple[str, str]]:
     statf = os.path.join(fullpath, 'pi-piper.latest')
     if pipelast:
         rev_range = f'-n {pipelast}'

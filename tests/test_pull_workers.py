@@ -20,7 +20,7 @@ import grokmirror.pull
 from support import DECOY_URL, GrokTree, git
 
 
-def drain(config: grokmirror.GrokConfigParser, q_spa: queue.Queue) -> None:
+def drain(config: grokmirror.GrokConfigParser, q_spa: queue.Queue[grokmirror.pull.SpaItem | None]) -> None:
     """Run spa_worker until the queue is empty; a None sentinel makes it exit."""
     q_spa.put(None)
     grokmirror.pull.spa_worker(config, q_spa, pauseonload=False)
@@ -42,7 +42,7 @@ def test_objstore_action_on_a_repo_with_no_alternates(
     config = grokmirror.load_config_file(str(cfgfile))
     monkeypatch.chdir(tree.decoy)
 
-    q_spa: queue.Queue = queue.Queue()
+    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     q_spa.put(('/test/one.git', ['objstore']))
     with caplog.at_level('DEBUG'):
         drain(config, q_spa)
@@ -70,7 +70,7 @@ def test_objstore_action_fetches_when_alternates_are_set(tree: GrokTree) -> None
     obstrepo = tree.objstore_repos()[0]
     assert newref not in git('cat-file', '--batch-check', '--batch-all-objects', cwd=obstrepo)
 
-    q_spa: queue.Queue = queue.Queue()
+    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     q_spa.put(('/test/fork.git', ['objstore']))
     drain(config, q_spa)
 
@@ -83,7 +83,7 @@ def test_simple_actions_run(tree: GrokTree, action: str) -> None:
     cfgfile = tree.write_config()
     config = grokmirror.load_config_file(str(cfgfile))
 
-    q_spa: queue.Queue = queue.Queue()
+    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     q_spa.put(('/test/one.git', [action]))
     drain(config, q_spa)
 
@@ -95,7 +95,7 @@ def test_an_unknown_action_is_ignored(tree: GrokTree) -> None:
     cfgfile = tree.write_config()
     config = grokmirror.load_config_file(str(cfgfile))
 
-    q_spa: queue.Queue = queue.Queue()
+    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     q_spa.put(('/test/one.git', ['no-such-action']))
     drain(config, q_spa)
 
@@ -124,7 +124,7 @@ def test_spa_worker_survives_a_failing_treatment(
 
     monkeypatch.setattr(grokmirror.pull, '_spa_repo', flaky)
 
-    q_spa: queue.Queue = queue.Queue()
+    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     q_spa.put(('/test/boom.git', ['fingerprint']))
     q_spa.put(('/test/one.git', ['fingerprint']))
     drain(config, q_spa)
@@ -153,7 +153,7 @@ def test_pull_worker_defers_a_locked_repo(
 
     fullpath = str(tree.path('test/one.git'))
     tree.path('test/one.git').parent.mkdir(parents=True, exist_ok=True)
-    q_spa: queue.Queue = queue.Queue()
+    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     with grokmirror.locked_repo(fullpath), caplog.at_level('INFO'):
         result = grokmirror.pull.pull_worker(
             grokmirror.GrokSession(), config, ('/test/one.git', repoinfo, 'pull', 'pull'), q_spa
@@ -182,7 +182,7 @@ def test_pull_worker_pulls_and_queues_spa_actions(origin: GrokTree, tree: GrokTr
     assert grokmirror.pull.fix_remotes(str(tree.toplevel), '/test/one.git', config['remote']['site'], config)
     grokmirror.pull.set_repo_params(fullpath, repoinfo)
 
-    q_spa: queue.Queue = queue.Queue()
+    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     result = grokmirror.pull.pull_worker(
         grokmirror.GrokSession(), config, ('/test/one.git', repoinfo, 'pull', 'init'), q_spa
     )
@@ -192,7 +192,9 @@ def test_pull_worker_pulls_and_queues_spa_actions(origin: GrokTree, tree: GrokTr
     ours = git('rev-parse', 'refs/heads/master', cwd=tree.path('test/one.git')).strip()
     assert ours == theirs
     # An initial clone queues the pack-all-refs treatment for the spa.
-    (gitdir, spa_actions) = q_spa.get_nowait()
+    queued = q_spa.get_nowait()
+    assert queued is not None
+    (gitdir, spa_actions) = queued
     assert gitdir == '/test/one.git'
     assert 'packrefs-all' in spa_actions
     # The lock was released for the next action on this repository.

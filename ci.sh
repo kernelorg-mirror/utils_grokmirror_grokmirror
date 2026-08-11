@@ -7,8 +7,9 @@ set -eu
 #
 # Ratchet status: all of these are green and should stay that way. grokmirror
 # predates type annotations, so the type checkers are not yet at the `strict`
-# used elsewhere: mypy now requires annotations on every function
-# (disallow_untyped_defs) but not yet the rest of `strict`, pyright runs at
+# used elsewhere: mypy now requires annotations on every function and forbids
+# bare generics and untyped calls (disallow_untyped_defs, disallow_any_generics,
+# disallow_untyped_calls) but not yet the rest of `strict`, pyright runs at
 # `standard`, and ty at its default rules. Keep tightening in pyproject.toml;
 # the goal is `mypy --strict` / pyright `strict` / ty `all = "error"`. Prefer
 # real annotations over suppressions when tightening: annotating a single

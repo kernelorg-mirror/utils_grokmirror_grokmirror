@@ -36,7 +36,7 @@ from collections.abc import Collection, Iterable, Iterator
 from configparser import ConfigParser, ExtendedInterpolation
 from contextlib import contextmanager
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
-from typing import IO, Literal, overload
+from typing import IO, Literal, TypedDict, overload
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -84,6 +84,41 @@ REMOTE_TIMEOUT = 6 * 3600
 # child of this one, so the handlers init_logger() attaches here serve the
 # whole package. No rebinding needed anywhere.
 logger = logging.getLogger(__name__)
+
+
+class RepoInfo(TypedDict, total=False):
+    """One repository's entry in the manifest.
+
+    This is the on-the-wire format: it is what grok-manifest writes, what
+    grok-pull reads from the origin, and what grokmirror-1.x clients still
+    parse. Keys can only ever be added, never renamed or removed.
+
+    Every key is optional, hence ``total=False``. get_repo_defs() always
+    supplies ``modified``, ``fingerprint`` and ``head``, and omits the rest
+    when it has nothing to say -- an empty description is left out rather
+    than written as an empty string. So read with ``.get()`` unless the
+    surrounding code has just put the key there itself.
+
+    ``reference`` and ``symlinks`` are added by grok-manifest after the fact,
+    and ``private`` only ever exists on grok-pull's own copy of the manifest:
+    it is a local judgement about the mirror's ``[pull] private`` config, not
+    something the origin tells us.
+    """
+
+    modified: int
+    fingerprint: str | None
+    head: str | None
+    owner: str
+    description: str
+    forkgroup: str | None
+    reference: str | None
+    symlinks: list[str]
+    private: bool
+
+
+# The manifest itself: repository paths ('/pub/scm/git/git.git', always with
+# the leading slash since 2.0) to their entries.
+Manifest = dict[str, RepoInfo]
 
 OBST_PREAMBULE = (
     '# WARNING: This is a grokmirror object storage repository.\n'
@@ -143,7 +178,7 @@ class GrokSession:
         self._requests: requests.Session | None = None
         self._alt_repo_maps: dict[str, dict[str, set[str]]] = {}
 
-    def __getstate__(self) -> dict:
+    def __getstate__(self) -> dict[str, object]:
         # A live HTTP session cannot cross a process boundary; the
         # alternates caches can, and save each worker a toplevel re-walk.
         state = self.__dict__.copy()
@@ -329,30 +364,30 @@ def git_newer_than(minver: str) -> bool:
 # str | bytes union they then have to narrow by hand.
 @overload
 def run_shell_command(
-    cmdargs: list,
+    cmdargs: list[str],
     stdin: bytes | None = ...,
     decode: Literal[True] = ...,
-    env: dict | None = ...,
+    env: dict[str, str] | None = ...,
     timeout: float | None = ...,
 ) -> tuple[int, str, str]: ...
 
 
 @overload
 def run_shell_command(
-    cmdargs: list,
+    cmdargs: list[str],
     stdin: bytes | None = ...,
     *,
     decode: Literal[False],
-    env: dict | None = ...,
+    env: dict[str, str] | None = ...,
     timeout: float | None = ...,
 ) -> tuple[int, bytes, bytes]: ...
 
 
 def run_shell_command(
-    cmdargs: list,
+    cmdargs: list[str],
     stdin: bytes | None = None,
     decode: bool = True,
-    env: dict | None = None,
+    env: dict[str, str] | None = None,
     timeout: float | None = None,
 ) -> tuple[int, str, str] | tuple[int, bytes, bytes]:
     # env=None inherits our environment, as subprocess itself does; passing a
@@ -389,7 +424,7 @@ def run_shell_command(
 @overload
 def run_git_command(
     fullpath: str | None,
-    args: list,
+    args: list[str],
     stdin: bytes | None = ...,
     decode: Literal[True] = ...,
     timeout: float | None = ...,
@@ -399,7 +434,7 @@ def run_git_command(
 @overload
 def run_git_command(
     fullpath: str | None,
-    args: list,
+    args: list[str],
     stdin: bytes | None = ...,
     *,
     decode: Literal[False],
@@ -409,7 +444,7 @@ def run_git_command(
 
 def run_git_command(
     fullpath: str | None,
-    args: list,
+    args: list[str],
     stdin: bytes | None = None,
     decode: bool = True,
     timeout: float | None = None,
@@ -577,7 +612,7 @@ def get_repo_obj_info(fullpath: str) -> dict[str, str]:
     return obj_info
 
 
-def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: list[str] | None = None) -> dict:
+def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: list[str] | None = None) -> RepoInfo:
     fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
     description = None
     try:
@@ -629,7 +664,7 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
     fingerprint = get_repo_fingerprint(toplevel, gitdir, force=True, ignorerefs=ignorerefs)
     # Record it in the repo for other use
     set_repo_fingerprint(toplevel, gitdir, fingerprint)
-    repoinfo = {
+    repoinfo: RepoInfo = {
         'modified': int(modified.timestamp()),
         'fingerprint': fingerprint,
         'head': head,
@@ -1238,7 +1273,7 @@ def locked_manifest(manifile: str) -> Iterator[None]:
         manifest_unlock(manifile)
 
 
-def read_manifest(manifile: str, wait: bool = False) -> dict:
+def read_manifest(manifile: str, wait: bool = False) -> Manifest:
     while True:
         if not wait or os.path.exists(manifile):
             break
@@ -1274,7 +1309,7 @@ def read_manifest(manifile: str, wait: bool = False) -> dict:
     return manifest
 
 
-def write_manifest(manifile: str, manifest: dict, mtime: int | None = None, pretty: bool = False) -> None:
+def write_manifest(manifile: str, manifest: Manifest, mtime: int | None = None, pretty: bool = False) -> None:
     logger.debug('Writing new %s', manifile)
 
     (dirname, basename) = os.path.split(manifile)

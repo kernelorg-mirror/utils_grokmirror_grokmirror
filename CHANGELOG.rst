@@ -54,6 +54,11 @@ v3.0 (TBD)
 - The manifest and projects.list are now swapped into place with
   os.replace() rather than shutil.move(), which silently degrades to
   copy-then-delete and defeats the atomicity the temporary file exists for
+- Manifest entries missing a key grokmirror normally writes no longer
+  traceback: grok-manifest's symlink and purge handling, grok-fsck's
+  forkgroup update and grok-pull's queueing all read them defensively now.
+  grok-pull also no longer dies outright when an objstore migration reaches
+  it without a forkgroup; it logs the repository as failed and carries on
 - Config options that take shell globs (include, exclude, private, nopurge,
   ffonly, baselines, islandcores, ignore) are now compiled into a single
   regular expression instead of being matched pattern-by-pattern against

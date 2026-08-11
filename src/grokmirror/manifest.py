@@ -27,7 +27,9 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 
-def update_manifest(manifest: dict, toplevel: str, fullpath: str, usenow: bool, ignorerefs: list[str] | None) -> None:
+def update_manifest(
+    manifest: grokmirror.Manifest, toplevel: str, fullpath: str, usenow: bool, ignorerefs: list[str] | None
+) -> None:
     logger.debug('Examining %s', fullpath)
     if not grokmirror.is_bare_git_repo(fullpath):
         logger.critical('Error opening %s.', fullpath)
@@ -37,7 +39,7 @@ def update_manifest(manifest: dict, toplevel: str, fullpath: str, usenow: bool, 
     gitdir = '/' + os.path.relpath(fullpath, toplevel)
     repoinfo = grokmirror.get_repo_defs(toplevel, gitdir, usenow=usenow, ignorerefs=ignorerefs)
     # Ignore it if it's an empty git repository
-    if not repoinfo['fingerprint']:
+    if not repoinfo.get('fingerprint'):
         logger.info(' manifest: ignored %s (no heads)', gitdir)
         return
 
@@ -77,7 +79,7 @@ def update_manifest(manifest: dict, toplevel: str, fullpath: str, usenow: bool, 
     manifest[gitdir]['reference'] = reference
 
 
-def set_symlinks(manifest: dict, toplevel: str, symlinks: list[str]) -> None:
+def set_symlinks(manifest: grokmirror.Manifest, toplevel: str, symlinks: list[str]) -> None:
     for symlink in symlinks:
         target = os.path.realpath(symlink)
         if not os.path.exists(target):
@@ -93,29 +95,29 @@ def set_symlinks(manifest: dict, toplevel: str, symlinks: list[str]) -> None:
         if tgtgitdir not in manifest:
             logger.critical(' manifest: symlink %s points to %s, which we do not recognize', relative, tgtgitdir)
             continue
-        if 'symlinks' in manifest[tgtgitdir]:
-            if relative not in manifest[tgtgitdir]['symlinks']:
-                logger.info(' manifest: symlinked %s->%s', relative, tgtgitdir)
-                manifest[tgtgitdir]['symlinks'].append(relative)
-            else:
-                logger.info(' manifest: %s->%s is already in manifest', relative, tgtgitdir)
-        else:
+        known = manifest[tgtgitdir].get('symlinks')
+        if known is None:
             manifest[tgtgitdir]['symlinks'] = [relative]
             logger.info(' manifest: symlinked %s->%s', relative, tgtgitdir)
+        elif relative not in known:
+            logger.info(' manifest: symlinked %s->%s', relative, tgtgitdir)
+            known.append(relative)
+        else:
+            logger.info(' manifest: %s->%s is already in manifest', relative, tgtgitdir)
 
         # Now go through all repos and fix any references pointing to the
         # symlinked location. We shouldn't need to do anything with forkgroups.
-        for gitdir in list(manifest):
+        for gitdir, repoinfo in list(manifest.items()):
             if gitdir == relative:
                 logger.info(' manifest: removing %s (replaced by a symlink)', gitdir)
                 manifest.pop(gitdir)
                 continue
-            if manifest[gitdir]['reference'] == relative:
+            if repoinfo.get('reference') == relative:
                 logger.info(' manifest: symlinked %s->%s', relative, tgtgitdir)
-                manifest[gitdir]['reference'] = tgtgitdir
+                repoinfo['reference'] = tgtgitdir
 
 
-def purge_manifest(manifest: dict, toplevel: str, gitdirs: list[str]) -> None:
+def purge_manifest(manifest: grokmirror.Manifest, toplevel: str, gitdirs: list[str]) -> None:
     for oldrepo in list(manifest):
         if os.path.join(toplevel, oldrepo.lstrip('/')) not in gitdirs:
             logger.info(' manifest: purged %s (gone)', oldrepo)
@@ -308,12 +310,13 @@ def grok_manifest(
                 else:
                     # Is it in any of the symlinks?
                     found = False
-                    for gitdir in manifest:
-                        if 'symlinks' in manifest[gitdir] and repo in manifest[gitdir]['symlinks']:
+                    for gitdir, repoinfo in manifest.items():
+                        known = repoinfo.get('symlinks')
+                        if known and repo in known:
                             found = True
-                            manifest[gitdir]['symlinks'].remove(repo)
-                            if not len(manifest[gitdir]['symlinks']):
-                                manifest[gitdir].pop('symlinks')
+                            known.remove(repo)
+                            if not known:
+                                repoinfo.pop('symlinks')
                             logger.info(' manifest: removed symlink %s->%s', repo, gitdir)
                     if not found:
                         logger.info(' manifest: %s not in manifest', repo)

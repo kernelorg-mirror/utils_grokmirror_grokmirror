@@ -152,7 +152,7 @@ def test_symlink_target_embedding_the_toplevel_path_is_still_outside(tmp_path: P
     link.symlink_to(evil_repo)
 
     key = '/' + os.path.relpath(evil_repo, toplevel)
-    manifest: dict = {key: {}}
+    manifest: grokmirror.Manifest = {key: {}}
     grokmirror.manifest.set_symlinks(manifest, str(toplevel), [str(link)])
 
     assert 'symlinks' not in manifest[key]

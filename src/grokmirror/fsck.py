@@ -1158,14 +1158,14 @@ def fsck_mirror(
             # Re-read manifest, so we can update reference and forkgroup data
             disk_manifest = grokmirror.read_manifest(manifile)
             # Go through my manifest and update and changes in forkgroup data
-            for gitdir in manifest:
+            for gitdir, repoinfo in manifest.items():
                 if gitdir not in disk_manifest:
                     # What happened here?
                     continue
-                if 'reference' in manifest[gitdir]:
-                    disk_manifest[gitdir]['reference'] = manifest[gitdir]['reference']
-                if 'forkgroup' in manifest[gitdir]:
-                    disk_manifest[gitdir]['forkgroup'] = manifest[gitdir]['forkgroup']
+                if 'reference' in repoinfo:
+                    disk_manifest[gitdir]['reference'] = repoinfo['reference']
+                if 'forkgroup' in repoinfo:
+                    disk_manifest[gitdir]['forkgroup'] = repoinfo['forkgroup']
 
             grokmirror.write_manifest(manifile, disk_manifest, pretty=pretty)
 

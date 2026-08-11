@@ -74,8 +74,10 @@ testpaths = ["tests"]
 addopts = "--tb=short -n auto --dist worksteal"
 
 [tool.mypy]
-# Not yet `strict = true`, but every function in the tree is annotated now, so
-# disallow_untyped_defs applies to all of it. See the top of ci.sh for the plan.
+# Not yet `strict = true`, but every function in the tree is annotated now and
+# no bare `dict`/`list`/`Queue` annotations are left, so disallow_untyped_defs,
+# disallow_untyped_calls and disallow_any_generics all apply to the whole tree.
+# See the top of ci.sh for the plan.
 # python_version is deliberately unset: mypy no longer accepts a 3.9 target, so
 # it checks against whatever interpreter it runs under. ruff, pyright and ty are
 # all still pinned to py39, and ci-matrix.sh actually runs the tests on 3.9.
@@ -90,6 +92,8 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
 disallow_untyped_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
 
 [tool.pyright]
 # pyright automatically ignores virtual environments and other directories, but
