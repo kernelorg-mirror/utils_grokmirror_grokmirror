@@ -36,11 +36,7 @@ def update_manifest(
         logger.critical('Make sure it is a bare git repository.')
         raise grokmirror.GrokError(f'Not a bare git repository: {fullpath}')
 
-    # os.path.relpath, not Path.relative_to: manifest keys have to keep coming
-    # out as plain strings, and relative_to() raises for anything that is not
-    # under toplevel, where relpath walks up with '..'. Path grew walk_up in
-    # 3.12, which is well past our floor.
-    gitdir = '/' + os.path.relpath(fullpath, toplevel)
+    gitdir = grokmirror.fullpath_to_gitdir(toplevel, fullpath)
     repoinfo = grokmirror.get_repo_defs(toplevel, gitdir, usenow=usenow, ignorerefs=ignorerefs)
     # Ignore it if it's an empty git repository
     if not repoinfo.get('fingerprint'):
@@ -70,13 +66,13 @@ def update_manifest(
         if remotes:
             urls = [x[1] for x in remotes]
             urls.sort()
-            reference = '/' + os.path.relpath(urls[0], toplevel)
+            reference = grokmirror.fullpath_to_gitdir(toplevel, urls[0])
     else:
         reference = manifest[gitdir].get('reference', None)
 
     if altrepo and not reference and not repoinfo.get('forkgroup'):
         # Not an objstore repo
-        reference = '/' + os.path.relpath(altrepo, toplevel)
+        reference = grokmirror.fullpath_to_gitdir(toplevel, altrepo)
 
     manifest[gitdir].update(repoinfo)
     # Always write a reference entry even if it's None, as grok-1.x clients expect it
@@ -89,13 +85,13 @@ def set_symlinks(manifest: grokmirror.Manifest, toplevel: str, symlinks: list[st
         if not target.exists():
             logger.critical(' manifest: symlink %s is broken, ignored', symlink)
             continue
-        relative = '/' + os.path.relpath(symlink, toplevel)
+        relative = grokmirror.fullpath_to_gitdir(toplevel, symlink)
         # A path comparison, not a string search: the old containment test
         # accepted any target whose path merely mentioned the toplevel.
         if not target.is_relative_to(toplevel):
             logger.critical(' manifest: symlink %s points outside toplevel, ignored', relative)
             continue
-        tgtgitdir = '/' + os.path.relpath(target, toplevel)
+        tgtgitdir = grokmirror.fullpath_to_gitdir(toplevel, target)
         if tgtgitdir not in manifest:
             logger.critical(' manifest: symlink %s points to %s, which we do not recognize', relative, tgtgitdir)
             continue
@@ -123,7 +119,7 @@ def set_symlinks(manifest: grokmirror.Manifest, toplevel: str, symlinks: list[st
 
 def purge_manifest(manifest: grokmirror.Manifest, toplevel: str, gitdirs: list[str]) -> None:
     for oldrepo in list(manifest):
-        if str(Path(toplevel, oldrepo.lstrip('/'))) not in gitdirs:
+        if str(grokmirror.gitdir_to_fullpath(toplevel, oldrepo)) not in gitdirs:
             logger.info(' manifest: purged %s (gone)', oldrepo)
             manifest.pop(oldrepo)
 
@@ -307,7 +303,7 @@ def grok_manifest(
         if remove and paths:
             # Remove the repos as required, write new manfiest and exit
             for fullpath in paths:
-                repo = '/' + os.path.relpath(fullpath, toplevel)
+                repo = grokmirror.fullpath_to_gitdir(toplevel, fullpath)
                 if repo in manifest:
                     manifest.pop(repo)
                     logger.info(' manifest: removed %s', repo)
@@ -354,7 +350,7 @@ def grok_manifest(
             # check to make sure this gitdir is ok to export
             if check_export_ok and not Path(gitdir, 'git-daemon-export-ok').exists():
                 # is it curently in the manifest?
-                repo = '/' + os.path.relpath(gitdir, toplevel)
+                repo = grokmirror.fullpath_to_gitdir(toplevel, gitdir)
                 if repo in list(manifest):
                     logger.info(' manifest: removed %s (no longer exported)', repo)
                     manifest.pop(repo)

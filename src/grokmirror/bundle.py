@@ -25,7 +25,7 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 
-def get_repo_size(fullpath: str) -> int:
+def get_repo_size(fullpath: grokmirror.StrPath) -> int:
     reposize = 0
     obj_info = grokmirror.get_repo_obj_info(fullpath)
     if 'alternate' in obj_info:
@@ -67,8 +67,10 @@ def generate_bundles(
             logger.debug('%s does not match include list, skipping', repo)
             continue
 
+        fullpath = grokmirror.gitdir_to_fullpath(toplevel, repo)
+        # The bundle directory mirrors the manifest key relative to outdir, so
+        # this one keeps its own lstrip: it is not a path under toplevel.
         repo = repo.lstrip('/')
-        fullpath = toplevel / repo
 
         bundledir = Path(outdir, repo.removesuffix('.git'))
         bundledir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +98,7 @@ def generate_bundles(
                     continue
 
         logger.debug('checking size of %s', repo)
-        total_size = get_repo_size(str(fullpath)) / 1024 / 1024
+        total_size = get_repo_size(fullpath) / 1024 / 1024
 
         if total_size > maxsize:
             logger.info('  skipped: %s (%s > %s)', repo, total_size, maxsize)
@@ -105,7 +107,7 @@ def generate_bundles(
         fullargs = git_args + ['bundle', 'create', str(bfile)] + revlist_args
         logger.debug('Full git args: %s', fullargs)
         logger.info(' generate: %s', bfile)
-        ecode, _out, _err = grokmirror.run_git_command(str(fullpath), fullargs)
+        ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs)
 
         if ecode == 0:
             bfprfile.write_text(repofpr, encoding='utf-8')
