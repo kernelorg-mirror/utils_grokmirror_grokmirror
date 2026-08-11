@@ -230,3 +230,144 @@ def test_pre_objstore_alternates_are_left_alone(tree: GrokTree) -> None:
     assert 'not an objstore repo' in tree.log_text()
     # Mommy is still lending objects to child, so nothing may prune her.
     assert git('cat-file', '-e', head, cwd=mommy) == ''
+
+
+# -- the repack/fsck scheduling decision --------------------------------------
+#
+# Everything below characterizes the densest logic in fsck_mirror(): the chain
+# that turns config, command-line flags, the object count, the fingerprint and
+# the check schedule into "repack at level N", "fsck" or "leave it alone". It
+# is all observable through the queued: lines and the status file, and it was
+# reachable only as a side effect of other tests before.
+
+
+def queued(tree: GrokTree, *args: str) -> list[str]:
+    """Run grok-fsck verbosely and return the reason from each decision it logged.
+
+    Just the reason in the trailing parentheses, not the whole line: the line
+    also carries the repository's full path, and pytest names its tmpdir after
+    the running test, so "repack" appears in the path of every test named after
+    a repack and matching whole lines silently never fails.
+    """
+    res = tree.run_fsck('-v', *args)
+    out = res.stdout + res.stderr
+    return [line.rsplit('(', 1)[-1].rstrip(')') for line in out.splitlines() if 'queued:' in line or 'aged:' in line]
+
+
+def patch_status(tree: GrokTree, gitdir: str, **fields: str) -> None:
+    """Rewrite fields of a repository's status entry, to place it in time."""
+    status = json.loads(tree.statusfile.read_text())
+    status[str(tree.path(gitdir))].update(fields)
+    tree.statusfile.write_text(json.dumps(status))
+
+
+def test_repack_no_queues_an_fsck_but_never_a_repack(tree: GrokTree) -> None:
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config({'fsck': {'repack': 'no'}})
+
+    decisions = queued(tree, '-f')
+
+    assert decisions == ['fsck']
+
+
+def test_repack_only_never_queues_an_fsck(tree: GrokTree) -> None:
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+
+    decisions = queued(tree, '-f', '--repack-only')
+
+    assert 'fsck' not in decisions
+
+
+def test_repack_all_full_queues_a_full_repack(tree: GrokTree) -> None:
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+
+    decisions = queued(tree, '--repack-all-full')
+
+    assert decisions == ['full repack']
+
+
+def test_repack_all_quick_queues_a_plain_repack(tree: GrokTree) -> None:
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+
+    decisions = queued(tree, '--repack-all-quick')
+
+    assert decisions == ['repack']
+
+
+def test_unchanged_fingerprint_queues_no_repack(tree: GrokTree) -> None:
+    # --force still queues the fsck, but the repo has not moved since the last
+    # run, so there is nothing to repack.
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+    tree.run_fsck('-f')
+
+    decisions = queued(tree, '-f')
+
+    assert decisions == ['fsck']
+
+
+def test_aged_repo_with_a_changed_fingerprint_is_repacked(tree: GrokTree) -> None:
+    # Due for its periodic check and no longer matching its recorded
+    # fingerprint: that combination forces a level-1 repack even though the
+    # object counts alone would not have asked for one, and it moves the
+    # repository's next check out into the future.
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+    tree.run_fsck('-f')
+
+    patch_status(tree, 'test/one.git', nextcheck='2000-01-01', fingerprint='0' * 40)
+
+    decisions = queued(tree)
+
+    assert 'forcing repack' in decisions
+    after = json.loads(tree.statusfile.read_text())[str(tree.path('test/one.git'))]
+    assert after['nextcheck'] > '2000-01-01'
+
+
+def test_precious_repo_is_not_repacked_outside_its_schedule(tree: GrokTree) -> None:
+    # With precious=always, a preciousObjects repository is repacked on the fsck
+    # schedule rather than whenever its object counts drift, because repacking
+    # one is the risky operation the setting exists to hold back.
+    repo = tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config({'fsck': {'precious': 'always'}})
+    tree.run_fsck('-f')
+
+    # Fresh loose objects, which would normally be worth a quick repack...
+    src = tree.source()
+    src.commit()
+    src.push(repo)
+    grokmirror.set_git_config(str(repo), 'extensions.preciousObjects', 'true')
+    patch_status(tree, 'test/one.git', nextcheck='2099-01-01')
+
+    # ...but this repo is not due, so it is left entirely alone.
+    assert queued(tree, '--repack-all-quick') == []
+
+
+def test_precious_repo_gets_a_full_repack_when_due(tree: GrokTree) -> None:
+    # Once its fsck check comes around, the same repository is repacked -- and
+    # at level 2, not the level 1 that was asked for, since this is its one
+    # scheduled opportunity. The check is then pushed back into the future.
+    repo = tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config({'fsck': {'precious': 'always'}})
+    tree.run_fsck('-f')
+
+    src = tree.source()
+    src.commit()
+    src.push(repo)
+    grokmirror.set_git_config(str(repo), 'extensions.preciousObjects', 'true')
+    patch_status(tree, 'test/one.git', nextcheck='2000-01-01')
+
+    assert queued(tree, '--repack-all-quick') == ['full repack']
+    after = json.loads(tree.statusfile.read_text())[str(tree.path('test/one.git'))]
+    assert after['nextcheck'] > '2000-01-01'
