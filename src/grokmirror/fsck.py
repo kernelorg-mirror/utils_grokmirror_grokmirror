@@ -23,6 +23,7 @@ import io
 import json
 import logging
 import os
+import platform
 import random
 import shutil
 import smtplib
@@ -314,8 +315,8 @@ def remove_ignored_errors(output: str, config: grokmirror.GrokConfigParser) -> l
     ierrors = {x.strip() for x in config['fsck'].get('ignore_errors', '').splitlines() if x.strip()}
     debug = []
     warn = []
-    for line in output.splitlines():
-        line = line.strip()
+    for rawline in output.splitlines():
+        line = rawline.strip()
         # ignore any blank linkes
         if not line:
             continue
@@ -1349,8 +1350,6 @@ def grok_fsck(
         msg.set_content(report)
         subject = config['fsck'].get('report_subject')
         if not subject:
-            import platform
-
             subject = f'grok-fsck errors on {platform.node()} ({cfgfile})'
         msg['Subject'] = subject
         from_addr = config['fsck'].get('report_from', 'root')

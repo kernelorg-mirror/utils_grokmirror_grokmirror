@@ -15,6 +15,8 @@ import sys
 
 import pytest
 
+import grokmirror
+
 MODULES = [
     'grokmirror',
     'grokmirror.bundle',
@@ -50,8 +52,6 @@ def test_module_has_command_entry_point(modname: str) -> None:
 
 
 def test_version_is_exported() -> None:
-    import grokmirror
-
     assert grokmirror.VERSION
 
 

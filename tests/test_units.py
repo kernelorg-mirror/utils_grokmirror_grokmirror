@@ -656,6 +656,14 @@ class TestWriteProjectsList:
         listed = self._run(tmp_path, {'projectslist_trimtop': '/pub/scm', 'projectslist_symlinks': 'yes'}, manifest)
         assert sorted(listed) == ['alias.git', 'one.git']
 
+    def test_trimtop_only_matches_at_the_front_of_a_symlink(self, tmp_path: Path) -> None:
+        # Symlinks get the same two steps as the repos above, so they need the
+        # same guarantee: the prefix is only ever cut off the front, never out
+        # of the middle of a name that merely contains it.
+        manifest: grokmirror.Manifest = {'/pub/scm/one.git': {'symlinks': ['/other/pub/scm/alias.git']}}
+        listed = self._run(tmp_path, {'projectslist_trimtop': '/pub/scm', 'projectslist_symlinks': 'yes'}, manifest)
+        assert sorted(listed) == ['one.git', 'other/pub/scm/alias.git']
+
 
 class TestRunShellCommand:
     """run_shell_command() is the choke point for every external command.

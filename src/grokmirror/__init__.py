@@ -40,6 +40,7 @@ from pathlib import Path, PurePath
 from typing import IO, Literal, TypedDict, Union, overload
 
 import requests
+from packaging import version
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -365,8 +366,6 @@ def set_git_config(fullpath: StrPath, param: str, value: str, operation: str = '
 def git_newer_than(minver: str) -> bool:
     # Cached because grok-fsck asks this once per repository, and the answer
     # cannot change while we run: it forks git --version every single time.
-    from packaging import version
-
     (_retcode, output, _error) = run_git_command(None, ['--version'])
     ver = output.split()[-1]
     return version.parse(ver) >= version.parse(minver)
@@ -914,8 +913,8 @@ def add_repo_to_objstore(obstrepo: StrPath, fullpath: StrPath) -> bool:
     telltale = Path(obstrepo, 'grokmirror.objstore')
     knownsiblings = set()
     if telltale.exists():
-        for line in telltale.read_text(encoding='utf-8').splitlines():
-            line = line.strip()
+        for rawline in telltale.read_text(encoding='utf-8').splitlines():
+            line = rawline.strip()
             if not line or line[0] == '#':
                 continue
             if Path(line).is_dir():
@@ -1250,7 +1249,7 @@ def is_obstrepo(fullpath: StrPath, obstdir: StrPath | None = None) -> bool:
 
 
 def manifest_lock(manifile: StrPath) -> None:
-    global MANIFEST_LOCKH
+    global MANIFEST_LOCKH  # noqa: PLW0603 -- process-wide by design; see the comment on the declaration
     # The mutex is held across the blocking fcntl call. That is safe from
     # deadlock: if the check below passes, no thread of this process holds
     # the manifest lock, so no thread can be inside manifest_unlock() -- the
@@ -1279,7 +1278,7 @@ def manifest_lock(manifile: StrPath) -> None:
 
 
 def manifest_unlock(manifile: StrPath) -> None:
-    global MANIFEST_LOCKH
+    global MANIFEST_LOCKH  # noqa: PLW0603 -- process-wide by design; see the comment on the declaration
     with _MANIFEST_LOCKH_MUTEX:
         lockfh = MANIFEST_LOCKH
         MANIFEST_LOCKH = None

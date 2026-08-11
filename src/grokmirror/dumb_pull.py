@@ -68,11 +68,10 @@ def dumb_pull_repo(gitdir: str, remotes: list[str], svn: bool = False) -> bool:
 
                 for remote in remotes:
                     # arghie-argh-argh
-                    if remote == '*':
-                        remote = '--all'
+                    fetcharg = '--all' if remote == '*' else remote
 
-                    logger.info('Running git-svn fetch %s in %s', remote, gitdir)
-                    args = ['svn', 'fetch', remote]
+                    logger.info('Running git-svn fetch %s in %s', fetcharg, gitdir)
+                    args = ['svn', 'fetch', fetcharg]
                     git_remote_update(args, gitdir)
 
             else:

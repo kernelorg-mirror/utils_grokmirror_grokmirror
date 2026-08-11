@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import gzip
+import io
 import json
 import logging
 import os
@@ -377,13 +378,12 @@ def pull_worker(
                 if fullpath.is_symlink():
                     logger.info('    purge: %s', gitdir)
                     fullpath.unlink()
+                # is anything using us for alternates?
+                elif ses.is_alt_repo(toplevel, gitdir):
+                    logger.debug('Not purging %s because it is used by other repos via alternates', fullpath)
                 else:
-                    # is anything using us for alternates?
-                    if ses.is_alt_repo(toplevel, gitdir):
-                        logger.debug('Not purging %s because it is used by other repos via alternates', fullpath)
-                    else:
-                        logger.info('    purge: %s', gitdir)
-                        shutil.rmtree(fullpath)
+                    logger.info('    purge: %s', gitdir)
+                    shutil.rmtree(fullpath)
 
             if action == 'fix_params':
                 logger.info(' reconfig: %s', gitdir)
@@ -616,12 +616,12 @@ def get_hookscripts(config: grokmirror.GrokConfigParser, hookname: str) -> list[
     hookscripts = []
     # And sinker!
     hookline = config['pull'].get(hookname, '')
-    for hookscript in hookline.splitlines():
+    for rawscript in hookline.splitlines():
         # Deliberately os.path.expanduser() and not Path().expanduser(): this
         # is a whole command line, arguments and all, not a path. Round-tripping
         # it through Path would rewrite the arguments too -- '//' collapsed, a
         # trailing slash dropped -- and only the leading '~' needs expanding.
-        hookscript = os.path.expanduser(hookscript.strip())  # noqa: PTH111
+        hookscript = os.path.expanduser(rawscript.strip())  # noqa: PTH111
         args = shlex.split(hookscript)
         if not args:
             continue
@@ -729,11 +729,9 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirro
                 # Do the same for symlinks
                 # XXX: Should make this configurable, perhaps
                 for symlink in repoinfo['symlinks']:
-                    if trimtop and symlink.startswith(trimtop):
-                        symlink = symlink[len(trimtop) :]
-
-                    symlink = symlink.lstrip('/')
-                    fh.write(f'{symlink}\n'.encode())
+                    # Same two steps as the gitdir above, spelled the same way
+                    psymlink = symlink.removeprefix(trimtop).lstrip('/')
+                    fh.write(f'{psymlink}\n'.encode())
 
         os.fsync(fd)
         fh.close()
@@ -867,8 +865,6 @@ def fill_todo_from_manifest(
             jdata: str | bytes
             try:
                 if r_mani_url.endswith('.gz'):
-                    import io
-
                     with gzip.GzipFile(fileobj=io.BytesIO(res.content)) as gzfh:
                         jdata = gzfh.read().decode()
                 else:

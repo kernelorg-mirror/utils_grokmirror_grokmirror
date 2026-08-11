@@ -114,8 +114,8 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
             newsgroup = None
             listid = None
             addresses = []
-            for line in origins.splitlines():
-                line = line.strip()
+            for rawline in origins.splitlines():
+                line = rawline.strip()
                 if not line or line.startswith((';', '#', '[publicinbox')):
                     continue
                 try:

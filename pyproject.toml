@@ -126,10 +126,23 @@ extend-select = [
     "I",
     "PERF",
     "PIE",
-    "PLC1802", # len-test: `if len(x)` as a condition -> `if x`
-    "PLW1514", # unspecified-encoding: text-mode I/O must say encoding=
+    "PL",
     "PTH", # os.path and friends -> pathlib
     "SIM",
+]
+ignore = [
+    # The complexity rules all fire on the same handful of functions --
+    # fsck_mirror(), pull_mirror(), pull_repo() -- which are long because they
+    # are the top-level run loops, not because they grew by accident. Splitting
+    # them up is real refactoring with real regression risk, so it is its own
+    # job rather than a lint sweep; until then these would be 73 permanent
+    # noqa comments.
+    "PLR0911", # too-many-return-statements
+    "PLR0912", # too-many-branches
+    "PLR0913", # too-many-arguments
+    "PLR0915", # too-many-statements
+    "PLR0917", # too-many-positional-arguments
+    "PLR2004", # magic-value-comparison
 ]
 
 [tool.ruff.lint.isort]

@@ -69,18 +69,19 @@ def generate_bundles(
 
         fullpath = grokmirror.gitdir_to_fullpath(toplevel, repo)
         # The bundle directory mirrors the manifest key relative to outdir, so
-        # this one keeps its own lstrip: it is not a path under toplevel.
-        repo = repo.lstrip('/')
+        # this name keeps its own lstrip: it is not a path under toplevel, and
+        # Path() would discard outdir if it were joined on with its slash.
+        bundlename = repo.lstrip('/')
 
-        bundledir = Path(outdir, repo.removesuffix('.git'))
+        bundledir = Path(outdir, bundlename.removesuffix('.git'))
         bundledir.mkdir(parents=True, exist_ok=True)
 
-        repofpr = grokmirror.get_repo_fingerprint(str(toplevel), repo)
-        logger.debug('%s fingerprint is %s', repo, repofpr)
+        repofpr = grokmirror.get_repo_fingerprint(str(toplevel), bundlename)
+        logger.debug('%s fingerprint is %s', bundlename, repofpr)
         if not repofpr:
             # Either the repo is gone or it has no refs at all. Either way there
             # is nothing to bundle, and no fingerprint to record next to it.
-            logger.info('  skipped: %s (no refs to bundle)', repo)
+            logger.info('  skipped: %s (no refs to bundle)', bundlename)
             continue
 
         # Do we have a bundle file already?
@@ -94,14 +95,14 @@ def generate_bundles(
                 bfpr = bfprfile.read_text(encoding='utf-8').strip()
                 logger.debug('Read bundle fingerprint from %s: %s', bfprfile, bfpr)
                 if bfpr == repofpr:
-                    logger.info('  skipped: %s (unchanged)', repo)
+                    logger.info('  skipped: %s (unchanged)', bundlename)
                     continue
 
-        logger.debug('checking size of %s', repo)
+        logger.debug('checking size of %s', bundlename)
         total_size = get_repo_size(fullpath) / 1024 / 1024
 
         if total_size > maxsize:
-            logger.info('  skipped: %s (%s > %s)', repo, total_size, maxsize)
+            logger.info('  skipped: %s (%s > %s)', bundlename, total_size, maxsize)
             continue
 
         fullargs = git_args + ['bundle', 'create', str(bfile)] + revlist_args

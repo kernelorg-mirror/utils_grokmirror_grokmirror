@@ -7,11 +7,13 @@ from __future__ import annotations
 
 __author__ = 'Konstantin Ryabitsev <konstantin@linuxfoundation.org>'
 
+import argparse
 import fnmatch
 import logging
 import os
 import shlex
 import sys
+from configparser import ConfigParser, ExtendedInterpolation
 from pathlib import Path
 
 import grokmirror
@@ -158,9 +160,6 @@ def run_pi_repo(
 
 
 def command() -> None:
-    import argparse
-    from configparser import ConfigParser, ExtendedInterpolation
-
     # noinspection PyTypeChecker
     op = argparse.ArgumentParser(
         prog='grok-pi-piper',
