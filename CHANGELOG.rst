@@ -19,6 +19,15 @@ v3.0 (TBD)
   during grok-pull could previously leave the repository locked for the
   life of the daemon, and a repository with no remotes left grok-dumb-pull
   holding its lock
+- grok-pull now runs its workers as a thread pool instead of forked
+  processes, and worker completion is reported through futures instead
+  of polling queues; an unexpected error in a worker is now logged with
+  its full traceback and counted as a failure, where it previously
+  killed the worker silently and left the repository blocked from all
+  further updates until the daemon was restarted
+- A failed post-pull treatment (objstore fetch, repack) in grok-pull no
+  longer kills the treatment worker; the error is logged and later
+  treatments still run
 - Fix grok-fsck keeping the manifest locked for the rest of the run when
   the status file could not be parsed
 - Locking a repository or the manifest a second time from the same process

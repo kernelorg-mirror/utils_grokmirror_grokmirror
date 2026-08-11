@@ -16,6 +16,7 @@ import os
 import pathlib
 import pickle
 import subprocess
+import threading
 from pathlib import Path
 from typing import IO
 
@@ -174,6 +175,36 @@ class TestDoubleLocking:
         with grokmirror.locked_manifest(manifile), pytest.raises(grokmirror.GrokLockError, match='already locked'):
             grokmirror.manifest_lock(manifile)
         assert grokmirror.MANIFEST_LOCKH is None
+
+    def test_threaded_lock_race_has_a_single_winner(self, tmp_path: Path) -> None:
+        # grok-pull's workers are threads now, and fcntl cannot arbitrate
+        # between the threads of one process: every thread's lockf() call on
+        # the same file succeeds. The lock registry is the real gate, so
+        # checking for an entry and claiming it must be one atomic step --
+        # with a plain check-then-set, two threads starting together could
+        # both pass the check and both believe they hold the repository.
+        target = str(tmp_path / 'repo.git')
+        nthreads = 8
+        barrier = threading.Barrier(nthreads)
+        outcomes: list[bool] = []
+
+        def contend() -> None:
+            barrier.wait()
+            try:
+                grokmirror.lock_repo(target, nonblocking=True)
+                outcomes.append(True)
+            except grokmirror.GrokLockError:
+                outcomes.append(False)
+
+        threads = [threading.Thread(target=contend) for _ in range(nthreads)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert outcomes.count(True) == 1
+        grokmirror.unlock_repo(target)
+        assert target not in grokmirror.REPO_LOCKH
 
 
 class TestLockedManifest:

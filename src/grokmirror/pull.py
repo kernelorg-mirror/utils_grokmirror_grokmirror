@@ -21,7 +21,6 @@ import fnmatch
 import gzip
 import json
 import logging
-import multiprocessing as mp
 import os
 import queue
 import shlex
@@ -30,8 +29,11 @@ import signal
 import stat
 import sys
 import tempfile
+import threading
 import time
 import uuid
+from collections import deque
+from concurrent import futures
 from pathlib import Path
 from socketserver import StreamRequestHandler, ThreadingMixIn, UnixStreamServer
 from types import FrameType, TracebackType
@@ -46,43 +48,32 @@ logger = logging.getLogger(__name__)
 
 
 class SignalHandler:
-    def __init__(
-        self,
-        config: grokmirror.GrokConfigParser,
-        sw: mp.Process | None,
-        dws: list[mp.Process],
-        pws: list[mp.Process],
-        done: list,
-    ) -> None:
+    """Flush accumulated manifest updates and exit on SIGINT/SIGTERM."""
+
+    def __init__(self, config: grokmirror.GrokConfigParser, done: list) -> None:
         self.config = config
-        self.sw = sw
-        self.dws = dws
-        self.pws = pws
         self.done = done
-        self.killed = False
 
     def _handler(self, signum: int, frame: FrameType | None) -> None:
-        self.killed = True
         logger.debug('Received signum=%s, frame=%s', signum, frame)
-        # if self.sw:
-        #    self.sw.terminate()
-        #    self.sw.join()
-
-        # for dw in self.dws:
-        #    if dw and dw.is_alive():
-        #        dw.terminate()
-        #        dw.join()
-
-        # for pw in self.pws:
-        #    if pw and pw.is_alive():
-        #        pw.terminate()
-        #        pw.join()
-
         if len(self.done):
-            update_manifest(self.config, self.done)
+            try:
+                update_manifest(self.config, self.done)
+            except grokmirror.GrokError as ex:
+                # The signal may have caught the main thread in the middle of
+                # its own manifest update, in which case the manifest is
+                # already locked by us. Whatever was not written will be
+                # picked up again on the next run.
+                logger.warning('Could not write the manifest on exit: %s', ex)
 
         logger.info('Exiting on signal %s', signum)
-        sys.exit(0)
+        # Exit without the interpreter shutdown dance: waiting for the worker
+        # threads would mean waiting out any in-flight git fetches. When the
+        # signal went to the whole process group (Ctrl-C, systemd) those git
+        # processes are dying with us; when it was aimed at us alone, they
+        # finish on their own, exactly as they did when the workers were
+        # daemon processes.
+        os._exit(0)
 
     def __enter__(self) -> None:
         self.old_sigint = signal.signal(signal.SIGINT, self._handler)
@@ -91,15 +82,13 @@ class SignalHandler:
     def __exit__(
         self, sigtype: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> None:
-        if self.killed:
-            sys.exit(0)
         signal.signal(signal.SIGINT, self.old_sigint)
         signal.signal(signal.SIGTERM, self.old_sigterm)
 
 
 class ThreadedUnixStreamServer(ThreadingMixIn, UnixStreamServer):
-    # socket_worker() sticks these onto the instance for Handler to pick up
-    q_mani: mp.Queue
+    # pull_mirror() sticks these onto the instance for Handler to pick up
+    q_mani: queue.Queue
     config: grokmirror.GrokConfigParser
 
 
@@ -189,9 +178,16 @@ def build_optimal_forkgroups(l_manifest: dict, r_manifest: dict, toplevel: str, 
     return forkgroups
 
 
-def spa_worker(config: grokmirror.GrokConfigParser, q_spa: mp.Queue, pauseonload: bool) -> None:
+def spa_worker(config: grokmirror.GrokConfigParser, q_spa: queue.Queue, pauseonload: bool) -> None:
+    """Run the queued post-pull treatments (objstore fetch, repack, pack-refs).
+
+    Runs as a single thread for the life of the run, so the spa operations
+    stay serialized. Every queued item is accounted with q_spa.task_done(),
+    which lets the supervisor drain the spa with q_spa.join(); a None item
+    asks the worker to exit.
+    """
     toplevel = os.path.realpath(config['core']['toplevel'])
-    cpus = mp.cpu_count()
+    cpus = os.cpu_count() or 1
     saidpaused = False
     while True:
         if pauseonload:
@@ -204,64 +200,77 @@ def spa_worker(config: grokmirror.GrokConfigParser, q_spa: mp.Queue, pauseonload
                 continue
             saidpaused = False
 
+        item = q_spa.get()
         try:
-            (gitdir, actions) = q_spa.get(timeout=1)
-        except queue.Empty:
-            sys.exit(0)
+            if item is None:
+                return
+            (gitdir, actions) = item
+            _spa_repo(config, toplevel, gitdir, actions, waiting=q_spa.qsize())
+        # Deliberately broad: a failed treatment must not take the spa thread
+        # down with it, or every later spa action would sit in the queue
+        # forever and a --runonce drain would never finish.
+        except Exception:
+            logger.exception('      spa: failed on %s', item)
+        finally:
+            q_spa.task_done()
 
-        logger.debug('spa_worker: gitdir=%s, actions=%s', gitdir, actions)
-        fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-        try:
-            with grokmirror.locked_repo(fullpath, nonblocking=True):
-                if not q_spa.empty():
-                    logger.info('      spa: 1 active, %s waiting', q_spa.qsize())
-                else:
-                    logger.info('      spa: 1 active')
 
-                done = []
-                for action in actions:
-                    if action in done:
+def _spa_repo(
+    config: grokmirror.GrokConfigParser, toplevel: str, gitdir: str, actions: list[str], waiting: int = 0
+) -> None:
+    logger.debug('spa_worker: gitdir=%s, actions=%s', gitdir, actions)
+    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+    try:
+        with grokmirror.locked_repo(fullpath, nonblocking=True):
+            if waiting:
+                logger.info('      spa: 1 active, %s waiting', waiting)
+            else:
+                logger.info('      spa: 1 active')
+
+            done = []
+            for action in actions:
+                if action in done:
+                    continue
+                done.append(action)
+                if action == 'objstore':
+                    altrepo = grokmirror.get_altrepo(fullpath)
+                    if not altrepo:
+                        # Whatever queued this action expected us to have alternates,
+                        # and we don't. Passing None along would make git look at the
+                        # cwd instead of at an objstore repo.
+                        logger.debug('%s: no alternates, skipping objstore fetch', gitdir)
                         continue
-                    done.append(action)
-                    if action == 'objstore':
-                        altrepo = grokmirror.get_altrepo(fullpath)
-                        if not altrepo:
-                            # Whatever queued this action expected us to have alternates,
-                            # and we don't. Passing None along would make git look at the
-                            # cwd instead of at an objstore repo.
-                            logger.debug('%s: no alternates, skipping objstore fetch', gitdir)
-                            continue
-                        # Should we use plumbing for this?
-                        use_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
-                        grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=use_plumbing)
+                    # Should we use plumbing for this?
+                    use_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+                    grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=use_plumbing)
 
-                    elif action == 'repack':
-                        logger.debug('quick-repacking %s', fullpath)
-                        args = ['repack', '-Adlq']
-                        if 'fsck' in config:
-                            extraflags = config['fsck'].get('extra_repack_flags', '').split()
-                            if len(extraflags):
-                                args += extraflags
-                        ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
-                        if ecode > 0:
-                            logger.debug('Could not repack %s', fullpath)
+                elif action == 'repack':
+                    logger.debug('quick-repacking %s', fullpath)
+                    args = ['repack', '-Adlq']
+                    if 'fsck' in config:
+                        extraflags = config['fsck'].get('extra_repack_flags', '').split()
+                        if len(extraflags):
+                            args += extraflags
+                    ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
+                    if ecode > 0:
+                        logger.debug('Could not repack %s', fullpath)
 
-                    elif action == 'packrefs':
-                        args = ['pack-refs']
-                        ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
-                        if ecode > 0:
-                            logger.debug('Could not pack-refs %s', fullpath)
+                elif action == 'packrefs':
+                    args = ['pack-refs']
+                    ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
+                    if ecode > 0:
+                        logger.debug('Could not pack-refs %s', fullpath)
 
-                    elif action == 'packrefs-all':
-                        args = ['pack-refs', '--all']
-                        ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
-                        if ecode > 0:
-                            logger.debug('Could not pack-refs %s', fullpath)
-        except grokmirror.GrokLockError:
-            # We'll get it during grok-fsck
-            continue
+                elif action == 'packrefs-all':
+                    args = ['pack-refs', '--all']
+                    ecode, _out, _err = grokmirror.run_git_command(fullpath, args)
+                    if ecode > 0:
+                        logger.debug('Could not pack-refs %s', fullpath)
+    except grokmirror.GrokLockError:
+        # We'll get it during grok-fsck
+        return
 
-        logger.info('      spa: %s (done: %s)', gitdir, ', '.join(done))
+    logger.info('      spa: %s (done: %s)', gitdir, ', '.join(done))
 
 
 def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokConfigParser, obstrepo: str) -> None:
@@ -311,10 +320,16 @@ def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokCo
 def pull_worker(
     ses: grokmirror.GrokSession,
     config: grokmirror.GrokConfigParser,
-    q_pull: mp.Queue,
-    q_spa: mp.Queue,
-    q_done: mp.Queue,
-) -> None:
+    item: tuple,
+    q_spa: queue.Queue,
+) -> bool | None:
+    """Carry out one queued repository action in a pool thread.
+
+    Returns whether the action succeeded, or None if the repository was
+    locked by another grokmirror process, in which case the supervisor
+    requeues the item.
+    """
+    (gitdir, repoinfo, action, _q_action) = item
     toplevel = os.path.realpath(config['core']['toplevel'])
     obstdir = os.path.realpath(config['core']['objstore'])
     maxretries = config['pull'].getint('retries', 3)
@@ -324,169 +339,162 @@ def pull_worker(
     # Should we use plumbing for objstore operations?
     objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
 
-    while True:
-        try:
-            (gitdir, repoinfo, action, q_action) = q_pull.get(timeout=1)
-        except queue.Empty:
-            sys.exit(0)
+    logger.debug('pull_worker: gitdir=%s, action=%s', gitdir, action)
+    fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+    success = True
+    spa_actions = []
 
-        logger.debug('pull_worker: gitdir=%s, action=%s', gitdir, action)
-        fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-        success = True
-        spa_actions = []
+    try:
+        with grokmirror.locked_repo(fullpath, nonblocking=True):
+            altrepo = grokmirror.get_altrepo(fullpath)
+            obstrepo = None
+            if altrepo and grokmirror.is_obstrepo(altrepo, obstdir):
+                obstrepo = altrepo
 
-        try:
-            with grokmirror.locked_repo(fullpath, nonblocking=True):
-                altrepo = grokmirror.get_altrepo(fullpath)
-                obstrepo = None
-                if altrepo and grokmirror.is_obstrepo(altrepo, obstdir):
-                    obstrepo = altrepo
-
-                if action == 'purge':
-                    # Is it a symlink?
-                    if os.path.islink(fullpath):
+            if action == 'purge':
+                # Is it a symlink?
+                if os.path.islink(fullpath):
+                    logger.info('    purge: %s', gitdir)
+                    os.unlink(fullpath)
+                else:
+                    # is anything using us for alternates?
+                    if ses.is_alt_repo(toplevel, gitdir):
+                        logger.debug('Not purging %s because it is used by other repos via alternates', fullpath)
+                    else:
                         logger.info('    purge: %s', gitdir)
-                        os.unlink(fullpath)
-                    else:
-                        # is anything using us for alternates?
-                        if ses.is_alt_repo(toplevel, gitdir):
-                            logger.debug('Not purging %s because it is used by other repos via alternates', fullpath)
-                        else:
-                            logger.info('    purge: %s', gitdir)
-                            shutil.rmtree(fullpath)
+                        shutil.rmtree(fullpath)
 
-                if action == 'fix_params':
-                    logger.info(' reconfig: %s', gitdir)
+            if action == 'fix_params':
+                logger.info(' reconfig: %s', gitdir)
+                set_repo_params(fullpath, repoinfo)
+
+            if action == 'fix_remotes':
+                logger.info(' reorigin: %s', gitdir)
+                success = fix_remotes(toplevel, gitdir, site, config)
+                if success:
                     set_repo_params(fullpath, repoinfo)
+                    action = 'pull'
+                else:
+                    success = False
 
-                if action == 'fix_remotes':
-                    logger.info(' reorigin: %s', gitdir)
-                    success = fix_remotes(toplevel, gitdir, site, config)
-                    if success:
-                        set_repo_params(fullpath, repoinfo)
-                        action = 'pull'
-                    else:
-                        success = False
+            if action == 'reclone':
+                logger.info('  reclone: %s', gitdir)
+                try:
+                    altrepo = grokmirror.get_altrepo(fullpath)
+                    shutil.move(fullpath, f'{fullpath}.reclone')
+                    shutil.rmtree(f'{fullpath}.reclone')
+                    grokmirror.setup_bare_repo(fullpath)
+                    fix_remotes(toplevel, gitdir, site, config)
+                    set_repo_params(fullpath, repoinfo)
+                    if altrepo:
+                        grokmirror.set_altrepo(fullpath, altrepo)
+                    action = 'pull'
+                except (OSError, PermissionError) as ex:
+                    logger.critical('Unable to remove %s: %s', fullpath, str(ex))
+                    success = False
 
-                if action == 'reclone':
-                    logger.info('  reclone: %s', gitdir)
-                    try:
-                        altrepo = grokmirror.get_altrepo(fullpath)
-                        shutil.move(fullpath, f'{fullpath}.reclone')
-                        shutil.rmtree(f'{fullpath}.reclone')
-                        grokmirror.setup_bare_repo(fullpath)
+            if action in ('pull', 'objstore_migrate'):
+                r_fp = repoinfo.get('fingerprint')
+                my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+                if obstrepo:
+                    o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
+                    if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
+                        # Try to preload the objstore repo directly
+                        objstore_repo_preload(ses, config, obstrepo)
+
+                if r_fp != my_fp:
+                    # Make sure we have the remote set up
+                    if action == 'pull' and remotename not in grokmirror.list_repo_remotes(fullpath):
+                        logger.info(' reorigin: %s', gitdir)
                         fix_remotes(toplevel, gitdir, site, config)
-                        set_repo_params(fullpath, repoinfo)
-                        if altrepo:
-                            grokmirror.set_altrepo(fullpath, altrepo)
-                        action = 'pull'
-                    except (OSError, PermissionError) as ex:
-                        logger.critical('Unable to remove %s: %s', fullpath, str(ex))
-                        success = False
-
-                if action in ('pull', 'objstore_migrate'):
-                    r_fp = repoinfo.get('fingerprint')
-                    my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
-                    if obstrepo:
-                        o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
-                        if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
-                            # Try to preload the objstore repo directly
-                            objstore_repo_preload(ses, config, obstrepo)
-
-                    if r_fp != my_fp:
-                        # Make sure we have the remote set up
-                        if action == 'pull' and remotename not in grokmirror.list_repo_remotes(fullpath):
-                            logger.info(' reorigin: %s', gitdir)
-                            fix_remotes(toplevel, gitdir, site, config)
-                        logger.info('    fetch: %s', gitdir)
-                        retries = 1
-                        while True:
-                            success = pull_repo(fullpath, remotename)
-                            if success:
-                                break
-                            retries += 1
-                            if retries > maxretries:
-                                break
-                            logger.info('  refetch: %s (try #%s)', gitdir, retries)
-
+                    logger.info('    fetch: %s', gitdir)
+                    retries = 1
+                    while True:
+                        success = pull_repo(fullpath, remotename)
                         if success:
-                            run_post_update_hook(config, fullpath)
-                            post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
-                            repoinfo['fingerprint'] = post_pull_fp
-                            altrepo = grokmirror.get_altrepo(fullpath)
-                            if post_pull_fp != my_fp:
-                                grokmirror.set_repo_fingerprint(toplevel, gitdir, fingerprint=post_pull_fp)
-                                if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) and not repoinfo.get('private'):
-                                    # do we have any objects in the objstore repo?
-                                    o_obj_info = grokmirror.get_repo_obj_info(altrepo)
-                                    if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0':
-                                        # We fetch right now, as other repos may be waiting on these objects
-                                        logger.info(' objstore: %s', gitdir)
-                                        grokmirror.fetch_objstore_repo(
-                                            altrepo, fullpath, use_plumbing=objstore_uses_plumbing
-                                        )
-                                        if not objstore_uses_plumbing:
-                                            spa_actions.append('repack')
-                                    else:
-                                        # We lazy-fetch in the spa
-                                        spa_actions.append('objstore')
-                                        if my_fp is None and not objstore_uses_plumbing:
-                                            # Initial clone, trigger a repack after objstore
-                                            spa_actions.append('repack')
+                            break
+                        retries += 1
+                        if retries > maxretries:
+                            break
+                        logger.info('  refetch: %s (try #%s)', gitdir, retries)
 
-                                if my_fp is None:
-                                    # This was the initial clone, so pack all refs
-                                    spa_actions.append('packrefs-all')
+                    if success:
+                        run_post_update_hook(config, fullpath)
+                        post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+                        repoinfo['fingerprint'] = post_pull_fp
+                        altrepo = grokmirror.get_altrepo(fullpath)
+                        if post_pull_fp != my_fp:
+                            grokmirror.set_repo_fingerprint(toplevel, gitdir, fingerprint=post_pull_fp)
+                            if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) and not repoinfo.get('private'):
+                                # do we have any objects in the objstore repo?
+                                o_obj_info = grokmirror.get_repo_obj_info(altrepo)
+                                if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0':
+                                    # We fetch right now, as other repos may be waiting on these objects
+                                    logger.info(' objstore: %s', gitdir)
+                                    grokmirror.fetch_objstore_repo(
+                                        altrepo, fullpath, use_plumbing=objstore_uses_plumbing
+                                    )
+                                    if not objstore_uses_plumbing:
+                                        spa_actions.append('repack')
+                                else:
+                                    # We lazy-fetch in the spa
+                                    spa_actions.append('objstore')
+                                    if my_fp is None and not objstore_uses_plumbing:
+                                        # Initial clone, trigger a repack after objstore
+                                        spa_actions.append('repack')
 
-                                if not grokmirror.is_precious(fullpath):
-                                    # See if doing a quick repack would be beneficial
-                                    obj_info = grokmirror.get_repo_obj_info(fullpath)
-                                    if grokmirror.get_repack_level(obj_info):
-                                        # We only do quick repacks, so we don't care about precise level
-                                        spa_actions.extend(('repack', 'packrefs'))
+                            if my_fp is None:
+                                # This was the initial clone, so pack all refs
+                                spa_actions.append('packrefs-all')
 
-                            modified = repoinfo.get('modified')
-                            if modified is not None:
-                                set_agefile(toplevel, gitdir, modified)
-                    else:
-                        logger.debug('FP match, not pulling %s', gitdir)
+                            if not grokmirror.is_precious(fullpath):
+                                # See if doing a quick repack would be beneficial
+                                obj_info = grokmirror.get_repo_obj_info(fullpath)
+                                if grokmirror.get_repack_level(obj_info):
+                                    # We only do quick repacks, so we don't care about precise level
+                                    spa_actions.extend(('repack', 'packrefs'))
 
-                if action == 'objstore_migrate':
-                    spa_actions.extend(('objstore', 'repack'))
+                        modified = repoinfo.get('modified')
+                        if modified is not None:
+                            set_agefile(toplevel, gitdir, modified)
+                else:
+                    logger.debug('FP match, not pulling %s', gitdir)
 
-        except grokmirror.GrokLockError:
-            # Take a quick nap and put it back into queue
-            logger.info('    defer: %s (locked)', gitdir)
-            time.sleep(5)
-            q_pull.put((gitdir, repoinfo, action, q_action))
-            continue
+            if action == 'objstore_migrate':
+                spa_actions.extend(('objstore', 'repack'))
 
-        symlinks = repoinfo.get('symlinks')
-        if os.path.exists(fullpath) and symlinks:
-            for symlink in symlinks:
-                target = os.path.join(toplevel, symlink.lstrip('/'))
+    except grokmirror.GrokLockError:
+        # Take a quick nap before letting the supervisor requeue this item.
+        logger.info('    defer: %s (locked)', gitdir)
+        time.sleep(5)
+        return None
 
-                if os.path.islink(target):
-                    # are you pointing to where we need you?
-                    if os.path.realpath(target) != fullpath:
-                        # Remove symlink and recreate below
-                        logger.debug('Removed existing wrong symlink %s', target)
-                        os.unlink(target)
-                elif os.path.exists(target):
-                    logger.warning(f'Deleted repo {target}, because it is now a symlink to {fullpath}')
-                    shutil.rmtree(target)
+    symlinks = repoinfo.get('symlinks')
+    if os.path.exists(fullpath) and symlinks:
+        for symlink in symlinks:
+            target = os.path.join(toplevel, symlink.lstrip('/'))
 
-                # Here we re-check if we still need to do anything
-                if not os.path.exists(target):
-                    logger.info('  symlink: %s -> %s', symlink, gitdir)
-                    # Make sure the leading dirs are in place
-                    if not os.path.exists(os.path.dirname(target)):
-                        os.makedirs(os.path.dirname(target))
-                    os.symlink(fullpath, target)
+            if os.path.islink(target):
+                # are you pointing to where we need you?
+                if os.path.realpath(target) != fullpath:
+                    # Remove symlink and recreate below
+                    logger.debug('Removed existing wrong symlink %s', target)
+                    os.unlink(target)
+            elif os.path.exists(target):
+                logger.warning(f'Deleted repo {target}, because it is now a symlink to {fullpath}')
+                shutil.rmtree(target)
 
-        q_done.put((gitdir, repoinfo, q_action, success))
-        if spa_actions:
-            q_spa.put((gitdir, spa_actions))
+            # Here we re-check if we still need to do anything
+            if not os.path.exists(target):
+                logger.info('  symlink: %s -> %s', symlink, gitdir)
+                # Make sure the leading dirs are in place; another worker may
+                # be placing a sibling symlink there at this very moment.
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                os.symlink(fullpath, target)
+
+    if spa_actions:
+        q_spa.put((gitdir, spa_actions))
+    return success
 
 
 def cull_manifest(manifest: dict, config: grokmirror.GrokConfigParser) -> dict:
@@ -735,7 +743,7 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: dict) -> 
 def fill_todo_from_manifest(
     ses: grokmirror.GrokSession,
     config: grokmirror.GrokConfigParser,
-    q_mani: mp.Queue,
+    q_mani: queue.Queue,
     nomtime: bool = False,
     forcepurge: bool = False,
 ) -> None:
@@ -1124,37 +1132,27 @@ def update_manifest(config: grokmirror.GrokConfigParser, entries: list) -> None:
             write_projects_list(config, manifest)
 
 
-def socket_worker(config: grokmirror.GrokConfigParser, q_mani: mp.Queue, sockfile: str) -> None:
+def socket_worker(server: ThreadedUnixStreamServer, sockfile: str) -> None:
+    # The socket itself was bound by pull_mirror() in the main thread: that
+    # involves process-wide umask fiddling, which must not overlap with the
+    # pull workers creating repository files.
     logger.info(' listener: listening on socket %s', sockfile)
-    curmask = os.umask(0)
-    with ThreadedUnixStreamServer(sockfile, Handler) as server:
-        os.umask(curmask)
-        # Stick some objects into the server
-        server.q_mani = q_mani
-        server.config = config
+    with server:
         server.serve_forever()
 
 
-def showstats(
-    q_todo: mp.Queue,
-    q_pull: mp.Queue,
-    q_spa: mp.Queue,
-    good: int,
-    bad: int,
-    pws: list[mp.Process],
-    dws: list[mp.Process],
-) -> None:
+def showstats(waiting: int, queued: int, active: int, spa: int, good: int, bad: int) -> None:
     stats = []
     if good:
         stats.append(f'{good} fetched')
-    if pws:
-        stats.append(f'{len(pws)} active')
-    if not q_pull.empty():
-        stats.append(f'{q_pull.qsize()} queued')
-    if not q_todo.empty():
-        stats.append(f'{q_todo.qsize()} waiting')
-    if len(dws) or not q_spa.empty():
-        stats.append('%s in spa' % (q_spa.qsize() + len(dws)))
+    if active:
+        stats.append(f'{active} active')
+    if queued:
+        stats.append(f'{queued} queued')
+    if waiting:
+        stats.append(f'{waiting} waiting')
+    if spa:
+        stats.append(f'{spa} in spa')
     if bad:
         stats.append(f'{bad} errors')
 
@@ -1162,7 +1160,7 @@ def showstats(
 
 
 def manifest_worker(
-    ses: grokmirror.GrokSession, config: grokmirror.GrokConfigParser, q_mani: mp.Queue, nomtime: bool = False
+    ses: grokmirror.GrokSession, config: grokmirror.GrokConfigParser, q_mani: queue.Queue, nomtime: bool = False
 ) -> None:
     starttime = int(time.time())
     try:
@@ -1202,17 +1200,13 @@ def pull_mirror(
     obstdir = os.path.realpath(config['core']['objstore'])
     refresh = config['pull'].getint('refresh', 300)
 
-    # Workers get a copy of this through mp.Process args; the alternates
-    # caches travel with it, so they don't each re-walk the toplevel.
+    # The worker threads all share this, so the alternates map only gets
+    # walked once for everybody.
     ses = grokmirror.GrokSession()
 
-    q_mani: mp.Queue = mp.Queue()
-    q_todo: mp.Queue = mp.Queue()
-    q_pull: mp.Queue = mp.Queue()
-    q_done: mp.Queue = mp.Queue()
-    q_spa: mp.Queue = mp.Queue()
+    q_mani: queue.Queue = queue.Queue()
+    q_spa: queue.Queue = queue.Queue()
 
-    sw = None
     sockfile = config['pull'].get('socket')
     if sockfile and not runonce:
         if os.path.exists(sockfile):
@@ -1222,14 +1216,18 @@ def pull_mirror(
             else:
                 raise grokmirror.GrokError(f'File exists but is not a socket: {sockfile}')
 
-        sw = mp.Process(target=socket_worker, args=(config, q_mani, sockfile))
-        sw.daemon = True
-        sw.start()
+        # Bind the socket before any worker threads exist: the umask dance
+        # is process-wide, and nothing else may create files while the mask
+        # is zeroed.
+        curmask = os.umask(0)
+        server = ThreadedUnixStreamServer(sockfile, Handler)
+        os.umask(curmask)
+        # Stick some objects into the server
+        server.q_mani = q_mani
+        server.config = config
+        listener = threading.Thread(target=socket_worker, args=(server, sockfile), daemon=True)
+        listener.start()
 
-    pws: list[mp.Process] = []
-    dws: list[mp.Process] = []
-    mws: list[mp.Process] = []
-    actions: set[tuple[str, str]] = set()
     # Run in the main thread if we have runonce
     if runonce:
         try:
@@ -1247,224 +1245,229 @@ def pull_mirror(
     lastrun = 0
 
     pull_threads = config['pull'].getint('pull_threads', 0)
-    if pull_threads < 1 and mp.cpu_count() > 1:
+    if pull_threads < 1:
         # take half of available CPUs by default
-        pull_threads = int(mp.cpu_count() / 2)
-    elif pull_threads < 1:
-        pull_threads = 1
+        pull_threads = max(1, (os.cpu_count() or 1) // 2)
 
+    # The spa thread lives for the whole run: a None sentinel tells it to
+    # exit, and q_spa.join() waits out everything that was queued.
+    dw = threading.Thread(target=spa_worker, args=(config, q_spa, not runonce), daemon=True)
+    dw.start()
+
+    pool = futures.ThreadPoolExecutor(max_workers=pull_threads, thread_name_prefix='pull_worker')
+    # Submitted but unfinished work, mapping each future back to the item it
+    # carries: a repository locked by another process goes back in line.
+    pending: dict[futures.Future, tuple] = {}
+    # Work that is ready to be handed to the pool. Plain supervisor-local
+    # state: everything is put here by the loop below.
+    todo: deque = deque()
+    mws: list[threading.Thread] = []
+    actions: set[tuple[str, str]] = set()
     busy: set[str] = set()
     done: list = []
-    cloned = []
+    cloned: list[str] = []
     good = 0
     bad = 0
-    loopmark = None
     post_clone_hook = config['pull'].get('post_clone_complete_hook')
     post_work_hook = config['pull'].get('post_work_complete_hook')
-    with SignalHandler(config, sw, dws, pws, done):
+
+    def enqueue(gitdir: str, repoinfo: dict | None, action: str) -> bool:
+        if (gitdir, action) in actions:
+            logger.debug('already in the queue: %s, %s', gitdir, action)
+            return False
+        if action == 'pull' and (gitdir, 'init') in actions:
+            logger.debug('already in the queue as init: %s, %s', gitdir, action)
+            return False
+        actions.add((gitdir, action))
+        todo.append((gitdir, repoinfo, action))
+        logger.debug('queued: %s, %s', gitdir, action)
+        return True
+
+    def submit(item: tuple) -> None:
+        pending[pool.submit(pull_worker, ses, config, item, q_spa)] = item
+
+    def show_pool_stats() -> None:
+        active = sum(1 for f in pending if f.running())
+        showstats(len(todo), len(pending) - active, active, q_spa.unfinished_tasks, good, bad)
+
+    def note_done(gitdir: str, repoinfo: dict, q_action: str, success: bool) -> None:
+        nonlocal good, bad, cloned
+        try:
+            actions.remove((gitdir, q_action))
+        except KeyError:
+            pass
+        # Was it a clone, and are all other clones done?
+        if post_clone_hook and q_action == 'init':
+            cloned.append(os.path.join(toplevel, gitdir.lstrip('/')))
+            more_clones = False
+            for _qgd, qqa in actions:
+                if qqa == 'init':
+                    more_clones = True
+                    break
+            if not more_clones:
+                # Fire the post_clone hook
+                run_post_clone_complete_hook(config, cloned)
+                cloned = []
+
+        forkgroup = repoinfo.get('forkgroup')
+        if forkgroup and forkgroup in busy:
+            busy.remove(forkgroup)
+        done.append((gitdir, repoinfo, q_action, success))
+        if success:
+            good += 1
+        else:
+            bad += 1
+        logger.info('     done: %s', gitdir)
+        show_pool_stats()
+        if len(done) >= 100:
+            # Write manifest every 100 repos
+            update_manifest(config, done)
+
+    with SignalHandler(config, done):
         while True:
-            for pw in pws:
-                if pw and not pw.is_alive():
-                    pws.remove(pw)
-                    logger.info('   worker: terminated (%s remaining)', len(pws))
-                    showstats(q_todo, q_pull, q_spa, good, bad, pws, dws)
-
-            for dw in dws:
-                if dw and not dw.is_alive():
-                    dws.remove(dw)
-                    showstats(q_todo, q_pull, q_spa, good, bad, pws, dws)
-
-            for mw in mws:
-                if mw and not mw.is_alive():
-                    mws.remove(mw)
-
-            if not q_spa.empty() and not len(dws):
-                if runonce:
-                    pauseonload = False
-                else:
-                    pauseonload = True
-                dw = mp.Process(target=spa_worker, args=(config, q_spa, pauseonload))
-                dw.daemon = True
-                dw.start()
-                dws.append(dw)
-
-            if not q_pull.empty() and len(pws) < pull_threads:
-                pw = mp.Process(target=pull_worker, args=(ses, config, q_pull, q_spa, q_done))
-                pw.daemon = True
-                pw.start()
-                pws.append(pw)
-                logger.info('   worker: started (%s running)', len(pws))
-
             # Any new results?
-            try:
-                while True:
-                    gitdir, repoinfo, q_action, success = q_done.get_nowait()
-                    try:
-                        actions.remove((gitdir, q_action))
-                    except KeyError:
-                        pass
-                    # Was it a clone, and are all other clones done?
-                    if post_clone_hook and q_action == 'init':
-                        cloned.append(os.path.join(toplevel, gitdir.lstrip('/')))
-                        more_clones = False
-                        for qgd, qqa in actions:
-                            if qqa == 'init':
-                                more_clones = True
-                                break
-                        if not more_clones:
-                            # Fire the post_clone hook
-                            run_post_clone_complete_hook(config, cloned)
-                            cloned = []
-
-                    forkgroup = repoinfo.get('forkgroup')
-                    if forkgroup and forkgroup in busy:
-                        busy.remove(forkgroup)
-                    done.append((gitdir, repoinfo, q_action, success))
-                    if success:
-                        good += 1
-                    else:
-                        bad += 1
-                    logger.info('     done: %s', gitdir)
-                    showstats(q_todo, q_pull, q_spa, good, bad, pws, dws)
-                    if len(done) >= 100:
-                        # Write manifest every 100 repos
-                        update_manifest(config, done)
-
-            except queue.Empty:
-                pass
+            for fut in [fut for fut in pending if fut.done()]:
+                (gitdir, repoinfo, action, q_action) = pending.pop(fut)
+                try:
+                    success = fut.result()
+                # Deliberately broad: an unexpected failure gets logged with its
+                # traceback and counted against the run instead of silently
+                # wedging this repository until the daemon is restarted.
+                except Exception:
+                    logger.exception('unexpected failure while processing %s', gitdir)
+                    success = False
+                if success is None:
+                    # The repository is locked by another process; the worker
+                    # already took a nap, so it goes straight back in line.
+                    submit((gitdir, repoinfo, action, q_action))
+                    continue
+                note_done(gitdir, repoinfo, q_action, success)
 
             # Anything new in the manifest queue?
-            try:
-                new_updates = 0
-                while True:
-                    gitdir, repoinfo, action = q_mani.get_nowait()
-                    if (gitdir, action) in actions:
-                        logger.debug('already in the queue: %s, %s', gitdir, action)
-                        continue
-                    if action == 'pull' and (gitdir, 'init') in actions:
-                        logger.debug('already in the queue as init: %s, %s', gitdir, action)
-                        continue
-
-                    actions.add((gitdir, action))
-                    q_todo.put((gitdir, repoinfo, action))
+            new_updates = 0
+            while True:
+                try:
+                    (gitdir, repoinfo, action) = q_mani.get_nowait()
+                except queue.Empty:
+                    break
+                if enqueue(gitdir, repoinfo, action):
                     new_updates += 1
-                    logger.debug('queued: %s, %s', gitdir, action)
+            if new_updates:
+                logger.info(' manifest: %s new updates', new_updates)
 
-                if new_updates:
-                    logger.info(' manifest: %s new updates', new_updates)
-
-            except queue.Empty:
-                pass
-
-            if not runonce and not len(mws) and q_todo.empty() and q_pull.empty() and time.time() - lastrun >= refresh:
+            # Time to refetch the remote manifest?
+            mws = [mw for mw in mws if mw.is_alive()]
+            if not runonce and not mws and not todo and not pending and time.time() - lastrun >= refresh:
                 if done:
                     update_manifest(config, done)
                     if post_work_hook:
                         run_post_work_complete_hook(config)
-                mw = mp.Process(target=manifest_worker, args=(ses, config, q_mani, nomtime))
+                mw = threading.Thread(target=manifest_worker, args=(ses, config, q_mani, nomtime), daemon=True)
                 nomtime = False
-                mw.daemon = True
                 mw.start()
                 mws.append(mw)
                 lastrun = int(time.time())
 
-            # Finally, deal with q_todo
-            try:
-                gitdir, repoinfo, q_action = q_todo.get_nowait()
-                logger.debug('main_thread: got %s/%s from q_todo', gitdir, q_action)
-            except queue.Empty:
-                if q_mani.empty() and q_done.empty():
-                    if not len(pws) and done:
-                        update_manifest(config, done)
-                        if post_work_hook:
-                            run_post_work_complete_hook(config)
-                        if runonce:
-                            # Wait till spa is done
-                            while True:
-                                if q_spa.empty():
-                                    for dw in dws:
-                                        dw.join()
-                                    return 0
-                                time.sleep(1)
-                    if len(pws):
-                        # Don't run a hot loop waiting on results
-                        time.sleep(5)
-                    else:
-                        # Shorter sleep if everything is idle
-                        time.sleep(1)
-                continue
+            # Finally, deal with the todo list
+            held: deque = deque()
+            while todo:
+                (gitdir, repoinfo, q_action) = todo.popleft()
+                if repoinfo is None:
+                    repoinfo = {}
 
-            if repoinfo is None:
-                repoinfo = {}
+                fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
+                forkgroup = repoinfo.get('forkgroup')
+                if gitdir in busy or (forkgroup is not None and forkgroup in busy):
+                    # Hold it until the repository blocking it is done
+                    held.append((gitdir, repoinfo, q_action))
+                    continue
 
-            fullpath = os.path.join(toplevel, gitdir.lstrip('/'))
-            forkgroup = repoinfo.get('forkgroup')
-            if gitdir in busy or (forkgroup is not None and forkgroup in busy):
-                # Stick it back into the queue
-                q_todo.put((gitdir, repoinfo, q_action))
-                if loopmark is None:
-                    loopmark = gitdir
-                elif loopmark == gitdir:
-                    # We've looped around all waiting repos, so back off and don't run
-                    # a hot waiting loop.
-                    time.sleep(5)
-                continue
+                if q_action == 'objstore_migrate':
+                    # Add forkgroup to busy, so we don't run any pulls until it's done
+                    busy.add(repoinfo['forkgroup'])
+                    obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
+                    grokmirror.add_repo_to_objstore(obstrepo, fullpath)
+                    grokmirror.set_altrepo(fullpath, obstrepo)
 
-            if gitdir == loopmark:
-                loopmark = None
+                if q_action != 'init':
+                    # Easy actions that don't require priority logic
+                    submit((gitdir, repoinfo, q_action, q_action))
+                    continue
 
-            if q_action == 'objstore_migrate':
-                # Add forkgroup to busy, so we don't run any pulls until it's done
-                busy.add(repoinfo['forkgroup'])
+                try:
+                    with grokmirror.locked_repo(fullpath, nonblocking=True):
+                        if not grokmirror.setup_bare_repo(fullpath):
+                            logger.critical('Unable to bare-init %s', fullpath)
+                            note_done(gitdir, repoinfo, q_action, False)
+                            continue
+
+                        fix_remotes(toplevel, gitdir, config['remote']['site'], config)
+                        set_repo_params(fullpath, repoinfo)
+                except grokmirror.GrokLockError:
+                    if not runonce:
+                        held.append((gitdir, repoinfo, q_action))
+                    continue
+
+                forkgroup = repoinfo.get('forkgroup')
+                if not forkgroup:
+                    logger.debug('no-sibling clone: %s', gitdir)
+                    submit((gitdir, repoinfo, 'pull', q_action))
+                    continue
+
+                obstrepo = os.path.join(obstdir, f'{forkgroup}.git')
+                if os.path.isdir(obstrepo):
+                    logger.debug('clone %s with existing obstrepo %s', gitdir, obstrepo)
+                    grokmirror.set_altrepo(fullpath, obstrepo)
+                    if not repoinfo['private']:
+                        grokmirror.add_repo_to_objstore(obstrepo, fullpath)
+                    submit((gitdir, repoinfo, 'pull', q_action))
+                    continue
+
+                # Set up a new obstrepo and make sure it's not used until the initial
+                # pull is done
+                logger.debug('cloning %s with new obstrepo %s', gitdir, obstrepo)
+                busy.add(forkgroup)
                 obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
-                grokmirror.add_repo_to_objstore(obstrepo, fullpath)
-                grokmirror.set_altrepo(fullpath, obstrepo)
-
-            if q_action != 'init':
-                # Easy actions that don't require priority logic
-                q_pull.put((gitdir, repoinfo, q_action, q_action))
-                continue
-
-            try:
-                with grokmirror.locked_repo(fullpath, nonblocking=True):
-                    if not grokmirror.setup_bare_repo(fullpath):
-                        logger.critical('Unable to bare-init %s', fullpath)
-                        q_done.put((gitdir, repoinfo, q_action, False))
-                        continue
-
-                    fix_remotes(toplevel, gitdir, config['remote']['site'], config)
-                    set_repo_params(fullpath, repoinfo)
-            except grokmirror.GrokLockError:
-                if not runonce:
-                    q_todo.put((gitdir, repoinfo, q_action))
-                continue
-
-            forkgroup = repoinfo.get('forkgroup')
-            if not forkgroup:
-                logger.debug('no-sibling clone: %s', gitdir)
-                q_pull.put((gitdir, repoinfo, 'pull', q_action))
-                continue
-
-            obstrepo = os.path.join(obstdir, f'{forkgroup}.git')
-            if os.path.isdir(obstrepo):
-                logger.debug('clone %s with existing obstrepo %s', gitdir, obstrepo)
                 grokmirror.set_altrepo(fullpath, obstrepo)
                 if not repoinfo['private']:
                     grokmirror.add_repo_to_objstore(obstrepo, fullpath)
-                q_pull.put((gitdir, repoinfo, 'pull', q_action))
+                submit((gitdir, repoinfo, 'pull', q_action))
+            todo.extend(held)
+
+            if pending:
+                # Block until at least one worker is done, but check in on the
+                # other queues at least once a second.
+                futures.wait(list(pending), timeout=1, return_when=futures.FIRST_COMPLETED)
                 continue
 
-            # Set up a new obstrepo and make sure it's not used until the initial
-            # pull is done
-            logger.debug('cloning %s with new obstrepo %s', gitdir, obstrepo)
-            busy.add(forkgroup)
-            obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
-            grokmirror.set_altrepo(fullpath, obstrepo)
-            if not repoinfo['private']:
-                grokmirror.add_repo_to_objstore(obstrepo, fullpath)
-            q_pull.put((gitdir, repoinfo, 'pull', q_action))
+            # Nothing in flight; is more work already waiting?
+            if q_mani.qsize():
+                continue
 
-    return 0
+            if not todo:
+                if done:
+                    update_manifest(config, done)
+                    if post_work_hook:
+                        run_post_work_complete_hook(config)
+                if runonce:
+                    # Wait till spa is done, then wrap up
+                    q_spa.put(None)
+                    q_spa.join()
+                    dw.join()
+                    pool.shutdown()
+                    return 0
+
+            # Wait for the listener or the next manifest refresh. Everything in
+            # the todo list at this point is waiting out a lock held by another
+            # process, so look in on those every 5 seconds.
+            waittime = refresh - (time.time() - lastrun)
+            if todo:
+                waittime = min(waittime, 5)
+            try:
+                (gitdir, repoinfo, action) = q_mani.get(timeout=max(1, waittime))
+            except queue.Empty:
+                continue
+            enqueue(gitdir, repoinfo, action)
 
 
 def parse_args() -> argparse.Namespace:

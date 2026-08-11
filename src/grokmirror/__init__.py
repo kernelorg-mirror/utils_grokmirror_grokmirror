@@ -27,6 +27,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Collection, Iterator
@@ -47,8 +48,16 @@ VERSION = '3.0-dev'
 # on it, and re-locking from the same process always succeeds, so scoping
 # these to anything narrower than the process would fake an isolation the
 # OS does not provide. Per-run state lives on GrokSession instead.
+#
+# Since fcntl cannot arbitrate between threads, the registries do double duty
+# as the intra-process arbiter for grok-pull's worker threads: a repository
+# path present in REPO_LOCKH means "locked by this process", whichever thread
+# did it. The mutexes make checking and claiming an entry atomic; a None
+# value in REPO_LOCKH marks a claim whose fcntl lock is still being acquired.
 MANIFEST_LOCKH: IO[str] | None = None
-REPO_LOCKH: dict[str, IO[str]] = {}
+REPO_LOCKH: dict[str, IO[str] | None] = {}
+_MANIFEST_LOCKH_MUTEX = threading.Lock()
+_REPO_LOCKH_MUTEX = threading.Lock()
 GITBIN = '/usr/bin/git'
 
 # The shared parent logger: every module logs through a getLogger(__name__)
@@ -101,7 +110,9 @@ class GrokSession:
     and the alternates-map caches, the latter keyed by the toplevel they
     were walked from (the old single global served whatever toplevel was
     asked for first). Each command() entry point creates one and threads
-    it through; worker processes receive a copy through mp.Process args.
+    it through; grok-pull's worker threads share it directly. It still
+    pickles cleanly (see __getstate__) for anything that needs to send it
+    across a process boundary.
 
     Filesystem lock handles deliberately do NOT live here: fcntl locks
     belong to the process, so the registries next to them are module-level
@@ -338,18 +349,31 @@ def _lockname(fullpath: str) -> str:
 
 
 def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
-    if fullpath in REPO_LOCKH:
-        # A second lock would succeed instantly (fcntl locks cannot protect
-        # a process from itself) and the first unlock_repo() would release
-        # both, so a double lock is always a bug in the caller.
-        raise GrokLockError(f'{fullpath} is already locked by this process')
+    with _REPO_LOCKH_MUTEX:
+        if fullpath in REPO_LOCKH:
+            # A second lock would succeed instantly (fcntl locks cannot
+            # protect a process from itself) and the first unlock_repo()
+            # would release both, so a second lock from anywhere in this
+            # process -- same thread or another one -- must fail instead.
+            raise GrokLockError(f'{fullpath} is already locked by this process')
+        # Claim the entry before touching the lock file. Merely opening a
+        # second descriptor of a file this process holds a lock on is enough
+        # to lose that lock when the descriptor is closed again, so the
+        # check above and this claim must be one atomic step.
+        REPO_LOCKH[fullpath] = None
 
     repolock = _lockname(fullpath)
 
     logger.debug('Attempting to exclusive-lock %s', repolock)
-    # Deliberately not a context manager: the handle is stashed in REPO_LOCKH
-    # and released by unlock_repo(). Callers should prefer locked_repo().
-    lockfh = open(repolock, 'w', encoding='utf-8')  # noqa: SIM115
+    try:
+        # Deliberately not a context manager: the handle is stashed in
+        # REPO_LOCKH and released by unlock_repo(). Callers should prefer
+        # locked_repo().
+        lockfh = open(repolock, 'w', encoding='utf-8')  # noqa: SIM115
+    except OSError:
+        with _REPO_LOCKH_MUTEX:
+            del REPO_LOCKH[fullpath]
+        raise
 
     if nonblocking:
         flags = LOCK_EX | LOCK_NB
@@ -357,21 +381,28 @@ def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
         flags = LOCK_EX
 
     try:
+        # The fcntl call happens outside the mutex: with nonblocking=False it
+        # can wait on another process for a long time, and other threads must
+        # still be able to lock and unlock unrelated repositories meanwhile.
         lockf(lockfh, flags)
     except OSError as ex:
         # Don't leak the just-opened handle: with nonblocking=True a held
-        # lock is a routine occurrence, not an error.
+        # lock is a routine occurrence, not an error. Closing it is safe,
+        # because the registry says this process holds no lock on the file.
         lockfh.close()
+        with _REPO_LOCKH_MUTEX:
+            del REPO_LOCKH[fullpath]
         raise GrokLockError(f'Could not obtain exclusive lock on {repolock}') from ex
     REPO_LOCKH[fullpath] = lockfh
 
 
 def unlock_repo(fullpath: str) -> None:
-    if fullpath in REPO_LOCKH:
+    with _REPO_LOCKH_MUTEX:
+        lockfh = REPO_LOCKH.pop(fullpath, None)
+    if lockfh is not None:
         logger.debug('Unlocking %s', fullpath)
-        lockf(REPO_LOCKH[fullpath], LOCK_UN)
-        REPO_LOCKH[fullpath].close()
-        del REPO_LOCKH[fullpath]
+        lockf(lockfh, LOCK_UN)
+        lockfh.close()
 
 
 @contextmanager
@@ -1062,31 +1093,42 @@ def is_obstrepo(fullpath: str, obstdir: str | None = None) -> bool:
 
 def manifest_lock(manifile: str) -> None:
     global MANIFEST_LOCKH
-    if MANIFEST_LOCKH is not None:
-        # Opening a second handle would not block (fcntl locks cannot
-        # protect a process from itself), and worse: the moment the
-        # replaced handle got garbage-collected, the lock would silently
-        # drop while we believed we still held it.
-        raise GrokLockError(f'Manifest {manifile} is already locked by this process')
+    # The mutex is held across the blocking fcntl call. That is safe from
+    # deadlock: if the check below passes, no thread of this process holds
+    # the manifest lock, so no thread can be inside manifest_unlock() -- the
+    # wait, if any, is on another process. It is a separate mutex from the
+    # repository registry one, so repo locking is not stalled meanwhile.
+    with _MANIFEST_LOCKH_MUTEX:
+        if MANIFEST_LOCKH is not None:
+            # Opening a second handle would not block (fcntl locks cannot
+            # protect a process from itself), and worse: the moment the
+            # replaced handle got garbage-collected, the lock would silently
+            # drop while we believed we still held it.
+            raise GrokLockError(f'Manifest {manifile} is already locked by this process')
 
-    manilock = _lockname(manifile)
-    # Deliberately not a context manager: released by manifest_unlock().
-    # Callers should prefer locked_manifest().
-    MANIFEST_LOCKH = open(manilock, 'w', encoding='utf-8')  # noqa: SIM115
-    logger.debug('Attempting to lock %s', manilock)
-    lockf(MANIFEST_LOCKH, LOCK_EX)
-    logger.debug('Manifest lock obtained')
+        manilock = _lockname(manifile)
+        # Deliberately not a context manager: released by manifest_unlock().
+        # Callers should prefer locked_manifest().
+        lockfh = open(manilock, 'w', encoding='utf-8')  # noqa: SIM115
+        logger.debug('Attempting to lock %s', manilock)
+        try:
+            lockf(lockfh, LOCK_EX)
+        except OSError:
+            lockfh.close()
+            raise
+        MANIFEST_LOCKH = lockfh
+        logger.debug('Manifest lock obtained')
 
 
 def manifest_unlock(manifile: str) -> None:
     global MANIFEST_LOCKH
-    if MANIFEST_LOCKH is not None:
-        logger.debug('Unlocking manifest %s', manifile)
-        # noinspection PyTypeChecker
-        lockf(MANIFEST_LOCKH, LOCK_UN)
-        # noinspection PyUnresolvedReferences
-        MANIFEST_LOCKH.close()
+    with _MANIFEST_LOCKH_MUTEX:
+        lockfh = MANIFEST_LOCKH
         MANIFEST_LOCKH = None
+    if lockfh is not None:
+        logger.debug('Unlocking manifest %s', manifile)
+        lockf(lockfh, LOCK_UN)
+        lockfh.close()
 
 
 @contextmanager
