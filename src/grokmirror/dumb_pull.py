@@ -19,6 +19,7 @@ import argparse
 import fnmatch
 import logging
 import os
+from pathlib import Path
 
 import grokmirror
 
@@ -194,7 +195,7 @@ def dumb_pull(
     # Find all repositories we are to pull
     for entry in paths:
         if entry.endswith('.git'):
-            if not os.path.exists(entry):
+            if not Path(entry).exists():
                 logger.critical('%s does not exist', entry)
                 continue
 

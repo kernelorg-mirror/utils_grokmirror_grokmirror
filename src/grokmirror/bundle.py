@@ -15,7 +15,6 @@
 
 import argparse
 import logging
-import os
 import sys
 from collections.abc import Collection
 from pathlib import Path
@@ -51,7 +50,7 @@ def generate_bundles(
     # uses advisory lock, so its safe even if we die unexpectedly
     # load_config_file() guarantees both of these are set
     manifest = grokmirror.read_manifest(config['core']['manifest'])
-    toplevel = os.path.realpath(config['core']['toplevel'])
+    toplevel = Path(config['core']['toplevel']).resolve()
     # An empty string means "no extra arguments", and str.split() already
     # returns an empty list for it -- but only if we don't skip the split.
     git_args = gitargs.split()
@@ -69,12 +68,12 @@ def generate_bundles(
             continue
 
         repo = repo.lstrip('/')
-        fullpath = os.path.join(toplevel, repo)
+        fullpath = toplevel / repo
 
-        bundledir = os.path.join(outdir, repo.removesuffix('.git'))
-        Path(bundledir).mkdir(parents=True, exist_ok=True)
+        bundledir = Path(outdir, repo.removesuffix('.git'))
+        bundledir.mkdir(parents=True, exist_ok=True)
 
-        repofpr = grokmirror.get_repo_fingerprint(toplevel, repo)
+        repofpr = grokmirror.get_repo_fingerprint(str(toplevel), repo)
         logger.debug('%s fingerprint is %s', repo, repofpr)
         if not repofpr:
             # Either the repo is gone or it has no refs at all. Either way there
@@ -83,33 +82,33 @@ def generate_bundles(
             continue
 
         # Do we have a bundle file already?
-        bfile = os.path.join(bundledir, 'clone.bundle')
-        bfprfile = os.path.join(bundledir, '.fingerprint')
+        bfile = bundledir / 'clone.bundle'
+        bfprfile = bundledir / '.fingerprint'
         logger.debug('Looking for %s', bfile)
-        if os.path.exists(bfile):
+        if bfile.exists():
             # Do we have a bundle fingerprint?
             logger.debug('Found existing bundle in %s', bfile)
-            if os.path.exists(bfprfile):
-                bfpr = Path(bfprfile).read_text(encoding='utf-8').strip()
+            if bfprfile.exists():
+                bfpr = bfprfile.read_text(encoding='utf-8').strip()
                 logger.debug('Read bundle fingerprint from %s: %s', bfprfile, bfpr)
                 if bfpr == repofpr:
                     logger.info('  skipped: %s (unchanged)', repo)
                     continue
 
         logger.debug('checking size of %s', repo)
-        total_size = get_repo_size(fullpath) / 1024 / 1024
+        total_size = get_repo_size(str(fullpath)) / 1024 / 1024
 
         if total_size > maxsize:
             logger.info('  skipped: %s (%s > %s)', repo, total_size, maxsize)
             continue
 
-        fullargs = git_args + ['bundle', 'create', bfile] + revlist_args
+        fullargs = git_args + ['bundle', 'create', str(bfile)] + revlist_args
         logger.debug('Full git args: %s', fullargs)
         logger.info(' generate: %s', bfile)
-        ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs)
+        ecode, _out, _err = grokmirror.run_git_command(str(fullpath), fullargs)
 
         if ecode == 0:
-            Path(bfprfile).write_text(repofpr, encoding='utf-8')
+            bfprfile.write_text(repofpr, encoding='utf-8')
             logger.debug('Wrote %s into %s', repofpr, bfprfile)
 
     return 0
