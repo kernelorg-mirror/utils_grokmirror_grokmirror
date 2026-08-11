@@ -32,7 +32,9 @@ for py in $PYTHONS; do
     # does not thrash the default .venv and each sync is incremental.
     UV_PROJECT_ENVIRONMENT=".venv-$py"
     export UV_PROJECT_ENVIRONMENT
-    if ! uv sync --all-extras --all-groups --python "$py"; then
+    # --locked for the same reason as in ci.sh: every interpreter in the sweep
+    # should be testing the dependency versions recorded in uv.lock.
+    if ! uv sync --all-extras --all-groups --locked --python "$py"; then
         failed="$failed $py(sync)"
         continue
     fi

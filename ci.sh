@@ -14,6 +14,13 @@ set -eu
 # real annotations over suppressions when tightening: annotating a single
 # parameter is what turned up several of the crashes fixed in this tree.
 
+# --locked fails rather than re-resolving, so a pyproject.toml edit that was
+# not followed by `uv lock` is caught here instead of silently giving this run
+# a different set of tool versions than everyone else's. When it complains,
+# run `uv lock` (and `uv export --no-dev --no-emit-project -o requirements.txt`
+# if a runtime dependency changed) and commit both.
+uv sync --all-groups --locked
+
 uv run ruff format --check
 uv run ruff check
 uv run ty check
