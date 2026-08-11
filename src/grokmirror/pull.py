@@ -1282,10 +1282,7 @@ def pull_mirror(
 
     def note_done(gitdir: str, repoinfo: grokmirror.RepoInfo, q_action: str, success: bool) -> None:
         nonlocal good, bad, cloned
-        try:
-            actions.remove((gitdir, q_action))
-        except KeyError:
-            pass
+        actions.discard((gitdir, q_action))
         # Was it a clone, and are all other clones done?
         if post_clone_hook and q_action == 'init':
             # str(), because the list is handed to the hook as its stdin

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import gc
 import io
@@ -229,10 +230,11 @@ def get_repo_size(fullpath: grokmirror.StrPath) -> int:
     oi = grokmirror.get_repo_obj_info(fullpath)
     kbsize = 0
     for field in ['size', 'size-pack', 'size-garbage']:
-        try:
+        # Suppressed, not .get(): git only reports size-garbage when there is
+        # garbage to report, and a value we can't parse should not make the
+        # whole repo look zero-sized.
+        with contextlib.suppress(KeyError, ValueError):
             kbsize += int(oi[field])
-        except (KeyError, ValueError):
-            pass
     logger.debug('%s size: %s kb', fullpath, kbsize)
     return kbsize
 
@@ -629,10 +631,7 @@ def fsck_mirror(
             if not Path(fullpath).is_dir():
                 # Remove it from manifest and status
                 manifest.pop(gitdir)
-                try:
-                    status.pop(fullpath)
-                except KeyError:
-                    pass
+                status.pop(fullpath, None)
                 changed = True
                 continue
 
@@ -711,10 +710,7 @@ def fsck_mirror(
         fetch_headf = Path(fullpath, 'FETCH_HEAD')
         if not fetch_headf.is_symlink():
             logger.debug('  replacing FETCH_HEAD with symlink to /dev/null')
-            try:
-                fetch_headf.unlink()
-            except FileNotFoundError:
-                pass
+            fetch_headf.unlink(missing_ok=True)
             fetch_headf.symlink_to('/dev/null')
 
         # Objstore migration routines
@@ -1191,11 +1187,7 @@ def fsck_mirror(
                 if run_git_repack(ses, fullpath, config, level):
                     status[fullpath]['lastrepack'] = todayiso
                     if level > 1:
-                        try:
-                            Path(fullpath, 'grokmirror.repack').unlink()
-                        except FileNotFoundError:
-                            pass
-
+                        Path(fullpath, 'grokmirror.repack').unlink(missing_ok=True)
                         status[fullpath]['lastfullrepack'] = todayiso
                         status[fullpath]['lastcheck'] = todayiso
                         status[fullpath]['nextcheck'] = nextcheck.strftime('%F')

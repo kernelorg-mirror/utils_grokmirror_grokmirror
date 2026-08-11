@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import fnmatch
 import functools
@@ -681,10 +682,8 @@ def get_repo_defs(
         modified = datetime.datetime.now(tz=datetime.timezone.utc)
 
     head = None
-    try:
+    with contextlib.suppress(OSError):
         head = Path(fullpath, 'HEAD').read_text(encoding='utf-8').strip()
-    except OSError:
-        pass
 
     forkgroup = None
     altrepo = get_altrepo(fullpath)
@@ -863,10 +862,10 @@ def remove_from_objstore(obstrepo: StrPath, fullpath: StrPath) -> bool:
 
     args = ['remote', 'remove', virtref]
     run_git_command(obstrepo, args)
-    try:
+    # Not just missing_ok=True: the old code caught OSError, so a fingerprint
+    # we are not allowed to remove has never been fatal here either.
+    with contextlib.suppress(OSError):
         Path(obstrepo, f'grokmirror.{virtref}.fingerprint').unlink()
-    except (OSError, FileNotFoundError):
-        pass
     return True
 
 
