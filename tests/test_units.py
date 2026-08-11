@@ -392,6 +392,50 @@ class TestRepackLevel:
         assert grokmirror.get_repack_level(self.obj_info(count=100)) == 0
 
 
+class TestRunShellCommand:
+    """run_shell_command() is the choke point for every external command.
+
+    Every git invocation and every hook goes through here, so the environment
+    and stdin contracts below are load-bearing for the whole tree.
+    """
+
+    def test_inherits_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Commands must inherit the caller's environment: the test harness
+        # points git at its own config purely through environment variables,
+        # and mirror operators expect proxy and ssh settings to apply. (A
+        # 2021 refactor accidentally ran every command with an empty
+        # environment instead; it never shipped in a release.)
+        monkeypatch.setenv('GROK_TEST_CANARY', 'chirp')
+        ecode, out, _err = grokmirror.run_shell_command(['sh', '-c', 'printf %s "${GROK_TEST_CANARY-unset}"'])
+        assert ecode == 0
+        assert out == 'chirp'
+
+    def test_explicit_env_replaces_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv('GROK_TEST_CANARY', 'chirp')
+        ecode, out, _err = grokmirror.run_shell_command(
+            ['sh', '-c', 'printf %s "${GROK_TEST_CANARY-unset}:${PI_CONFIG-unset}"'], env={'PI_CONFIG': '/pi'}
+        )
+        assert ecode == 0
+        assert out == 'unset:/pi'
+
+    def test_timeout_kills_the_command(self) -> None:
+        # 124 is what timeout(1) exits with, so it reads familiarly in logs.
+        ecode, _out, _err = grokmirror.run_shell_command(['sleep', '30'], timeout=0.5)
+        assert ecode == 124
+
+    def test_no_stdin_means_eof_not_the_callers_terminal(self) -> None:
+        # A hook that reads stdin must see EOF immediately, not hang waiting
+        # on whatever stdin the daemon happens to have inherited.
+        ecode, out, _err = grokmirror.run_shell_command(['cat'])
+        assert ecode == 0
+        assert out == ''
+
+    def test_stdin_bytes_are_delivered(self) -> None:
+        ecode, out, _err = grokmirror.run_shell_command(['cat'], stdin=b'hello there')
+        assert ecode == 0
+        assert out == 'hello there'
+
+
 class TestReadManifest:
     """read_manifest() has to cope with gzipped, plain, missing and broken files."""
 

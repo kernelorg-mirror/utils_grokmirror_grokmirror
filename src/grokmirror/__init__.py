@@ -60,6 +60,14 @@ _MANIFEST_LOCKH_MUTEX = threading.Lock()
 _REPO_LOCKH_MUTEX = threading.Lock()
 GITBIN = '/usr/bin/git'
 
+# Ceiling for commands that talk to a remote (fetches, remote manifest
+# commands). It exists to unwedge a worker stuck on a dead connection, not to
+# police slow transfers, so it is deliberately far above any legitimate
+# operation -- even an initial clone of a monster repository over a slow link.
+# Hooks and indexing commands run without a timeout: those can legitimately
+# take as long as they take.
+REMOTE_TIMEOUT = 6 * 3600
+
 # The shared parent logger: every module logs through a getLogger(__name__)
 # child of this one, so the handlers init_logger() attaches here serve the
 # whole package. No rebinding needed anywhere.
@@ -275,46 +283,90 @@ def git_newer_than(minver: str) -> bool:
 # str | bytes union they then have to narrow by hand.
 @overload
 def run_shell_command(
-    cmdargs: list, stdin: bytes | None = ..., decode: Literal[True] = ..., env: dict | None = ...
+    cmdargs: list,
+    stdin: bytes | None = ...,
+    decode: Literal[True] = ...,
+    env: dict | None = ...,
+    timeout: float | None = ...,
 ) -> tuple[int, str, str]: ...
 
 
 @overload
 def run_shell_command(
-    cmdargs: list, stdin: bytes | None = ..., *, decode: Literal[False], env: dict | None = ...
+    cmdargs: list,
+    stdin: bytes | None = ...,
+    *,
+    decode: Literal[False],
+    env: dict | None = ...,
+    timeout: float | None = ...,
 ) -> tuple[int, bytes, bytes]: ...
 
 
 def run_shell_command(
-    cmdargs: list, stdin: bytes | None = None, decode: bool = True, env: dict | None = None
+    cmdargs: list,
+    stdin: bytes | None = None,
+    decode: bool = True,
+    env: dict | None = None,
+    timeout: float | None = None,
 ) -> tuple[int, str, str] | tuple[int, bytes, bytes]:
-    if not env:
-        env = {}
+    # env=None inherits our environment, as subprocess itself does; passing a
+    # dict replaces the environment wholesale. Inheriting is load-bearing:
+    # git reads proxy and ssh settings from it, and the test suite isolates
+    # git purely through environment variables.
     logger.debug('Running: %s', ' '.join(cmdargs))
 
-    child = subprocess.Popen(cmdargs, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-    output, error = child.communicate(input=stdin)
+    try:
+        if stdin is None:
+            # No stdin means EOF, not our own stdin: a hook that reads its
+            # input must not hang on the daemon's inherited descriptor.
+            child = subprocess.run(
+                cmdargs, stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=timeout, check=False
+            )
+        else:
+            child = subprocess.run(cmdargs, input=stdin, capture_output=True, env=env, timeout=timeout, check=False)
+        returncode = child.returncode
+        output, error = child.stdout, child.stderr
+    except subprocess.TimeoutExpired as ex:
+        logger.critical('Timed out %ss waiting for: %s', ex.timeout, ' '.join(cmdargs))
+        # Report it the way timeout(1) would, with whatever output was
+        # collected before the command was killed.
+        returncode = 124
+        output = ex.stdout or b''
+        error = ex.stderr or b''
 
     if decode:
-        return child.returncode, output.decode().strip(), error.decode().strip()
+        return returncode, output.decode().strip(), error.decode().strip()
 
-    return child.returncode, output, error
+    return returncode, output, error
 
 
 @overload
 def run_git_command(
-    fullpath: str | None, args: list, stdin: bytes | None = ..., decode: Literal[True] = ...
+    fullpath: str | None,
+    args: list,
+    stdin: bytes | None = ...,
+    decode: Literal[True] = ...,
+    timeout: float | None = ...,
 ) -> tuple[int, str, str]: ...
 
 
 @overload
 def run_git_command(
-    fullpath: str | None, args: list, stdin: bytes | None = ..., *, decode: Literal[False]
+    fullpath: str | None,
+    args: list,
+    stdin: bytes | None = ...,
+    *,
+    decode: Literal[False],
+    timeout: float | None = ...,
 ) -> tuple[int, bytes, bytes]: ...
 
 
 def run_git_command(
-    fullpath: str | None, args: list, stdin: bytes | None = None, decode: bool = True
+    fullpath: str | None,
+    args: list,
+    stdin: bytes | None = None,
+    decode: bool = True,
+    timeout: float | None = None,
 ) -> tuple[int, str, str] | tuple[int, bytes, bytes]:
     if 'GITBIN' in os.environ:
         _git = os.environ['GITBIN']
@@ -332,9 +384,9 @@ def run_git_command(
 
     # Spelled out as two calls so the overload above picks the right return type
     if decode:
-        return run_shell_command(cmdargs, stdin, decode=True)
+        return run_shell_command(cmdargs, stdin, decode=True, timeout=timeout)
 
-    return run_shell_command(cmdargs, stdin, decode=False)
+    return run_shell_command(cmdargs, stdin, decode=False, timeout=timeout)
 
 
 def _lockname(fullpath: str) -> str:

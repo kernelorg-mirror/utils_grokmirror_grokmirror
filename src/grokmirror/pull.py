@@ -605,9 +605,7 @@ def get_hookscripts(config: grokmirror.GrokConfigParser, hookname: str) -> list[
     hookline = config['pull'].get(hookname, '')
     for hookscript in hookline.split('\n'):
         hookscript = os.path.expanduser(hookscript.strip())
-        sp = shlex.shlex(hookscript, posix=True)
-        sp.whitespace_split = True
-        args = list(sp)
+        args = shlex.split(hookscript)
         if not len(args):
             continue
         if not os.access(args[0], os.X_OK):
@@ -661,7 +659,7 @@ def run_post_update_hook(config: grokmirror.GrokConfigParser, fullpath: str) -> 
 def pull_repo(fullpath: str, remotename: str) -> bool:
     args = ['remote', 'update', remotename, '--prune']
 
-    retcode, _output, error = grokmirror.run_git_command(fullpath, args)
+    retcode, _output, error = grokmirror.run_git_command(fullpath, args, timeout=grokmirror.REMOTE_TIMEOUT)
 
     success = False
     if retcode == 0:
@@ -752,16 +750,16 @@ def fill_todo_from_manifest(
     r_mani_cmd = config['remote'].get('manifest_command')
 
     if r_mani_cmd:
-        sp = shlex.shlex(r_mani_cmd, posix=True)
-        sp.whitespace_split = True
-        cmdargs = list(sp)
+        cmdargs = shlex.split(r_mani_cmd)
         if not os.access(cmdargs[0], os.X_OK):
             logger.critical('Remote manifest command is not executable: %s', cmdargs[0])
             raise grokmirror.GrokManifestError(f'Remote manifest command is not executable: {cmdargs[0]}')
         logger.info(' manifest: executing %s', r_mani_cmd)
         if nomtime:
             cmdargs += ['--force']
-        (ecode, output, _error) = grokmirror.run_shell_command(cmdargs)
+        # This one usually crosses the network (e.g. ssh to a gitolite
+        # server), so unlike the hooks it runs under the remote ceiling.
+        (ecode, output, _error) = grokmirror.run_shell_command(cmdargs, timeout=grokmirror.REMOTE_TIMEOUT)
         if ecode == 0:
             try:
                 r_manifest = json.loads(output)

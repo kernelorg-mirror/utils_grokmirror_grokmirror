@@ -83,9 +83,7 @@ def run_pi_repo(
     repo: str, pipedef: str, dryrun: bool = False, shallow: bool = False, pipelast: int | None = None
 ) -> None:
     logger.info('Checking %s', repo)
-    sp = shlex.shlex(pipedef, posix=True)
-    sp.whitespace_split = True
-    args = list(sp)
+    args = shlex.split(pipedef)
     if not os.access(args[0], os.X_OK):
         logger.critical('Cannot execute %s', pipedef)
         sys.exit(1)

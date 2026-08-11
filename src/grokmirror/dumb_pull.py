@@ -19,7 +19,6 @@ import argparse
 import fnmatch
 import logging
 import os
-import subprocess
 
 import grokmirror
 
@@ -39,7 +38,7 @@ def git_rev_parse_all(gitdir: str) -> str:
 
 
 def git_remote_update(args: list[str], fullpath: str) -> None:
-    _retcode, _output, error = grokmirror.run_git_command(fullpath, args)
+    _retcode, _output, error = grokmirror.run_git_command(fullpath, args, timeout=grokmirror.REMOTE_TIMEOUT)
 
     if error:
         # Put things we recognize into debug
@@ -119,11 +118,7 @@ def run_post_update_hook(hookscript: str, gitdir: str) -> None:
         return
 
     args = [hookscript, gitdir]
-    logger.debug('Running: %s', ' '.join(args))
-    (outb, errb) = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
-
-    error = errb.decode().strip()
-    output = outb.decode().strip()
+    _ecode, output, error = grokmirror.run_shell_command(args)
     if error:
         # Put hook stderror into warning
         logger.warning('Hook Stderr: %s', error)

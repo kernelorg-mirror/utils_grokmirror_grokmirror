@@ -28,6 +28,11 @@ v3.0 (TBD)
 - A failed post-pull treatment (objstore fetch, repack) in grok-pull no
   longer kills the treatment worker; the error is logged and later
   treatments still run
+- git commands that talk to a remote (grok-pull and grok-dumb-pull
+  fetches, and the remote manifest_command) now run under a generous
+  six-hour ceiling, so a worker stuck on a dead connection eventually
+  recovers instead of hanging forever; hooks and indexing commands are
+  deliberately not limited, since those can legitimately run for days
 - Fix grok-fsck keeping the manifest locked for the rest of the run when
   the status file could not be parsed
 - Locking a repository or the manifest a second time from the same process

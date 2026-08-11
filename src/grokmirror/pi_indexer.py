@@ -48,10 +48,7 @@ def index_pi_inbox(fullpath: str, opts: argparse.Namespace) -> bool:
 
     piargs.append(pdir)
 
-    env = {
-        'PI_CONFIG': opts.piconfig,
-        'PATH': os.getenv('PATH', '/bin:/usr/bin:/usr/local/bin'),
-    }
+    env = {**os.environ, 'PI_CONFIG': opts.piconfig}
     try:
         ec, _out, err = grokmirror.run_shell_command(piargs, env=env)
         if ec > 0:
@@ -181,10 +178,7 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
                 piargs += addresses
                 logger.debug('piargs=%s', piargs)
 
-                env = {
-                    'PI_CONFIG': opts.piconfig,
-                    'PATH': os.getenv('PATH', '/bin:/usr/bin:/usr/local/bin'),
-                }
+                env = {**os.environ, 'PI_CONFIG': opts.piconfig}
                 try:
                     ec, out, err = grokmirror.run_shell_command(piargs, env=env)
                     if ec > 0:
@@ -284,10 +278,7 @@ def cmd_update(opts: argparse.Namespace) -> None:
 
 
 def cmd_extindex(opts: argparse.Namespace) -> None:
-    env = {
-        'PI_CONFIG': opts.piconfig,
-        'PATH': os.getenv('PATH', '/bin:/usr/bin:/usr/local/bin'),
-    }
+    env = {**os.environ, 'PI_CONFIG': opts.piconfig}
     logger.info('Running extindex --all')
     piargs = ['public-inbox-extindex', '-L', opts.indexlevel, '--all']
     if opts.jobs:
