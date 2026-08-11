@@ -625,6 +625,38 @@ class TestPullUpdateManifest:
         assert entries == []
 
 
+class TestWriteProjectsList:
+    """projects.list is the flat repository list gitweb and cgit read."""
+
+    @staticmethod
+    def _run(tmp_path: Path, pullopts: dict[str, str], manifest: grokmirror.Manifest) -> list[str]:
+        plfile = tmp_path / 'projects.list'
+        config = grokmirror.GrokConfigParser(interpolation=ExtendedInterpolation())
+        config.read_dict({'core': {}, 'pull': {'projectslist': str(plfile), **pullopts}})
+        grokmirror.pull.write_projects_list(config, manifest)
+        return plfile.read_text(encoding='utf-8').splitlines()
+
+    def test_leading_slash_is_always_dropped(self, tmp_path: Path) -> None:
+        # cgit breaks on an absolute path in projects.list.
+        manifest: grokmirror.Manifest = {'/pub/scm/one.git': {}}
+        assert self._run(tmp_path, {}, manifest) == ['pub/scm/one.git']
+
+    def test_trimtop_is_removed_from_the_front(self, tmp_path: Path) -> None:
+        manifest: grokmirror.Manifest = {'/pub/scm/one.git': {}}
+        assert self._run(tmp_path, {'projectslist_trimtop': '/pub/scm'}, manifest) == ['one.git']
+
+    def test_trimtop_only_matches_at_the_front(self, tmp_path: Path) -> None:
+        # A repository the setting does not apply to is written out whole,
+        # rather than having the prefix cut out of the middle of it.
+        manifest: grokmirror.Manifest = {'/other/pub/scm/one.git': {}}
+        assert self._run(tmp_path, {'projectslist_trimtop': '/pub/scm'}, manifest) == ['other/pub/scm/one.git']
+
+    def test_symlinks_are_listed_when_asked_for(self, tmp_path: Path) -> None:
+        manifest: grokmirror.Manifest = {'/pub/scm/one.git': {'symlinks': ['/pub/scm/alias.git']}}
+        listed = self._run(tmp_path, {'projectslist_trimtop': '/pub/scm', 'projectslist_symlinks': 'yes'}, manifest)
+        assert sorted(listed) == ['alias.git', 'one.git']
+
+
 class TestRunShellCommand:
     """run_shell_command() is the choke point for every external command.
 

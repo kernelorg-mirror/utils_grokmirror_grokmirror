@@ -508,10 +508,7 @@ def set_precious_objects(fullpath: str, enabled: bool = True) -> None:
     # It's better to just set it blindly without checking first,
     # as this results in one fewer shell-out.
     logger.debug('Setting preciousObjects for %s', fullpath)
-    if enabled:
-        poval = 'true'
-    else:
-        poval = 'false'
+    poval = 'true' if enabled else 'false'
     grokmirror.set_git_config(fullpath, 'extensions.preciousObjects', poval)
 
 
@@ -610,11 +607,8 @@ def fsck_mirror(
         today = datetime.datetime.today()  # noqa: DTZ002
         todayiso = today.strftime('%F')
 
-        if force:
-            # Use randomization for next check, again
-            checkdelay = random.randint(1, frequency)
-        else:
-            checkdelay = frequency
+        # Use randomization for the next check, again
+        checkdelay = random.randint(1, frequency) if force else frequency
 
         commitgraph = config['fsck'].getboolean('commitgraph', True)
 
@@ -657,10 +651,7 @@ def fsck_mirror(
                 logger.info('%s:', fullpath)
                 logger.info('    added: next check on %s', nextcheckiso)
 
-        if 'manifest' in config:
-            pretty = config['manifest'].getboolean('pretty', False)
-        else:
-            pretty = False
+        pretty = config['manifest'].getboolean('pretty', False) if 'manifest' in config else False
 
         if changed:
             grokmirror.write_manifest(manifile, manifest, pretty=pretty)
@@ -727,11 +718,8 @@ def fsck_mirror(
         # Are we using objstore?
         altdir = grokmirror.get_altrepo(fullpath)
         is_private = grokmirror.is_private_repo(config, gitdir)
-        if ses.is_alt_repo(toplevel, gitdir):
-            # Don't prune any repos that are parents -- until migration is fully complete
-            m_prune = False
-        else:
-            m_prune = True
+        # Don't prune any repos that are parents -- until migration is fully complete
+        m_prune = not ses.is_alt_repo(toplevel, gitdir)
 
         if not altdir and os.path.exists(os.path.join(fullpath, 'grokmirror.do-not-objstore')):
             # The admin excluded this repo from object sharing and it has no
@@ -1347,10 +1335,7 @@ def grok_fsck(
         config['core']['objstore'] = obstdir
 
     logfile = config['core'].get('log', None)
-    if config['core'].get('loglevel', 'info') == 'debug':
-        loglevel = logging.DEBUG
-    else:
-        loglevel = logging.INFO
+    loglevel = logging.DEBUG if config['core'].get('loglevel', 'info') == 'debug' else logging.INFO
 
     root_logger = grokmirror.init_logger('fsck', logfile, loglevel, verbose)
 

@@ -153,10 +153,7 @@ def grok_bundle(
     config = grokmirror.load_config_file(cfgfile)
 
     logfile = config['core'].get('log', None)
-    if config['core'].get('loglevel', 'info') == 'debug':
-        loglevel = logging.DEBUG
-    else:
-        loglevel = logging.INFO
+    loglevel = logging.DEBUG if config['core'].get('loglevel', 'info') == 'debug' else logging.INFO
 
     grokmirror.init_logger('bundle', logfile, loglevel, verbose)
 

@@ -126,6 +126,7 @@ extend-select = [
     "I",
     "PLC1802", # len-test: `if len(x)` as a condition -> `if x`
     "PLW1514", # unspecified-encoding: text-mode I/O must say encoding=
+    "SIM108", # if-else-block-instead-of-if-exp: four lines to assign one value
 ]
 
 [tool.ruff.lint.isort]

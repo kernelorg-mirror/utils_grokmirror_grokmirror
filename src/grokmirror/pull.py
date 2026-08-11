@@ -699,10 +699,9 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirro
     try:
         fh = os.fdopen(fd, 'wb', 0)
         for gitdir, repoinfo in manifest.items():
-            if trimtop and gitdir.startswith(trimtop):
-                pgitdir = gitdir[len(trimtop) :]
-            else:
-                pgitdir = gitdir
+            # removeprefix() is a no-op both when trimtop is unset and when
+            # this particular gitdir does not start with it.
+            pgitdir = gitdir.removeprefix(trimtop)
 
             # Always remove leading slash, otherwise cgit breaks
             pgitdir = pgitdir.lstrip('/')
@@ -1096,10 +1095,7 @@ def update_manifest(config: grokmirror.GrokConfigParser, entries: list[DoneItem]
             manifest[gitdir] = repoinfo
             changed = True
         if changed:
-            if 'manifest' in config:
-                pretty = config['manifest'].getboolean('pretty', False)
-            else:
-                pretty = False
+            pretty = config['manifest'].getboolean('pretty', False) if 'manifest' in config else False
             grokmirror.write_manifest(manifile, manifest, pretty=pretty)
             logger.info(' manifest: wrote %s (%d entries)', manifile, len(manifest))
             # write out projects.list, if asked to
@@ -1522,10 +1518,7 @@ def grok_pull(
         runonce = True
 
     logfile = config['core'].get('log', None)
-    if config['core'].get('loglevel', 'info') == 'debug':
-        loglevel = logging.DEBUG
-    else:
-        loglevel = logging.INFO
+    loglevel = logging.DEBUG if config['core'].get('loglevel', 'info') == 'debug' else logging.INFO
 
     if purge:
         # Override the pull.purge setting

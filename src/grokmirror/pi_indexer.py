@@ -155,10 +155,7 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
             if not addresses:
                 addresses = [f'{inboxname}@localhost']
             if not description:
-                if listid:
-                    description = f'{listid} archive mirror'
-                else:
-                    description = f'{inboxname} archive mirror'
+                description = f'{listid or inboxname} archive mirror'
 
             if success:
                 if gdir != pdir:
@@ -370,10 +367,7 @@ def command() -> None:
         sys.exit(1)
 
     logfile = opts.logfile
-    if opts.verbose:
-        loglevel = logging.DEBUG
-    else:
-        loglevel = logging.INFO
+    loglevel = logging.DEBUG if opts.verbose else logging.INFO
 
     grokmirror.init_logger('pi-indexer', logfile, loglevel, opts.verbose)
     opts.func(opts)

@@ -449,10 +449,7 @@ def run_git_command(
     decode: bool = True,
     timeout: float | None = None,
 ) -> tuple[int, str, str] | tuple[int, bytes, bytes]:
-    if 'GITBIN' in os.environ:
-        _git = os.environ['GITBIN']
-    else:
-        _git = GITBIN
+    _git = os.environ.get('GITBIN', GITBIN)
 
     if not os.path.isfile(_git) and os.access(_git, os.X_OK):
         # we hope for the best by using 'git' without full path
@@ -508,10 +505,7 @@ def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
             del REPO_LOCKH[fullpath]
         raise
 
-    if nonblocking:
-        flags = LOCK_EX | LOCK_NB
-    else:
-        flags = LOCK_EX
+    flags = (LOCK_EX | LOCK_NB) if nonblocking else LOCK_EX
 
     try:
         # The fcntl call happens outside the mutex: with nonblocking=False it
@@ -1313,10 +1307,7 @@ def write_manifest(manifile: str, manifest: Manifest, mtime: int | None = None, 
     logger.debug('Created a temporary file in %s', tmpfile)
     logger.debug('Writing to %s', tmpfile)
     try:
-        if pretty:
-            jdata = json.dumps(manifest, indent=2, sort_keys=True)
-        else:
-            jdata = json.dumps(manifest)
+        jdata = json.dumps(manifest, indent=2, sort_keys=True) if pretty else json.dumps(manifest)
 
         jbytes = jdata.encode('utf-8')
         if manifile.endswith('.gz'):

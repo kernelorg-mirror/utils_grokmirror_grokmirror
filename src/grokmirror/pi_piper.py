@@ -216,10 +216,7 @@ def command() -> None:
         sys.exit(0)
 
     logfile = config[section].get('log')
-    if config[section].get('loglevel') == 'debug':
-        loglevel = logging.DEBUG
-    else:
-        loglevel = logging.INFO
+    loglevel = logging.DEBUG if config[section].get('loglevel') == 'debug' else logging.INFO
 
     shallow = config[section].getboolean('shallow', False)
 
