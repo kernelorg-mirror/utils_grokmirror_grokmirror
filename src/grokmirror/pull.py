@@ -719,11 +719,10 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: dict) -> 
 
         os.fsync(fd)
         fh.close()
-        # set mode to current umask
-        curmask = os.umask(0)
-        os.chmod(tmpfile, 0o0666 ^ curmask)
-        os.umask(curmask)
-        shutil.move(tmpfile, plpath)
+        # mkstemp() always creates 0600, so put the umask back on
+        os.chmod(tmpfile, grokmirror.file_mode())
+        # os.replace for an actually atomic swap; see write_manifest()
+        os.replace(tmpfile, plpath)
 
     finally:
         # If something failed, don't leave tempfiles trailing around
@@ -1126,9 +1125,7 @@ def update_manifest(config: grokmirror.GrokConfigParser, entries: list) -> None:
 
 
 def socket_worker(server: ThreadedUnixStreamServer, sockfile: str) -> None:
-    # The socket itself was bound by pull_mirror() in the main thread: that
-    # involves process-wide umask fiddling, which must not overlap with the
-    # pull workers creating repository files.
+    # The socket itself was bound by pull_mirror(), before any workers exist.
     logger.info(' listener: listening on socket %s', sockfile)
     with server:
         server.serve_forever()
@@ -1209,12 +1206,12 @@ def pull_mirror(
             else:
                 raise grokmirror.GrokError(f'File exists but is not a socket: {sockfile}')
 
-        # Bind the socket before any worker threads exist: the umask dance
-        # is process-wide, and nothing else may create files while the mask
-        # is zeroed.
-        curmask = os.umask(0)
         server = ThreadedUnixStreamServer(sockfile, Handler)
-        os.umask(curmask)
+        # Deliberately world-writable: anyone able to reach the socket may ask
+        # the daemon to check a repository. Set after the bind rather than by
+        # zeroing the process umask, which would have applied to every other
+        # file the process creates for as long as the window was open.
+        os.chmod(sockfile, 0o777)
         # Stick some objects into the server
         server.q_mani = q_mani
         server.config = config

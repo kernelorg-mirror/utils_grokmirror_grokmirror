@@ -60,6 +60,16 @@ _MANIFEST_LOCKH_MUTEX = threading.Lock()
 _REPO_LOCKH_MUTEX = threading.Lock()
 GITBIN = '/usr/bin/git'
 
+# The umask is process-wide state and there is no way to read it without
+# setting it, so we read it exactly once, here at import time, while the
+# process is still single-threaded. Doing it later -- in the middle of a run,
+# as the code used to -- means zeroing the mask of a process whose worker
+# threads are busy creating repositories, and anything created inside that
+# window lands with mode 0666. Callers that need "the mode a plain create
+# would have produced" use file_mode() below rather than touching the mask.
+UMASK = os.umask(0)
+os.umask(UMASK)
+
 # Ceiling for commands that talk to a remote (fetches, remote manifest
 # commands). It exists to unwedge a worker stuck on a dead connection, not to
 # police slow transfers, so it is deliberately far above any legitimate
@@ -239,6 +249,15 @@ class GrokSession:
             self._alt_repo_maps[key] = amap
 
         return gitdirs
+
+
+def file_mode(base: int = 0o666) -> int:
+    """Return the mode a plain open() would have given a new file.
+
+    Used to put the umask back on files created via tempfile.mkstemp(), which
+    deliberately ignores it and creates everything as 0600.
+    """
+    return base & ~UMASK
 
 
 def get_config_from_git(fullpath: str | None, regexp: str, defaults: dict[str, str] | None = None) -> dict[str, str]:
@@ -1265,15 +1284,16 @@ def write_manifest(manifile: str, manifest: dict, mtime: int | None = None, pret
 
         os.fsync(fd)
         fh.close()
-        # set mode to current umask
-        curmask = os.umask(0)
-        os.chmod(tmpfile, 0o0666 ^ curmask)
-        os.umask(curmask)
+        # mkstemp() always creates 0600, so put the umask back on
+        os.chmod(tmpfile, file_mode())
         if mtime is not None:
             logger.debug('Setting mtime to %s', mtime)
             os.utime(tmpfile, (mtime, mtime))
         logger.debug('Moving %s to %s', tmpfile, manifile)
-        shutil.move(tmpfile, manifile)
+        # os.replace, not shutil.move: the whole tempfile dance exists to make
+        # this step atomic, and shutil.move quietly degrades to copy+unlink.
+        # Same directory as the target, so this can never cross a filesystem.
+        os.replace(tmpfile, manifile)
 
     finally:
         # If something failed, don't leave these trailing around

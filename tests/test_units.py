@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import pickle
+import stat
 import subprocess
 import threading
 from configparser import ExtendedInterpolation
@@ -541,6 +542,33 @@ class TestReadManifest:
         manifile = str(tmp_path / 'manifest.js.gz')
         grokmirror.write_manifest(manifile, {'/test/one.git': {'modified': 5}}, mtime=1600000000)
         assert int(os.stat(manifile).st_mtime) == 1600000000
+
+    @pytest.mark.parametrize(
+        ('umask', 'expected'),
+        [
+            pytest.param(0o022, 0o644, id='022'),
+            pytest.param(0o002, 0o664, id='002'),
+            # These two are where "0o666 ^ umask" went wrong: XOR flipped the
+            # execute bits on instead of clearing them, so a private mirror
+            # wrote a world-executable manifest (0o641 and 0o611).
+            pytest.param(0o027, 0o640, id='027'),
+            pytest.param(0o077, 0o600, id='077'),
+        ],
+    )
+    def test_written_mode_follows_the_umask(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, umask: int, expected: int
+    ) -> None:
+        # mkstemp() creates 0600 regardless of the umask, so write_manifest()
+        # has to put it back on by hand. grokmirror reads the umask once at
+        # import time, so the test has to move both it and the real one.
+        monkeypatch.setattr(grokmirror, 'UMASK', umask)
+        old = os.umask(umask)
+        try:
+            manifile = str(tmp_path / 'manifest.js')
+            grokmirror.write_manifest(manifile, {'/test/one.git': {'modified': 5}})
+            assert stat.S_IMODE(os.stat(manifile).st_mode) == expected
+        finally:
+            os.umask(old)
 
     def test_pretty_manifest_is_still_readable(self, tmp_path: Path) -> None:
         manifile = str(tmp_path / 'manifest.js')

@@ -46,6 +46,14 @@ v3.0 (TBD)
 - Only treat a manifest file or URL ending in .gz as gzipped, instead of
   one containing ".gz" anywhere in its path (a plain-text manifest under
   a directory like /srv/my.gz-mirrors/ used to crash the reader)
+- Writing the manifest and projects.list no longer zeroes the process-wide
+  umask while it works, which could give any file created by another
+  thread at that moment mode 0666; the mode is also now computed
+  correctly, where a umask denying execute (0077, 0027) previously
+  produced a world-executable manifest
+- The manifest and projects.list are now swapped into place with
+  os.replace() rather than shutil.move(), which silently degrades to
+  copy-then-delete and defeats the atomicity the temporary file exists for
 - Fix grok-bundle mangling repository names that contain ".git" somewhere
   other than at the end: a repository named foo.github.io.git used to be
   bundled into a directory called "foohub.io"
