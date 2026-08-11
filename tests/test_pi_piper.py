@@ -56,6 +56,17 @@ def test_exits_promptly_without_a_pipe(tree: GrokTree, inbox: Path, config: str)
     tree.run('grok-pi-piper', '-c', str(cfgfile), str(inbox), timeout=30)
 
 
+def test_missing_config_file_is_reported(tree: GrokTree, inbox: Path) -> None:
+    # The check was `if not cfgfile:` on an os.path.expanduser() result, which
+    # -c being required already makes non-empty, so a config file that was not
+    # there parsed as an empty one and the hook exited 0 having silently piped
+    # nothing. Nobody watching a cron job would ever notice.
+    res = tree.run('grok-pi-piper', '-c', str(tree.root / 'no-such.conf'), str(inbox), expect=1)
+
+    assert 'does not exist' in res.stdout + res.stderr
+    assert not (inbox / 'pi-piper.latest').exists()
+
+
 def test_pipes_new_messages(tree: GrokTree, inbox: Path) -> None:
     # The pipe command gets each new message on stdin; collect them in a file so
     # the test can prove the hook actually ran.

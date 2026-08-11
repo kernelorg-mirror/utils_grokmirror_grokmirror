@@ -32,11 +32,10 @@ def git_get_message_from_pi(fullpath: str, commit_id: str) -> bytes:
 
 
 def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list[tuple[str, str]]:
-    statf = os.path.join(fullpath, 'pi-piper.latest')
     if pipelast:
         rev_range = f'-n {pipelast}'
     else:
-        latest = Path(statf).read_text(encoding='utf-8').strip()
+        latest = Path(fullpath, 'pi-piper.latest').read_text(encoding='utf-8').strip()
         rev_range = f'{latest}..'
 
     # Terminate each record with a NUL instead of relying on a newline. These
@@ -65,9 +64,7 @@ def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list[tuple[s
 
 
 def reshallow(repo: str, commit_id: str) -> int:
-    with open(os.path.join(repo, 'shallow'), 'w', encoding='utf-8') as fh:
-        fh.write(commit_id)
-        fh.write('\n')
+    Path(repo, 'shallow').write_text(f'{commit_id}\n', encoding='utf-8')
     logger.info('   prune: %s ', repo)
     ecode, _out, _err = grokmirror.run_git_command(repo, ['gc', '--prune=now'])
     return ecode
@@ -82,8 +79,7 @@ def init_piper_tracking(repo: str, shallow: bool) -> bool:
         return False
     # Just write latest into the tracking file and return
     latest = out.strip()
-    statf = os.path.join(repo, 'pi-piper.latest')
-    Path(statf).write_text(latest, encoding='utf-8')
+    Path(repo, 'pi-piper.latest').write_text(latest, encoding='utf-8')
     if shallow:
         reshallow(repo, latest)
     return True
@@ -98,8 +94,8 @@ def run_pi_repo(
         logger.critical('Cannot execute %s', pipedef)
         sys.exit(1)
 
-    statf = os.path.join(repo, 'pi-piper.latest')
-    if not os.path.exists(statf):
+    statf = Path(repo, 'pi-piper.latest')
+    if not statf.exists():
         if dryrun:
             logger.info('Would have set up piper for %s [DRYRUN]', repo)
             return
@@ -122,7 +118,7 @@ def run_pi_repo(
         #      This also makes it hard with shallow repos, since we'd have
         #      to unshallow them first in order to find that message.
         logger.critical('Assuming the repository got rebased, dropping all history.')
-        os.unlink(statf)
+        statf.unlink()
         if not dryrun:
             init_piper_tracking(repo, shallow)
         revlist = git_get_new_revs(repo)
@@ -153,7 +149,7 @@ def run_pi_repo(
             logger.info('Skipping %s', commit_id)
 
     if latest_good and not dryrun:
-        Path(statf).write_text(latest_good, encoding='utf-8')
+        statf.write_text(latest_good, encoding='utf-8')
         logger.info('Wrote %s', statf)
         if ecode == 0 and shallow:
             reshallow(repo, latest_good)
@@ -196,12 +192,16 @@ def command() -> None:
 
     opts = op.parse_args()
 
-    cfgfile = os.path.expanduser(opts.config)
-    if not cfgfile:
-        sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
+    # This used to test the expanded path for truthiness, which -c being a
+    # required argument already guarantees, so a config file that was not
+    # there read as an empty one and the run ended quietly at the "no pipe
+    # defined" exit below. Ask the filesystem instead.
+    cfgfile = Path(opts.config).expanduser()
+    if not cfgfile.exists():
+        sys.stderr.write(f'ERROR: File does not exist: {cfgfile}\n')
         sys.exit(1)
     config = ConfigParser(interpolation=ExtendedInterpolation())
-    config.read(os.path.expanduser(cfgfile), encoding='utf-8')
+    config.read(cfgfile, encoding='utf-8')
 
     # Find out the section that we want from the config file
     section = 'DEFAULT'

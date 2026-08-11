@@ -124,6 +124,9 @@ v3.0 (TBD)
   configured
 - Fix grok-pi-piper not actually checking that the configured pipe
   command is executable, reporting a confusing error when it was not
+- Fix grok-pi-piper silently doing nothing and exiting 0 when the
+  configuration file passed to -c does not exist; it now says so and
+  exits non-zero
 - Report a clear error instead of a traceback when the configuration file
   has no "toplevel" defined in the [core] section
 - Interrupting any of the commands with Ctrl-C is now reliable; several
