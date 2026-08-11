@@ -276,7 +276,7 @@ class GrokTree:
         # An explicitly empty section still has to exist, since the commands
         # read it, but ConfigParser drops the keys we removed above.
         target = cfgfile if cfgfile is not None else self.cfgfile
-        with open(target, 'w') as fh:
+        with open(target, 'w', encoding='utf-8') as fh:
             config.write(fh)
         return target
 

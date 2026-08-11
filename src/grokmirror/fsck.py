@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 def log_errors(fullpath: str, cmdargs: list[str], lines: list[str]) -> None:
     logger.critical('%s reports errors:', fullpath)
-    with open(os.path.join(fullpath, 'grokmirror.fsck.err'), 'w') as fh:
+    with open(os.path.join(fullpath, 'grokmirror.fsck.err'), 'w', encoding='utf-8') as fh:
         fh.write('# Date: {}\n'.format(datetime.datetime.today().strftime('%F')))  # noqa: DTZ002
         fh.write('# Cmd : git {}\n'.format(' '.join(cmdargs)))
         for count, line in enumerate(lines, start=1):
@@ -72,7 +72,7 @@ def get_blob_set(fullpath: str) -> tuple[set[tuple[str, int]], int]:
         if st.st_mtime < expage:
             os.unlink(blobcache)
     try:
-        with open(blobcache) as fh:
+        with open(blobcache, encoding='utf-8') as fh:
             while True:
                 line = fh.readline()
                 if not len(line):
@@ -93,7 +93,7 @@ def get_blob_set(fullpath: str) -> tuple[set[tuple[str, int]], int]:
     gitargs = ['cat-file', '--batch-all-objects', '--batch-check', '--unordered']
     retcode, output, _error = grokmirror.run_git_command(fullpath, gitargs)
     if retcode == 0:
-        with open(blobcache, 'w') as fh:
+        with open(blobcache, 'w', encoding='utf-8') as fh:
             fh.write('# Blobs and sizes used for sibling calculation\n')
             for line in output.split('\n'):
                 if line.find(' blob ') < 0:
@@ -247,7 +247,7 @@ def set_repo_reclone(fullpath: str, reason: str) -> None:
         logger.debug('Already requested repo reclone for %s', fullpath)
         return
 
-    Path(rfile).write_text(f'Requested by grok-fsck due to error: {reason}')
+    Path(rfile).write_text(f'Requested by grok-fsck due to error: {reason}', encoding='utf-8')
 
 
 def run_git_prune(fullpath: str, config: grokmirror.GrokConfigParser) -> bool:
@@ -548,7 +548,7 @@ def fsck_mirror(
     logger.debug('Attempting to obtain lock on %s', lockfile)
     # Deliberately not a context manager: the lock must stay held for the rest
     # of the run and is released explicitly further down.
-    flockh = open(lockfile, 'w')  # noqa: SIM115
+    flockh = open(lockfile, 'w', encoding='utf-8')  # noqa: SIM115
     try:
         lockf(flockh, LOCK_EX | LOCK_NB)
     except OSError:
@@ -577,7 +577,7 @@ def fsck_mirror(
             #    ...
             #  }
 
-            status = json.loads(Path(statusfile).read_text())
+            status = json.loads(Path(statusfile).read_text(encoding='utf-8'))
         except (OSError, ValueError):
             logger.critical('Failed to parse %s', statusfile)
             lockf(flockh, LOCK_UN)
@@ -653,7 +653,7 @@ def fsck_mirror(
 
     # record newly found repos in the status file
     logger.debug('Updating status file in %s', statusfile)
-    Path(statusfile).write_text(json.dumps(status, indent=2))
+    Path(statusfile).write_text(json.dumps(status, indent=2), encoding='utf-8')
 
     # Go through status and find all repos that need work done on them.
     # Entries are (fullpath, action, repack_level), with no level for fsck runs.
@@ -1002,7 +1002,7 @@ def fsck_mirror(
 
         # Record the latest sibling info in the tracking file
         telltale = os.path.join(obstrepo, 'grokmirror.objstore')
-        with open(telltale, 'w') as fh:
+        with open(telltale, 'w', encoding='utf-8') as fh:
             fh.write(grokmirror.OBST_PREAMBULE)
             fh.write('\n'.join(sorted(amap[obstrepo])) + '\n')
 
@@ -1028,8 +1028,8 @@ def fsck_mirror(
             l_fpf = os.path.join(obstrepo, f'grokmirror.{virtref}.fingerprint')
             r_fpf = os.path.join(childpath, 'grokmirror.fingerprint')
             try:
-                l_fp = Path(l_fpf).read_text().strip()
-                r_fp = Path(r_fpf).read_text().strip()
+                l_fp = Path(l_fpf).read_text(encoding='utf-8').strip()
+                r_fp = Path(r_fpf).read_text(encoding='utf-8').strip()
                 if l_fp == r_fp:
                     fetch = False
             except OSError:
@@ -1254,11 +1254,11 @@ def fsck_mirror(
         # Write status file after each check, so if the process dies, we won't
         # have to recheck all the repos we've already checked
         logger.debug('Updating status file in %s', statusfile)
-        Path(statusfile).write_text(json.dumps(status, indent=2))
+        Path(statusfile).write_text(json.dumps(status, indent=2), encoding='utf-8')
 
     logger.info('Processed %s repos in %0.2fs', total_checked, total_elapsed)
 
-    Path(statusfile).write_text(json.dumps(status, indent=2))
+    Path(statusfile).write_text(json.dumps(status, indent=2), encoding='utf-8')
 
     lockf(flockh, LOCK_UN)
     flockh.close()

@@ -7,6 +7,9 @@ v3.0 (TBD)
   complete and grokmirror goes idle
 - Add new command grok-pi-indexer for indexing public-inbox mirrored
   repositories
+- Read and write all text files (configs, logs, descriptions, manifests,
+  state files) as UTF-8 regardless of the system locale, so behavior no
+  longer changes under e.g. LC_ALL=C cron environments
 - Fix grok-manifest traceback when purging repositories that no longer
   exist on disk (broken since v2.0.0)
 - Fix grok-manifest not removing a repository from the manifest when it

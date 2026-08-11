@@ -119,6 +119,7 @@ extend-select = [
     "FURB103", # write-whole-file: open()+write() -> Path.write_text/write_bytes
     "FURB113", # repeated-append -> one extend()
     "I",
+    "PLW1514", # unspecified-encoding: text-mode I/O must say encoding=
 ]
 
 [tool.ruff.lint.isort]

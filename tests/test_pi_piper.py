@@ -17,7 +17,7 @@ from support import GrokTree, pi_message
 
 
 def write_piper_config(path: Path, body: str) -> Path:
-    path.write_text(body)
+    path.write_text(body, encoding='utf-8')
     return path
 
 

@@ -36,7 +36,7 @@ def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list:
     if pipelast:
         rev_range = f'-n {pipelast}'
     else:
-        latest = Path(statf).read_text().strip()
+        latest = Path(statf).read_text(encoding='utf-8').strip()
         rev_range = f'{latest}..'
 
     args = ['rev-list', '--pretty=oneline', '--reverse', rev_range, 'master']
@@ -55,7 +55,7 @@ def git_get_new_revs(fullpath: str, pipelast: int | None = None) -> list:
 
 
 def reshallow(repo: str, commit_id: str) -> int:
-    with open(os.path.join(repo, 'shallow'), 'w') as fh:
+    with open(os.path.join(repo, 'shallow'), 'w', encoding='utf-8') as fh:
         fh.write(commit_id)
         fh.write('\n')
     logger.info('   prune: %s ', repo)
@@ -73,7 +73,7 @@ def init_piper_tracking(repo: str, shallow: bool) -> bool:
     # Just write latest into the tracking file and return
     latest = out.strip()
     statf = os.path.join(repo, 'pi-piper.latest')
-    Path(statf).write_text(latest)
+    Path(statf).write_text(latest, encoding='utf-8')
     if shallow:
         reshallow(repo, latest)
     return True
@@ -145,7 +145,7 @@ def run_pi_repo(
             logger.info('Skipping %s', commit_id)
 
     if latest_good and not dryrun:
-        Path(statf).write_text(latest_good)
+        Path(statf).write_text(latest_good, encoding='utf-8')
         logger.info('Wrote %s', statf)
         if ecode == 0 and shallow:
             reshallow(repo, latest_good)
@@ -195,7 +195,7 @@ def command() -> None:
         sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
         sys.exit(1)
     config = ConfigParser(interpolation=ExtendedInterpolation())
-    config.read(os.path.expanduser(cfgfile))
+    config.read(os.path.expanduser(cfgfile), encoding='utf-8')
 
     # Find out the section that we want from the config file
     section = 'DEFAULT'

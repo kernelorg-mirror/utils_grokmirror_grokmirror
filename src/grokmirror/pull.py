@@ -553,10 +553,10 @@ def set_repo_params(fullpath: str, repoinfo: dict) -> None:
         descfile = os.path.join(fullpath, 'description')
         contents = None
         if os.path.exists(descfile):
-            contents = Path(descfile).read_text()
+            contents = Path(descfile).read_text(encoding='utf-8')
         if contents != description:
             logger.debug('Setting %s description to: %s', fullpath, description)
-            Path(descfile).write_text(description)
+            Path(descfile).write_text(description, encoding='utf-8')
 
     if owner is not None:
         logger.debug('Setting %s owner to: %s', fullpath, owner)
@@ -566,10 +566,10 @@ def set_repo_params(fullpath: str, repoinfo: dict) -> None:
         headfile = os.path.join(fullpath, 'HEAD')
         contents = None
         if os.path.exists(headfile):
-            contents = Path(headfile).read_text().rstrip()
+            contents = Path(headfile).read_text(encoding='utf-8').rstrip()
         if contents != head:
             logger.debug('Setting %s HEAD to: %s', fullpath, head)
-            Path(headfile).write_text(f'{head}\n')
+            Path(headfile).write_text(f'{head}\n', encoding='utf-8')
 
 
 def set_agefile(toplevel: str, gitdir: str, last_modified: int) -> None:
@@ -581,7 +581,7 @@ def set_agefile(toplevel: str, gitdir: str, last_modified: int) -> None:
     agefile = os.path.join(toplevel, gitdir.lstrip('/'), 'info/web/last-modified')
     if not os.path.exists(os.path.dirname(agefile)):
         os.makedirs(os.path.dirname(agefile))
-    Path(agefile).write_text(f'{cgit_fmt}\n')
+    Path(agefile).write_text(f'{cgit_fmt}\n', encoding='utf-8')
     logger.debug('Wrote "%s" into %s', cgit_fmt, agefile)
 
 
@@ -769,7 +769,7 @@ def fill_todo_from_manifest(
     else:
         r_mani_status_path = os.path.join(os.path.dirname(l_mani_path), f'.{os.path.basename(l_mani_path)}.remote')
         try:
-            r_mani_status = json.loads(Path(r_mani_status_path).read_text())
+            r_mani_status = json.loads(Path(r_mani_status_path).read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             logger.debug('Could not read %s', r_mani_status_path)
             r_mani_status = {}
@@ -858,7 +858,7 @@ def fill_todo_from_manifest(
                 raise OSError(f'Failed to parse {r_mani_url} ({ex})')
 
         # Record for the next run
-        with open(r_mani_status_path, 'w') as fh:
+        with open(r_mani_status_path, 'w', encoding='utf-8') as fh:
             r_mani_status = {
                 'source': r_mani_url,
                 'last-fetched': r_last_modified,
@@ -914,7 +914,7 @@ def fill_todo_from_manifest(
             if os.path.exists(rfile):
                 logger.debug('Reclone requested for %s:', gitdir)
                 q_mani.put((gitdir, repoinfo, 'reclone'))
-                reason = Path(rfile).read_text()
+                reason = Path(rfile).read_text(encoding='utf-8')
                 logger.debug('  %s', reason)
                 continue
 

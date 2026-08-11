@@ -91,7 +91,7 @@ class PubsubListener:
             resp.text = 'Invalid project name\n'
             return
         config = ConfigParser(interpolation=ExtendedInterpolation())
-        config.read(cfgfile)
+        config.read(cfgfile, encoding='utf-8')
         sockfile = config['pull'].get('socket') if 'pull' in config else None
         if not sockfile:
             resp.status = falcon.HTTP_500

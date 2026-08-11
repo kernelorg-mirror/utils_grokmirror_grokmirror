@@ -192,7 +192,7 @@ def lock_repo(fullpath: str, nonblocking: bool = False) -> None:
     logger.debug('Attempting to exclusive-lock %s', repolock)
     # Deliberately not a context manager: the handle is stashed in REPO_LOCKH
     # and released by unlock_repo().
-    lockfh = open(repolock, 'w')  # noqa: SIM115
+    lockfh = open(repolock, 'w', encoding='utf-8')  # noqa: SIM115
 
     if nonblocking:
         flags = LOCK_EX | LOCK_NB
@@ -252,7 +252,7 @@ def set_repo_timestamp(toplevel: str, gitdir: str, ts: int) -> None:
     tsfile = os.path.join(fullpath, 'grokmirror.timestamp')
 
     # int() keeps the truncating behaviour the old '%d' formatting had
-    pathlib.Path(tsfile).write_text(f'{int(ts)}')
+    pathlib.Path(tsfile).write_text(f'{int(ts)}', encoding='utf-8')
 
     logger.debug('Recorded timestamp for %s: %s', gitdir, ts)
 
@@ -305,7 +305,7 @@ def get_repo_defs(toplevel: str, gitdir: str, usenow: bool = False, ignorerefs: 
 
     head = None
     try:
-        head = pathlib.Path(fullpath, 'HEAD').read_text().strip()
+        head = pathlib.Path(fullpath, 'HEAD').read_text(encoding='utf-8').strip()
     except OSError:
         pass
 
@@ -343,7 +343,7 @@ def get_altrepo(fullpath: str) -> str | None:
     altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
     altdir = None
     try:
-        contents = pathlib.Path(altfile).read_text().strip()
+        contents = pathlib.Path(altfile).read_text(encoding='utf-8').strip()
         if len(contents) > 8 and contents[-8:] == '/objects':
             altdir = os.path.realpath(contents[:-8])
     except OSError:
@@ -357,7 +357,7 @@ def set_altrepo(fullpath: str, altdir: str) -> None:
     altfile = os.path.join(fullpath, 'objects', 'info', 'alternates')
     objpath = os.path.join(altdir, 'objects')
     if os.path.isdir(objpath):
-        pathlib.Path(altfile).write_text(objpath + '\n')
+        pathlib.Path(altfile).write_text(objpath + '\n', encoding='utf-8')
     else:
         logger.critical('objdir %s does not exist, not setting alternates file %s', objpath, altfile)
 
@@ -388,7 +388,7 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
         return None
     rfile = os.path.join(fullpath, 'grokmirror.roots')
     if not force and os.path.exists(rfile):
-        content = pathlib.Path(rfile).read_text()
+        content = pathlib.Path(rfile).read_text(encoding='utf-8')
         roots = set(content.split('\n'))
     else:
         logger.debug('Generating roots for %s', fullpath)
@@ -402,7 +402,7 @@ def get_repo_roots(fullpath: str, force: bool = False) -> set[str] | None:
             return None
 
         # save it for future use
-        pathlib.Path(rfile).write_text(out)
+        pathlib.Path(rfile).write_text(out, encoding='utf-8')
         logger.debug('Wrote %s', rfile)
         roots = set(out.split('\n'))
 
@@ -448,7 +448,7 @@ def setup_objstore_repo(obstdir: str, name: str | None = None) -> str:
     set_git_config(obstrepo, 'repack.writeBitmaps', 'true')
     set_git_config(obstrepo, 'pack.island', 'refs/virtual/([0-9a-f]+)/', operation='--add')
     telltale = os.path.join(obstrepo, 'grokmirror.objstore')
-    pathlib.Path(telltale).write_text(OBST_PREAMBULE)
+    pathlib.Path(telltale).write_text(OBST_PREAMBULE, encoding='utf-8')
     unlock_repo(obstrepo)
     return obstrepo
 
@@ -540,7 +540,7 @@ def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
     telltale = os.path.join(obstrepo, 'grokmirror.objstore')
     knownsiblings = set()
     if os.path.exists(telltale):
-        with open(telltale) as fh:
+        with open(telltale, encoding='utf-8') as fh:
             for line in fh:
                 line = line.strip()
                 if not len(line) or line[0] == '#':
@@ -548,7 +548,7 @@ def add_repo_to_objstore(obstrepo: str, fullpath: str) -> bool:
                 if os.path.isdir(line):
                     knownsiblings.add(line)
     knownsiblings.add(fullpath)
-    with open(telltale, 'w') as fh:
+    with open(telltale, 'w', encoding='utf-8') as fh:
         fh.write(OBST_PREAMBULE)
         fh.write('\n'.join(sorted(knownsiblings)) + '\n')
 
@@ -822,7 +822,7 @@ def get_repo_fingerprint(
 
     fpfile = os.path.join(fullpath, 'grokmirror.fingerprint')
     if not force and os.path.exists(fpfile):
-        fingerprint = pathlib.Path(fpfile).read_text()
+        fingerprint = pathlib.Path(fpfile).read_text(encoding='utf-8')
         logger.debug('Fingerprint for %s: %s', gitdir, fingerprint)
     else:
         logger.debug('Generating fingerprint for %s', gitdir)
@@ -870,7 +870,7 @@ def set_repo_fingerprint(toplevel: str, gitdir: str, fingerprint: str | None = N
             logger.debug('No fingerprint to record for %s', gitdir)
             return None
 
-    pathlib.Path(fpfile).write_text(fingerprint)
+    pathlib.Path(fpfile).write_text(fingerprint, encoding='utf-8')
 
     logger.debug('Recorded fingerprint for %s: %s', gitdir, fingerprint)
     return fingerprint
@@ -976,7 +976,7 @@ def manifest_lock(manifile: str) -> None:
 
     manilock = _lockname(manifile)
     # Deliberately not a context manager: released by manifest_unlock().
-    MANIFEST_LOCKH = open(manilock, 'w')  # noqa: SIM115
+    MANIFEST_LOCKH = open(manilock, 'w', encoding='utf-8')  # noqa: SIM115
     logger.debug('Attempting to lock %s', manilock)
     lockf(MANIFEST_LOCKH, LOCK_EX)
     logger.debug('Manifest lock obtained')
@@ -1014,8 +1014,8 @@ def read_manifest(manifile: str, wait: bool = False) -> dict:
     opener = gzip.open if manifile.find('.gz') > 0 else open
 
     logger.debug('Reading %s', manifile)
-    with opener(manifile, 'rb') as fh:
-        jdata = fh.read().decode('utf-8')
+    with opener(manifile, 'rt', encoding='utf-8') as fh:
+        jdata = fh.read()
 
     try:
         manifest = json.loads(jdata)
@@ -1080,7 +1080,7 @@ def load_config_file(cfgfile: str) -> GrokConfigParser:
         sys.stderr.write(f'ERORR: File does not exist: {cfgfile}\n')
         sys.exit(1)
     config = GrokConfigParser(interpolation=ExtendedInterpolation())
-    config.read(cfgfile)
+    config.read(cfgfile, encoding='utf-8')
 
     if 'core' not in config:
         sys.stderr.write(f'ERROR: Section [core] must exist in: {cfgfile}\n')
@@ -1182,7 +1182,7 @@ def init_logger(subcommand: str, logfile: str | None, loglevel: int, verbose: bo
     logger.setLevel(logging.DEBUG)
 
     if logfile:
-        fh = logging.handlers.WatchedFileHandler(os.path.expanduser(logfile))
+        fh = logging.handlers.WatchedFileHandler(os.path.expanduser(logfile), encoding='utf-8')
         formatter = logging.Formatter(subcommand + '[%(process)d] %(asctime)s - %(levelname)s - %(message)s')
         fh.setFormatter(formatter)
         fh.setLevel(loglevel)

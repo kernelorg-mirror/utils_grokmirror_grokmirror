@@ -217,6 +217,6 @@ class TestReadManifest:
         grokmirror.write_manifest(manifile, manifest, pretty=True)
         assert grokmirror.read_manifest(manifile) == manifest
         # Pretty means sorted and indented, which is the point of the option.
-        text = Path(manifile).read_text()
+        text = Path(manifile).read_text(encoding='utf-8')
         assert text.index('/test/one.git') < text.index('/test/two.git')
         assert '\n ' in text
