@@ -1,6 +1,8 @@
 #
 # A hook to properly initialize and index mirrored public-inbox repositories.
 
+from __future__ import annotations
+
 import argparse
 import contextlib
 import logging
@@ -61,6 +63,113 @@ def index_pi_inbox(fullpath: str, opts: argparse.Namespace) -> bool:
     return success
 
 
+def parse_origins_config(
+    origins: str, inboxname: str, boosts: list[str], extra_cfgopts: str | None
+) -> tuple[str, str | None, str | None, list[str], list[tuple[str, str]]] | None:
+    """Parse a public-inbox origins config sample into init_pi_inbox()'s fields.
+
+    Returns (description, newsgroup, listid, addresses, extraopts), with the
+    inboxname-based defaults for description/addresses already applied, or
+    None if a config line is malformed (already logged as critical).
+    """
+    extraopts = []
+    acceptopts = {'listid'}
+    if extra_cfgopts:
+        acceptopts.update(extra_cfgopts.split(','))
+    description = None
+    newsgroup = None
+    listid = None
+    addresses = []
+    for rawline in origins.splitlines():
+        line = rawline.strip()
+        if not line or line.startswith((';', '#', '[publicinbox')):
+            continue
+        try:
+            opt, val = line.split('=', maxsplit=1)
+            opt = opt.strip()
+            val = val.strip()
+            if opt == 'address':
+                addresses.append(val)
+                continue
+            if opt == 'description':
+                description = val
+                continue
+            if opt == 'newsgroup':
+                newsgroup = val
+                continue
+            if opt == 'listid' and boosts:
+                listid = val
+                # Calculate the boost value
+                boostval = 1
+                for patt in boosts:
+                    if fnmatch(val, patt):
+                        boostval = boosts.index(patt) + 10
+                        break
+                extraopts.append(('boost', str(boostval)))
+
+            if opt in acceptopts:
+                logger.debug('Accepting extra opt %s=%s', opt, val)
+                extraopts.append((opt, val))
+
+        except ValueError:
+            logger.critical('Invalid config line: %s', line)
+            return None
+
+    if not addresses:
+        addresses = [f'{inboxname}@localhost']
+    if not description:
+        description = f'{listid or inboxname} archive mirror'
+
+    return description, newsgroup, listid, addresses, extraopts
+
+
+def run_public_inbox_init(
+    gdir: str,
+    pdir: str,
+    inboxname: str,
+    local_url: str,
+    newsgroup: str | None,
+    extraopts: list[tuple[str, str]],
+    addresses: list[str],
+    description: str,
+    opts: argparse.Namespace,
+) -> bool:
+    """Run public-inbox-init and write the description file.
+
+    If pdir is separate from gdir, also lays down the pdir/git symlink that
+    public-inbox databases kept apart from the main git trees rely on.
+    """
+    if gdir != pdir:
+        # public-inbox databases are separate from the main git trees
+        Path(pdir).mkdir(parents=True, exist_ok=True)
+        # Symlink the git subpath
+        gitlink = Path(pdir, 'git')
+        if not gitlink.is_symlink():
+            gitlink.symlink_to(Path(gdir, 'git'))
+
+    piargs = ['public-inbox-init', '-V2', '-L', opts.indexlevel]
+    if newsgroup:
+        piargs += ['--ng', newsgroup]
+    for opt, val in extraopts:
+        piargs += ['-c', f'{opt}={val}']
+    piargs += [inboxname, pdir, local_url]
+    piargs += addresses
+    logger.debug('piargs=%s', piargs)
+
+    env = {**os.environ, 'PI_CONFIG': opts.piconfig}
+    try:
+        ec, _out, err = grokmirror.run_shell_command(piargs, env=env)
+        if ec > 0:
+            logger.critical('Unable to init public-inbox repo %s: %s', pdir, err)
+            return False
+    except Exception as ex:  # noqa
+        logger.critical('Unable to init public-inbox repo %s: %s', pdir, ex)
+        return False
+
+    Path(pdir, 'description').write_text(description, encoding='utf-8')
+    return True
+
+
 def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argparse.Namespace) -> bool:
     # for boost values, we look at the number of entries
     boosts = []
@@ -80,7 +189,7 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
         for subrepo in reversed(pi_repos):
             stack.enter_context(grokmirror.locked_repo(subrepo))
             if not origins:
-                ec, out, err = grokmirror.run_git_command(subrepo, gitargs)
+                _ec, out, _err = grokmirror.run_git_command(subrepo, gitargs)
                 if out:
                     origins = out
         inboxname = Path(gdir).name
@@ -99,95 +208,19 @@ def init_pi_inbox(ses: grokmirror.GrokSession, gdir: str, pdir: str, opts: argpa
                 success = False
 
         if origins:
-            # Okay, let's process it
-            # Generate a config entry
-            if opts.local_toplevel:
-                local_toplevel = opts.local_toplevel.rstrip('/')
-                local_url = f'{local_toplevel}/{inboxname}'
+            parsed = parse_origins_config(origins, inboxname, boosts, opts.extra_cfgopts)
+            if parsed is None:
+                success = False
             else:
-                local_url = inboxname
-            extraopts = []
-            acceptopts = {'listid'}
-            if opts.extra_cfgopts:
-                acceptopts.update(opts.extra_cfgopts.split(','))
-            description = None
-            newsgroup = None
-            listid = None
-            addresses = []
-            for rawline in origins.splitlines():
-                line = rawline.strip()
-                if not line or line.startswith((';', '#', '[publicinbox')):
-                    continue
-                try:
-                    opt, val = line.split('=', maxsplit=1)
-                    opt = opt.strip()
-                    val = val.strip()
-                    if opt == 'address':
-                        addresses.append(val)
-                        continue
-                    if opt == 'description':
-                        description = val
-                        continue
-                    if opt == 'newsgroup':
-                        newsgroup = val
-                        continue
-                    if opt == 'listid' and boosts:
-                        listid = val
-                        # Calculate the boost value
-                        boostval = 1
-                        for patt in boosts:
-                            if fnmatch(val, patt):
-                                boostval = boosts.index(patt) + 10
-                                break
-                        extraopts.append(('boost', str(boostval)))
-
-                    if opt in acceptopts:
-                        logger.debug('Accepting extra opt %s=%s', opt, val)
-                        extraopts.append((opt, val))
-
-                except ValueError:
-                    logger.critical('Invalid config line: %s', line)
-                    success = False
-
-                if not success:
-                    break
-
-            if not addresses:
-                addresses = [f'{inboxname}@localhost']
-            if not description:
-                description = f'{listid or inboxname} archive mirror'
-
-            if success:
-                if gdir != pdir:
-                    # public-inbox databases are separate from the main git trees
-                    Path(pdir).mkdir(parents=True, exist_ok=True)
-                    # Symlink the git subpath
-                    gitlink = Path(pdir, 'git')
-                    if not gitlink.is_symlink():
-                        gitlink.symlink_to(Path(gdir, 'git'))
-
-                # Now we run public-inbox-init
-                piargs = ['public-inbox-init', '-V2', '-L', opts.indexlevel]
-                if newsgroup:
-                    piargs += ['--ng', newsgroup]
-                for opt, val in extraopts:
-                    piargs += ['-c', f'{opt}={val}']
-                piargs += [inboxname, pdir, local_url]
-                piargs += addresses
-                logger.debug('piargs=%s', piargs)
-
-                env = {**os.environ, 'PI_CONFIG': opts.piconfig}
-                try:
-                    ec, out, err = grokmirror.run_shell_command(piargs, env=env)
-                    if ec > 0:
-                        logger.critical('Unable to init public-inbox repo %s: %s', pdir, err)
-                        success = False
-                except Exception as ex:  # noqa
-                    logger.critical('Unable to init public-inbox repo %s: %s', pdir, ex)
-                    success = False
-
-            if success:
-                Path(pdir, 'description').write_text(description, encoding='utf-8')
+                description, newsgroup, _listid, addresses, extraopts = parsed
+                if opts.local_toplevel:
+                    local_toplevel = opts.local_toplevel.rstrip('/')
+                    local_url = f'{local_toplevel}/{inboxname}'
+                else:
+                    local_url = inboxname
+                success = run_public_inbox_init(
+                    gdir, pdir, inboxname, local_url, newsgroup, extraopts, addresses, description, opts
+                )
 
     return success
 
