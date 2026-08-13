@@ -88,6 +88,64 @@ def test_mirror_purges_removed_repos(origin: GrokTree, tree: GrokTree) -> None:
     assert not tree.path('test/two.git').exists()
 
 
+def test_purgeprotect_refuses_large_deletions(origin: GrokTree, tree: GrokTree) -> None:
+    # purgeprotect defaults to 5%: losing one of two repos is 50%, well past
+    # that, so without --force-purge the deletion is refused and logged, not
+    # silently applied.
+    origin.add_repo('test/one.git')
+    origin.add_repo('test/two.git', source='beta')
+    origin.run_manifest()
+    tree.write_mirror_config(origin)
+    tree.run_pull()
+
+    shutil.rmtree(origin.path('test/two.git'))
+    origin.run_manifest('-p')
+
+    tree.run_pull('-n', '-p')
+
+    assert tree.path('test/one.git').is_dir()
+    assert tree.path('test/two.git').is_dir()
+    assert 'Refusing to purge' in tree.log_text()
+
+
+def test_purgeprotect_never_purges_ffonly_repos(origin: GrokTree, tree: GrokTree) -> None:
+    # ffonly repos are never purged, even with --force-purge overriding the
+    # percentage protection above.
+    origin.add_repo('test/one.git')
+    origin.add_repo('test/two.git', source='beta')
+    origin.run_manifest()
+    tree.write_mirror_config(origin, {'pull': {'ffonly': '/test/two.git'}})
+    tree.run_pull()
+
+    shutil.rmtree(origin.path('test/two.git'))
+    origin.run_manifest('-p')
+
+    tree.run_pull('-n', '-p', '--force-purge')
+
+    assert tree.path('test/one.git').is_dir()
+    assert tree.path('test/two.git').is_dir()
+    assert 'Refusing to purge ffonly repo' in tree.log_text()
+
+
+def test_purgeprotect_respects_nopurge_glob(origin: GrokTree, tree: GrokTree) -> None:
+    # nopurge is the quiet counterpart to ffonly: matching repos are excluded
+    # from to_purge with no complaint logged, so a wildcard covering most of
+    # the tree doesn't also trip the percentage protection.
+    origin.add_repo('test/one.git')
+    origin.add_repo('test/two.git', source='beta')
+    origin.run_manifest()
+    tree.write_mirror_config(origin, {'pull': {'nopurge': '/test/two.git'}})
+    tree.run_pull()
+
+    shutil.rmtree(origin.path('test/two.git'))
+    origin.run_manifest('-p')
+
+    tree.run_pull('-n', '-p', '--force-purge')
+
+    assert tree.path('test/one.git').is_dir()
+    assert tree.path('test/two.git').is_dir()
+
+
 def test_fsck_migrates_forks_into_objstore(tree: GrokTree) -> None:
     # Two repositories sharing a root commit are forks as far as grokmirror is
     # concerned, and get merged into one objstore repository they both use as an

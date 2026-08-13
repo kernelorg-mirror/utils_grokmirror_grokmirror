@@ -748,15 +748,17 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirro
     logger.info(' projlist: wrote %s', plpath)
 
 
-def fill_todo_from_manifest(
+def fetch_remote_manifest(
     ses: grokmirror.GrokSession,
     config: grokmirror.GrokConfigParser,
-    q_mani: queue.Queue[ManiItem],
     nomtime: bool = False,
-    forcepurge: bool = False,
-) -> None:
-    # l_ = local, r_ = remote
-    l_mani_path = config['core']['manifest']
+) -> grokmirror.Manifest | None:
+    """Fetch the remote manifest, or None if it's unchanged since last time.
+
+    Covers both ways of getting it: running manifest_command, or fetching the
+    manifest URL (a local file:// or over HTTP, using If-Modified-Since/mtime
+    to skip the work when nothing changed).
+    """
     r_mani_cmd = config['remote'].get('manifest_command')
 
     if r_mani_cmd:
@@ -779,120 +781,202 @@ def fill_todo_from_manifest(
                 raise grokmirror.GrokManifestError(f'Failed to parse output from {r_mani_cmd} ({ex})') from ex
         elif ecode == 127:
             logger.info(' manifest: unchanged')
-            return
+            return None
         elif ecode == 1:
             logger.warning('Executing %s failed with exit code %s, exiting', r_mani_cmd, ecode)
             raise grokmirror.GrokManifestError(f'Failed executing {r_mani_cmd}')
         else:
             # Non-fatal errors for all other exit codes
             logger.warning(' manifest: executing %s returned %s', r_mani_cmd, ecode)
-            return
+            return None
 
         if not r_manifest:
             logger.warning(' manifest: empty, ignoring')
             raise grokmirror.GrokManifestError(f'Empty manifest returned by {r_mani_cmd}')
 
-    else:
-        l_mani_file = Path(l_mani_path)
-        r_mani_status_path = l_mani_file.parent / f'.{l_mani_file.name}.remote'
-        try:
-            r_mani_status = json.loads(r_mani_status_path.read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError):
-            logger.debug('Could not read %s', r_mani_status_path)
-            r_mani_status = {}
-        r_last_fetched = r_mani_status.get('last-fetched', 0)
-        config_last_modified = r_mani_status.get('config-last-modified', 0)
-        if config_last_modified != config.last_modified:
-            nomtime = True
-        # No manifest_command, so pull_mirror() made sure we have a manifest URL
-        r_mani_url = config['remote']['manifest']
-        logger.info(' manifest: fetching %s', r_mani_url)
-        if r_mani_url.startswith('file:///'):
-            r_mani_url = r_mani_url.removeprefix('file://')
-            if not Path(r_mani_url).exists():
-                logger.critical('Remote manifest not found in %s! Quitting!', r_mani_url)
-                raise grokmirror.GrokManifestError(f'Remote manifest not found in {r_mani_url}')
+        return cast('grokmirror.Manifest', r_manifest)
 
-            fstat = Path(r_mani_url).stat()
-            r_last_modified = fstat[8]
-            if r_last_fetched:
-                logger.debug('mtime on %s is: %s', r_mani_url, fstat[8])
-                if not nomtime and r_last_modified <= r_last_fetched:
-                    logger.info(' manifest: unchanged')
-                    return
+    l_mani_path = config['core']['manifest']
+    l_mani_file = Path(l_mani_path)
+    r_mani_status_path = l_mani_file.parent / f'.{l_mani_file.name}.remote'
+    try:
+        r_mani_status = json.loads(r_mani_status_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        logger.debug('Could not read %s', r_mani_status_path)
+        r_mani_status = {}
+    r_last_fetched = r_mani_status.get('last-fetched', 0)
+    config_last_modified = r_mani_status.get('config-last-modified', 0)
+    if config_last_modified != config.last_modified:
+        nomtime = True
+    # No manifest_command, so pull_mirror() made sure we have a manifest URL
+    r_mani_url = config['remote']['manifest']
+    logger.info(' manifest: fetching %s', r_mani_url)
+    if r_mani_url.startswith('file:///'):
+        r_mani_url = r_mani_url.removeprefix('file://')
+        if not Path(r_mani_url).exists():
+            logger.critical('Remote manifest not found in %s! Quitting!', r_mani_url)
+            raise grokmirror.GrokManifestError(f'Remote manifest not found in {r_mani_url}')
 
-            logger.info('Reading new manifest from %s', r_mani_url)
-            r_manifest = grokmirror.read_manifest(r_mani_url)
-            # Don't accept empty manifests -- that indicates something is wrong
-            if not r_manifest:
-                logger.warning('Remote manifest empty or unparseable! Quitting.')
-                raise grokmirror.GrokManifestError(f'Empty manifest in {r_mani_url}')
-
-        else:
-            session = ses.get_requests_session()
-
-            # Find out if we need to run at all first
-            headers = {}
-            if r_last_fetched and not nomtime:
-                last_modified_h = time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime(r_last_fetched))
-                logger.debug('Our last-modified is: %s', last_modified_h)
-                headers['If-Modified-Since'] = last_modified_h
-
-            try:
-                # 30 seconds to connect, 5 minutes between reads
-                res = session.get(r_mani_url, headers=headers, timeout=(30, 300))
-            except requests.exceptions.RequestException as ex:
-                logger.warning('Could not fetch %s', r_mani_url)
-                logger.warning('Server returned: %s', ex)
-                raise grokmirror.GrokManifestError(f'Remote server returned an error: {ex}') from ex
-
-            if res.status_code == 304:
-                # No change to the manifest, nothing to do
+        fstat = Path(r_mani_url).stat()
+        r_last_modified = fstat[8]
+        if r_last_fetched:
+            logger.debug('mtime on %s is: %s', r_mani_url, fstat[8])
+            if not nomtime and r_last_modified <= r_last_fetched:
                 logger.info(' manifest: unchanged')
-                return
+                return None
 
-            if res.status_code > 200:
-                logger.warning('Could not fetch %s', r_mani_url)
-                logger.warning('Server returned status: %s', res.status_code)
-                raise grokmirror.GrokManifestError(f'Remote server returned an error: {res.status_code}')
+        logger.info('Reading new manifest from %s', r_mani_url)
+        r_manifest = grokmirror.read_manifest(r_mani_url)
+        # Don't accept empty manifests -- that indicates something is wrong
+        if not r_manifest:
+            logger.warning('Remote manifest empty or unparseable! Quitting.')
+            raise grokmirror.GrokManifestError(f'Empty manifest in {r_mani_url}')
 
-            r_mtime = time.strptime(res.headers['Last-Modified'], '%a, %d %b %Y %H:%M:%S %Z')
-            r_last_modified = calendar.timegm(r_mtime)
+    else:
+        session = ses.get_requests_session()
 
-            # We don't use read_manifest for the remote manifest, as it can be
-            # anything, really. For now, blindly open it with gzipfile if it ends
-            # with .gz. XXX: some http servers will auto-deflate such files.
-            jdata: str | bytes
-            try:
-                if r_mani_url.endswith('.gz'):
-                    with gzip.GzipFile(fileobj=io.BytesIO(res.content)) as gzfh:
-                        jdata = gzfh.read().decode()
-                else:
-                    jdata = res.content
+        # Find out if we need to run at all first
+        headers = {}
+        if r_last_fetched and not nomtime:
+            last_modified_h = time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.gmtime(r_last_fetched))
+            logger.debug('Our last-modified is: %s', last_modified_h)
+            headers['If-Modified-Since'] = last_modified_h
 
-                res.close()
-                # Don't hold the session open, since we don't refetch the
-                # manifest very frequently. The session object forgets the
-                # closed requests.Session, so a later call starts a fresh one.
-                ses.close_requests_session()
-                r_manifest = json.loads(jdata)
+        try:
+            # 30 seconds to connect, 5 minutes between reads
+            res = session.get(r_mani_url, headers=headers, timeout=(30, 300))
+        except requests.exceptions.RequestException as ex:
+            logger.warning('Could not fetch %s', r_mani_url)
+            logger.warning('Server returned: %s', ex)
+            raise grokmirror.GrokManifestError(f'Remote server returned an error: {ex}') from ex
 
-            # Deliberately broad: anything at all going wrong while fetching or
-            # decoding the manifest is reported as a single error below.
-            except Exception as ex:
-                logger.warning('Failed to parse %s', r_mani_url)
-                logger.warning('Error was: %s', ex)
-                raise grokmirror.GrokManifestError(f'Failed to parse {r_mani_url} ({ex})') from ex
+        if res.status_code == 304:
+            # No change to the manifest, nothing to do
+            logger.info(' manifest: unchanged')
+            return None
 
-        # Record for the next run
-        with r_mani_status_path.open('w', encoding='utf-8') as fh:
-            r_mani_status = {
-                'source': r_mani_url,
-                'last-fetched': r_last_modified,
-                'config-last-modified': config.last_modified,
-            }
-            json.dump(r_mani_status, fh)
+        if res.status_code > 200:
+            logger.warning('Could not fetch %s', r_mani_url)
+            logger.warning('Server returned status: %s', res.status_code)
+            raise grokmirror.GrokManifestError(f'Remote server returned an error: {res.status_code}')
 
+        r_mtime = time.strptime(res.headers['Last-Modified'], '%a, %d %b %Y %H:%M:%S %Z')
+        r_last_modified = calendar.timegm(r_mtime)
+
+        # We don't use read_manifest for the remote manifest, as it can be
+        # anything, really. For now, blindly open it with gzipfile if it ends
+        # with .gz. XXX: some http servers will auto-deflate such files.
+        jdata: str | bytes
+        try:
+            if r_mani_url.endswith('.gz'):
+                with gzip.GzipFile(fileobj=io.BytesIO(res.content)) as gzfh:
+                    jdata = gzfh.read().decode()
+            else:
+                jdata = res.content
+
+            res.close()
+            # Don't hold the session open, since we don't refetch the
+            # manifest very frequently. The session object forgets the
+            # closed requests.Session, so a later call starts a fresh one.
+            ses.close_requests_session()
+            r_manifest = json.loads(jdata)
+
+        # Deliberately broad: anything at all going wrong while fetching or
+        # decoding the manifest is reported as a single error below.
+        except Exception as ex:
+            logger.warning('Failed to parse %s', r_mani_url)
+            logger.warning('Error was: %s', ex)
+            raise grokmirror.GrokManifestError(f'Failed to parse {r_mani_url} ({ex})') from ex
+
+    # Record for the next run
+    with r_mani_status_path.open('w', encoding='utf-8') as fh:
+        r_mani_status = {
+            'source': r_mani_url,
+            'last-fetched': r_last_modified,
+            'config-last-modified': config.last_modified,
+        }
+        json.dump(r_mani_status, fh)
+
+    return cast('grokmirror.Manifest', r_manifest)
+
+
+def purge_stale_repos(
+    ses: grokmirror.GrokSession,
+    config: grokmirror.GrokConfigParser,
+    toplevel: str,
+    r_culled: grokmirror.Manifest,
+    all_symlinks: set[str],
+    forcepurge: bool,
+    q_mani: queue.Queue[ManiItem],
+) -> None:
+    """Queue for purging any repo on disk that the remote manifest no longer lists.
+
+    Two protections apply first: ffonly repos are never purged, no matter
+    what, and purgeprotect refuses the whole batch (unless overridden with
+    forcepurge) when the deletions are a large enough fraction of the tree to
+    look like a mistake rather than a deliberate cleanup.
+    """
+    if not config['pull'].getboolean('purge', False):
+        return
+
+    nopurgematch = grokmirror.compile_globs(config['pull'].get('nopurge', '').splitlines())
+    ffonlymatch = grokmirror.compile_globs(config['pull'].get('ffonly', '').splitlines())
+    to_purge = set()
+    found_repos = 0
+    for founddir in ses.find_all_gitdirs(toplevel, exclude_objstore=True):
+        gitdir = grokmirror.fullpath_to_gitdir(toplevel, founddir)
+        found_repos += 1
+
+        if gitdir not in r_culled and gitdir not in all_symlinks:
+            # Refuse to purge ffonly repos
+            if ffonlymatch.match(gitdir):
+                # Woah, these are not supposed to be deleted, ever
+                logger.critical('Refusing to purge ffonly repo %s', gitdir)
+            elif not nopurgematch.match(gitdir):
+                logger.debug('Adding %s to to_purge', gitdir)
+                to_purge.add(gitdir)
+
+    if not to_purge:
+        logger.debug('No repositories need purging')
+        return
+
+    # Purge-protection engage
+    purge_limit = int(config['pull'].getint('purgeprotect', 5))
+    if purge_limit < 1 or purge_limit > 99:
+        logger.critical('Warning: "%s" is not valid for purgeprotect.', purge_limit)
+        logger.critical('Please set to a number between 1 and 99.')
+        logger.critical('Defaulting to purgeprotect=5.')
+        purge_limit = 5
+
+    purge_pc = int(len(to_purge) * 100 / found_repos)
+    logger.debug('purgeprotect=%s', purge_limit)
+    logger.debug('purge prercentage=%s', purge_pc)
+
+    if not forcepurge and purge_pc >= purge_limit:
+        logger.critical('Refusing to purge %s repos (%s%%)', len(to_purge), purge_pc)
+        logger.critical('Set purgeprotect to a higher percentage, or override with --force-purge.')
+        return
+
+    for gitdir in to_purge:
+        logger.debug('Queued %s for purging', gitdir)
+        # An empty entry: there is nothing left on disk to describe, and a
+        # purge only ever needs the path.
+        q_mani.put((gitdir, {}, 'purge'))
+
+
+def fill_todo_from_manifest(
+    ses: grokmirror.GrokSession,
+    config: grokmirror.GrokConfigParser,
+    q_mani: queue.Queue[ManiItem],
+    nomtime: bool = False,
+    forcepurge: bool = False,
+) -> None:
+    r_manifest = fetch_remote_manifest(ses, config, nomtime)
+    if r_manifest is None:
+        return
+
+    # l_ = local, r_ = remote
+    l_mani_path = config['core']['manifest']
     l_manifest = grokmirror.read_manifest(l_mani_path)
     r_culled = cull_manifest(r_manifest, config)
     logger.info(' manifest: %s relevant entries', len(r_culled))
@@ -1036,48 +1120,7 @@ def fill_todo_from_manifest(
         # Finally, clone ourselves.
         q_mani.put((gitdir, repoinfo, 'init'))
 
-    if config['pull'].getboolean('purge', False):
-        nopurgematch = grokmirror.compile_globs(config['pull'].get('nopurge', '').splitlines())
-        ffonlymatch = grokmirror.compile_globs(config['pull'].get('ffonly', '').splitlines())
-        to_purge = set()
-        found_repos = 0
-        for founddir in ses.find_all_gitdirs(toplevel, exclude_objstore=True):
-            gitdir = grokmirror.fullpath_to_gitdir(toplevel, founddir)
-            found_repos += 1
-
-            if gitdir not in r_culled and gitdir not in all_symlinks:
-                # Refuse to purge ffonly repos
-                if ffonlymatch.match(gitdir):
-                    # Woah, these are not supposed to be deleted, ever
-                    logger.critical('Refusing to purge ffonly repo %s', gitdir)
-                elif not nopurgematch.match(gitdir):
-                    logger.debug('Adding %s to to_purge', gitdir)
-                    to_purge.add(gitdir)
-
-        if to_purge:
-            # Purge-protection engage
-            purge_limit = int(config['pull'].getint('purgeprotect', 5))
-            if purge_limit < 1 or purge_limit > 99:
-                logger.critical('Warning: "%s" is not valid for purgeprotect.', purge_limit)
-                logger.critical('Please set to a number between 1 and 99.')
-                logger.critical('Defaulting to purgeprotect=5.')
-                purge_limit = 5
-
-            purge_pc = int(len(to_purge) * 100 / found_repos)
-            logger.debug('purgeprotect=%s', purge_limit)
-            logger.debug('purge prercentage=%s', purge_pc)
-
-            if not forcepurge and purge_pc >= purge_limit:
-                logger.critical('Refusing to purge %s repos (%s%%)', len(to_purge), purge_pc)
-                logger.critical('Set purgeprotect to a higher percentage, or override with --force-purge.')
-            else:
-                for gitdir in to_purge:
-                    logger.debug('Queued %s for purging', gitdir)
-                    # An empty entry: there is nothing left on disk to describe,
-                    # and a purge only ever needs the path.
-                    q_mani.put((gitdir, {}, 'purge'))
-        else:
-            logger.debug('No repositories need purging')
+    purge_stale_repos(ses, config, toplevel, r_culled, all_symlinks, forcepurge, q_mani)
 
 
 def update_manifest(config: grokmirror.GrokConfigParser, entries: list[DoneItem]) -> None:
