@@ -1207,20 +1207,57 @@ def manifest_worker(
         logger.info(' manifest: sleeping %ss', left)
 
 
+def validate_pull_config(config: grokmirror.GrokConfigParser) -> bool:
+    """Check that [remote] is complete enough for pull_mirror() to run.
+
+    Every worker started below assumes these are set, so check plainly here
+    instead of crashing much later inside a worker with a TypeError.
+    """
+    if 'remote' not in config:
+        logger.critical('Section [remote] must exist in the config file')
+        return False
+    if not config['remote'].get('site'):
+        logger.critical('Section [remote] must define "site"')
+        return False
+    if not (config['remote'].get('manifest') or config['remote'].get('manifest_command')):
+        logger.critical('Section [remote] must define "manifest" or "manifest_command"')
+        return False
+    return True
+
+
+def start_socket_listener(config: grokmirror.GrokConfigParser, q_mani: queue.Queue[ManiItem]) -> None:
+    """Start the daemon socket listener that lets other processes queue work.
+
+    See contrib/pubsubv1.py for a producer that talks to this socket.
+    """
+    sockfile = config['pull'].get('socket')
+    if not sockfile:
+        return
+
+    if Path(sockfile).exists():
+        mode = Path(sockfile).stat().st_mode
+        if stat.S_ISSOCK(mode):
+            Path(sockfile).unlink()
+        else:
+            raise grokmirror.GrokError(f'File exists but is not a socket: {sockfile}')
+
+    server = ThreadedUnixStreamServer(sockfile, Handler)
+    # Deliberately world-writable: anyone able to reach the socket may ask
+    # the daemon to check a repository. Set after the bind rather than by
+    # zeroing the process umask, which would have applied to every other
+    # file the process creates for as long as the window was open.
+    Path(sockfile).chmod(0o777)
+    # Stick some objects into the server
+    server.q_mani = q_mani
+    server.config = config
+    listener = threading.Thread(target=socket_worker, args=(server, sockfile), daemon=True)
+    listener.start()
+
+
 def pull_mirror(
     config: grokmirror.GrokConfigParser, nomtime: bool = False, forcepurge: bool = False, runonce: bool = False
 ) -> int:
-    # We can't mirror anything without knowing where to pull from, and every
-    # worker we start below assumes these are set. Say so plainly here, instead
-    # of crashing much later inside a worker with a TypeError.
-    if 'remote' not in config:
-        logger.critical('Section [remote] must exist in the config file')
-        return 1
-    if not config['remote'].get('site'):
-        logger.critical('Section [remote] must define "site"')
-        return 1
-    if not (config['remote'].get('manifest') or config['remote'].get('manifest_command')):
-        logger.critical('Section [remote] must define "manifest" or "manifest_command"')
+    if not validate_pull_config(config):
         return 1
     if 'pull' not in config:
         # Same as in grok_pull(), for the benefit of anyone calling us directly:
@@ -1238,26 +1275,8 @@ def pull_mirror(
     q_mani: queue.Queue[ManiItem] = queue.Queue()
     q_spa: queue.Queue[SpaItem | None] = queue.Queue()
 
-    sockfile = config['pull'].get('socket')
-    if sockfile and not runonce:
-        if Path(sockfile).exists():
-            mode = Path(sockfile).stat().st_mode
-            if stat.S_ISSOCK(mode):
-                Path(sockfile).unlink()
-            else:
-                raise grokmirror.GrokError(f'File exists but is not a socket: {sockfile}')
-
-        server = ThreadedUnixStreamServer(sockfile, Handler)
-        # Deliberately world-writable: anyone able to reach the socket may ask
-        # the daemon to check a repository. Set after the bind rather than by
-        # zeroing the process umask, which would have applied to every other
-        # file the process creates for as long as the window was open.
-        Path(sockfile).chmod(0o777)
-        # Stick some objects into the server
-        server.q_mani = q_mani
-        server.config = config
-        listener = threading.Thread(target=socket_worker, args=(server, sockfile), daemon=True)
-        listener.start()
+    if not runonce:
+        start_socket_listener(config, q_mani)
 
     # Run in the main thread if we have runonce
     if runonce:
@@ -1352,6 +1371,86 @@ def pull_mirror(
             # Write manifest every 100 repos
             update_manifest(config, done)
 
+    def dispatch_todo_item(
+        gitdir: str,
+        repoinfo: grokmirror.RepoInfo,
+        q_action: str,
+        held: deque[tuple[str, grokmirror.RepoInfo, str]],
+    ) -> None:
+        """Act on one item popped off `todo`, or put it back on `held`.
+
+        Priority logic lives only in the 'init' case below: an easy action
+        (pull, reclone, fix_remotes, fix_params, purge, ...) is submitted as
+        soon as its forkgroup is free, but a fresh clone has to decide
+        whether to join an existing obstrepo or set up a new one first.
+        """
+        fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
+        forkgroup = repoinfo.get('forkgroup')
+        if gitdir in busy or (forkgroup is not None and forkgroup in busy):
+            # Hold it until the repository blocking it is done
+            held.append((gitdir, repoinfo, q_action))
+            return
+
+        if q_action == 'objstore_migrate':
+            if not forkgroup:
+                # fill_todo_from_manifest() only ever queues a migration for a
+                # repository it has just given a forkgroup to, so this should
+                # not be reachable -- but losing the whole daemon to a
+                # KeyError over it would be worse.
+                logger.critical('No forkgroup for %s, skipping objstore migration', gitdir)
+                note_done(gitdir, repoinfo, q_action, False)
+                return
+            # Add forkgroup to busy, so we don't run any pulls until it's done
+            busy.add(forkgroup)
+            obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
+            grokmirror.add_repo_to_objstore(obstrepo, fullpath)
+            grokmirror.set_altrepo(fullpath, obstrepo)
+
+        if q_action != 'init':
+            # Easy actions that don't require priority logic
+            submit((gitdir, repoinfo, q_action, q_action))
+            return
+
+        try:
+            with grokmirror.locked_repo(fullpath, nonblocking=True):
+                if not grokmirror.setup_bare_repo(fullpath):
+                    logger.critical('Unable to bare-init %s', fullpath)
+                    note_done(gitdir, repoinfo, q_action, False)
+                    return
+
+                fix_remotes(toplevel, gitdir, config['remote']['site'], config)
+                set_repo_params(fullpath, repoinfo)
+        except grokmirror.GrokLockError:
+            if not runonce:
+                held.append((gitdir, repoinfo, q_action))
+            return
+
+        forkgroup = repoinfo.get('forkgroup')
+        if not forkgroup:
+            logger.debug('no-sibling clone: %s', gitdir)
+            submit((gitdir, repoinfo, 'pull', q_action))
+            return
+
+        # str(), to match what setup_objstore_repo() returns above
+        obstrepo = str(Path(obstdir, f'{forkgroup}.git'))
+        if Path(obstrepo).is_dir():
+            logger.debug('clone %s with existing obstrepo %s', gitdir, obstrepo)
+            grokmirror.set_altrepo(fullpath, obstrepo)
+            if not repoinfo.get('private'):
+                grokmirror.add_repo_to_objstore(obstrepo, fullpath)
+            submit((gitdir, repoinfo, 'pull', q_action))
+            return
+
+        # Set up a new obstrepo and make sure it's not used until the initial
+        # pull is done
+        logger.debug('cloning %s with new obstrepo %s', gitdir, obstrepo)
+        busy.add(forkgroup)
+        obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
+        grokmirror.set_altrepo(fullpath, obstrepo)
+        if not repoinfo.get('private'):
+            grokmirror.add_repo_to_objstore(obstrepo, fullpath)
+        submit((gitdir, repoinfo, 'pull', q_action))
+
     with SignalHandler(config, done):
         while True:
             # Any new results?
@@ -1401,72 +1500,7 @@ def pull_mirror(
             held: deque[tuple[str, grokmirror.RepoInfo, str]] = deque()
             while todo:
                 (gitdir, repoinfo, q_action) = todo.popleft()
-                fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
-                forkgroup = repoinfo.get('forkgroup')
-                if gitdir in busy or (forkgroup is not None and forkgroup in busy):
-                    # Hold it until the repository blocking it is done
-                    held.append((gitdir, repoinfo, q_action))
-                    continue
-
-                if q_action == 'objstore_migrate':
-                    if not forkgroup:
-                        # fill_todo_from_manifest() only ever queues a migration
-                        # for a repository it has just given a forkgroup to, so
-                        # this should not be reachable -- but losing the whole
-                        # daemon to a KeyError over it would be worse.
-                        logger.critical('No forkgroup for %s, skipping objstore migration', gitdir)
-                        note_done(gitdir, repoinfo, q_action, False)
-                        continue
-                    # Add forkgroup to busy, so we don't run any pulls until it's done
-                    busy.add(forkgroup)
-                    obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
-                    grokmirror.add_repo_to_objstore(obstrepo, fullpath)
-                    grokmirror.set_altrepo(fullpath, obstrepo)
-
-                if q_action != 'init':
-                    # Easy actions that don't require priority logic
-                    submit((gitdir, repoinfo, q_action, q_action))
-                    continue
-
-                try:
-                    with grokmirror.locked_repo(fullpath, nonblocking=True):
-                        if not grokmirror.setup_bare_repo(fullpath):
-                            logger.critical('Unable to bare-init %s', fullpath)
-                            note_done(gitdir, repoinfo, q_action, False)
-                            continue
-
-                        fix_remotes(toplevel, gitdir, config['remote']['site'], config)
-                        set_repo_params(fullpath, repoinfo)
-                except grokmirror.GrokLockError:
-                    if not runonce:
-                        held.append((gitdir, repoinfo, q_action))
-                    continue
-
-                forkgroup = repoinfo.get('forkgroup')
-                if not forkgroup:
-                    logger.debug('no-sibling clone: %s', gitdir)
-                    submit((gitdir, repoinfo, 'pull', q_action))
-                    continue
-
-                # str(), to match what setup_objstore_repo() returns above
-                obstrepo = str(Path(obstdir, f'{forkgroup}.git'))
-                if Path(obstrepo).is_dir():
-                    logger.debug('clone %s with existing obstrepo %s', gitdir, obstrepo)
-                    grokmirror.set_altrepo(fullpath, obstrepo)
-                    if not repoinfo.get('private'):
-                        grokmirror.add_repo_to_objstore(obstrepo, fullpath)
-                    submit((gitdir, repoinfo, 'pull', q_action))
-                    continue
-
-                # Set up a new obstrepo and make sure it's not used until the initial
-                # pull is done
-                logger.debug('cloning %s with new obstrepo %s', gitdir, obstrepo)
-                busy.add(forkgroup)
-                obstrepo = grokmirror.setup_objstore_repo(obstdir, name=forkgroup)
-                grokmirror.set_altrepo(fullpath, obstrepo)
-                if not repoinfo.get('private'):
-                    grokmirror.add_repo_to_objstore(obstrepo, fullpath)
-                submit((gitdir, repoinfo, 'pull', q_action))
+                dispatch_todo_item(gitdir, repoinfo, q_action, held)
             todo.extend(held)
 
             if pending:
