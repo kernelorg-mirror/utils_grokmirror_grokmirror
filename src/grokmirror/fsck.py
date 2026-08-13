@@ -560,6 +560,107 @@ class FsckOptions:
         return self.repack_all_quick or self.repack_all_full
 
 
+def decide_repo_action(
+    fullpath: str,
+    gitdir: str,
+    toplevel: str,
+    entry: dict[str, str],
+    today: datetime.datetime,
+    checkdelay: int,
+    cfg_repack: bool,
+    cfg_precious: str,
+    options: FsckOptions,
+    ses: grokmirror.GrokSession,
+    config: grokmirror.GrokConfigParser,
+) -> tuple[str, int | None] | None:
+    """Decide what a toplevel repository needs done this run, if anything.
+
+    Returns ('repack', level) or ('fsck', None) for the caller to queue, or
+    None for "nothing to do". This is the densest logic in fsck_mirror(): it
+    weighs the config, the command-line flags, the object counts, the
+    fingerprint and the check schedule against each other. See
+    tests/test_fsck.py's characterization tests for what each of those inputs
+    is supposed to do -- they were written against this code before it moved.
+
+    Not pure: `entry['nextcheck']` is updated in place whenever the schedule
+    advances (status is a plain dict of dicts, and that is how every other
+    reader/writer of it works too), and a repository found to be carrying
+    unreferenced garbage is pruned synchronously when nothing else is already
+    going to repack it.
+    """
+    obj_info = grokmirror.get_repo_obj_info(fullpath)
+    try:
+        packs = int(obj_info['packs'])
+        count_loose = int(obj_info['count'])
+    except KeyError:
+        logger.warning('Unable to count objects in %s, skipping', fullpath)
+        return None
+
+    schedcheck = datetime.datetime.strptime(entry['nextcheck'], '%Y-%m-%d')  # noqa: DTZ007
+    nextcheck = today + datetime.timedelta(days=checkdelay)
+
+    if not cfg_repack:
+        # don't look at me if you turned off repack
+        logger.debug('Not repacking because repack=no in config')
+        repack_level = None
+    elif options.repack_all_full and (count_loose > 0 or packs > 1):
+        logger.debug('repack_level=2 due to repack_all_full')
+        repack_level = 2
+    elif options.repack_all_quick and count_loose > 0:
+        logger.debug('repack_level=1 due to repack_all_quick')
+        repack_level = 1
+    elif entry.get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir):
+        logger.debug('Checking repack level of %s', fullpath)
+        repack_level = grokmirror.get_repack_level(obj_info)
+    else:
+        repack_level = None
+
+    # trigger a level-1 repack if it's regular check time and the fingerprint has changed
+    if (
+        not repack_level
+        and schedcheck <= today
+        and entry.get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir)
+    ):
+        entry['nextcheck'] = nextcheck.strftime('%F')
+        logger.info('     aged: %s (forcing repack)', fullpath)
+        repack_level = 1
+
+    # If we're not already repacking the repo, run a prune if we find garbage in it
+    if obj_info['garbage'] != '0' and not repack_level and is_safe_to_prune(ses, fullpath, config):
+        logger.info('  garbage: %s (%s files, %s KiB)', gitdir, obj_info['garbage'], obj_info['size-garbage'])
+        try:
+            with grokmirror.locked_repo(fullpath, nonblocking=True):
+                run_git_prune(ses, fullpath, config)
+        except (OSError, grokmirror.GrokLockError):
+            pass
+
+    if repack_level and (cfg_precious == 'always' and check_precious_objects(fullpath)):
+        # if we have preciousObjects, then we only repack based on the same
+        # schedule as fsck.
+        logger.debug('preciousObjects is set')
+        # for repos with preciousObjects, we use the fsck schedule for repacking
+        if schedcheck <= today:
+            logger.debug('Time for a full periodic repack of a preciousObjects repo')
+            entry['nextcheck'] = nextcheck.strftime('%F')
+            repack_level = 2
+        else:
+            logger.debug('Not repacking preciousObjects repo outside of schedule')
+            repack_level = None
+
+    if repack_level:
+        if repack_level > 1:
+            logger.info('   queued: %s (full repack)', fullpath)
+        else:
+            logger.info('   queued: %s (repack)', fullpath)
+        return 'repack', repack_level
+    if options.repack_only or options.repack_all:
+        return None
+    if schedcheck <= today or options.force:
+        logger.info('   queued: %s (fsck)', fullpath)
+        return 'fsck', None
+    return None
+
+
 def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> int:
 
     statusfile = config['fsck'].get('statusfile')
@@ -828,78 +929,24 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
                 grokmirror.add_repo_to_objstore(obstrepo, fullpath)
                 logger.info(' reconfig: %s to fetch into %s', gitdir, Path(obstrepo).name)
 
-        obj_info = grokmirror.get_repo_obj_info(fullpath)
-        try:
-            packs = int(obj_info['packs'])
-            count_loose = int(obj_info['count'])
-        except KeyError:
-            logger.warning('Unable to count objects in %s, skipping', fullpath)
+        decision = decide_repo_action(
+            fullpath,
+            gitdir,
+            toplevel,
+            status[fullpath],
+            today,
+            checkdelay,
+            cfg_repack,
+            cfg_precious,
+            options,
+            ses,
+            config,
+        )
+        if decision is None:
             continue
-
-        schedcheck = datetime.datetime.strptime(status[fullpath]['nextcheck'], '%Y-%m-%d')  # noqa: DTZ007
-        nextcheck = today + datetime.timedelta(days=checkdelay)
-
-        if not cfg_repack:
-            # don't look at me if you turned off repack
-            logger.debug('Not repacking because repack=no in config')
-            repack_level = None
-        elif options.repack_all_full and (count_loose > 0 or packs > 1):
-            logger.debug('repack_level=2 due to repack_all_full')
-            repack_level = 2
-        elif options.repack_all_quick and count_loose > 0:
-            logger.debug('repack_level=1 due to repack_all_quick')
-            repack_level = 1
-        elif status[fullpath].get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir):
-            logger.debug('Checking repack level of %s', fullpath)
-            repack_level = grokmirror.get_repack_level(obj_info)
-        else:
-            repack_level = None
-
-        # trigger a level-1 repack if it's regular check time and the fingerprint has changed
-        if (
-            not repack_level
-            and schedcheck <= today
-            and status[fullpath].get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir)
-        ):
-            status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
-            logger.info('     aged: %s (forcing repack)', fullpath)
-            repack_level = 1
-
-        # If we're not already repacking the repo, run a prune if we find garbage in it
-        if obj_info['garbage'] != '0' and not repack_level and is_safe_to_prune(ses, fullpath, config):
-            logger.info('  garbage: %s (%s files, %s KiB)', gitdir, obj_info['garbage'], obj_info['size-garbage'])
-            try:
-                with grokmirror.locked_repo(fullpath, nonblocking=True):
-                    run_git_prune(ses, fullpath, config)
-            except (OSError, grokmirror.GrokLockError):
-                pass
-
-        if repack_level and (cfg_precious == 'always' and check_precious_objects(fullpath)):
-            # if we have preciousObjects, then we only repack based on the same
-            # schedule as fsck.
-            logger.debug('preciousObjects is set')
-            # for repos with preciousObjects, we use the fsck schedule for repacking
-            if schedcheck <= today:
-                logger.debug('Time for a full periodic repack of a preciousObjects repo')
-                status[fullpath]['nextcheck'] = nextcheck.strftime('%F')
-                repack_level = 2
-            else:
-                logger.debug('Not repacking preciousObjects repo outside of schedule')
-                repack_level = None
-
-        if repack_level:
-            queued += 1
-            to_process.add((fullpath, 'repack', repack_level))
-            if repack_level > 1:
-                logger.info('   queued: %s (full repack)', fullpath)
-            else:
-                logger.info('   queued: %s (repack)', fullpath)
-        elif options.repack_only or options.repack_all:
-            continue
-        elif schedcheck <= today or options.force:
-            queued += 1
-            to_process.add((fullpath, 'fsck', None))
-            logger.info('   queued: %s (fsck)', fullpath)
+        kind, level = decision
+        queued += 1
+        to_process.add((fullpath, kind, level))
 
     logger.info('     done: %s analyzed, %s queued', analyzed, queued)
 
@@ -1065,20 +1112,20 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
                 'fingerprint': None,
             }
             # Always full-repack brand new obstrepos
-            repack_level = 2
+            obst_repack_level = 2
         else:
             obj_info = grokmirror.get_repo_obj_info(obstrepo)
-            repack_level = grokmirror.get_repack_level(obj_info)
+            obst_repack_level = grokmirror.get_repack_level(obj_info)
 
         nextcheck = datetime.datetime.strptime(status[obstrepo]['nextcheck'], '%Y-%m-%d')  # noqa: DTZ007
-        if repack_level > 1 and nextcheck > today:
+        if obst_repack_level > 1 and nextcheck > today:
             # Don't do full repacks outside of schedule
-            repack_level = 1
+            obst_repack_level = 1
 
-        if repack_level:
+        if obst_repack_level:
             queued += 1
-            to_process.add((obstrepo, 'repack', repack_level))
-            if repack_level > 1:
+            to_process.add((obstrepo, 'repack', obst_repack_level))
+            if obst_repack_level > 1:
                 logger.info('   queued: %s (full repack)', Path(obstrepo).name)
             else:
                 logger.info('   queued: %s (repack)', Path(obstrepo).name)
