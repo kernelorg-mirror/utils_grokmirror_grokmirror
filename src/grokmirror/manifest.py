@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import sys
@@ -262,45 +263,57 @@ def parse_args() -> argparse.Namespace:
     return opts
 
 
+@dataclasses.dataclass
+class ManifestOptions:
+    """The command-line knobs for a single grok-manifest run.
+
+    These travel together through grok_manifest(), the way FsckOptions does
+    for grok-fsck.
+    """
+
+    logfile: str | None = None
+    usenow: bool = False
+    check_export_ok: bool = False
+    purge: bool = False
+    remove: bool = False
+    pretty: bool = False
+    ignore: list[str] | None = None
+    wait: bool = False
+    verbose: bool = False
+    fetchobst: bool = False
+    ignorerefs: list[str] | None = None
+    objstore_uses_plumbing: bool = False
+
+
 def grok_manifest(
     manifile: str,
     toplevel: str,
     paths: list[str] | None = None,
-    logfile: str | None = None,
-    usenow: bool = False,
-    check_export_ok: bool = False,
-    purge: bool = False,
-    remove: bool = False,
-    pretty: bool = False,
-    ignore: list[str] | None = None,
-    wait: bool = False,
-    verbose: bool = False,
-    fetchobst: bool = False,
-    ignorerefs: list[str] | None = None,
-    objstore_uses_plumbing: bool = False,
+    options: ManifestOptions | None = None,
 ) -> int:
+    if options is None:
+        options = ManifestOptions()
+
     loglevel = logging.INFO
-    grokmirror.init_logger('manifest', logfile, loglevel, verbose)
+    grokmirror.init_logger('manifest', options.logfile, loglevel, options.verbose)
 
     # Monotonic, so a clock adjustment mid-run can't produce a silly duration
     startt = time.monotonic()
     if paths is None:
         paths = []
-    if ignore is None:
-        ignore = []
+    ignore = options.ignore if options.ignore is not None else []
 
     ses = grokmirror.GrokSession()
 
     with grokmirror.locked_manifest(manifile):
-        manifest = grokmirror.read_manifest(manifile, wait=wait)
+        manifest = grokmirror.read_manifest(manifile, wait=options.wait)
 
         toplevel = os.path.realpath(toplevel)
 
         # If manifest is empty, don't use current timestamp
-        if not manifest:
-            usenow = False
+        usenow = options.usenow and bool(manifest)
 
-        if remove and paths:
+        if options.remove and paths:
             # Remove the repos as required, write new manfiest and exit
             for fullpath in paths:
                 repo = grokmirror.fullpath_to_gitdir(toplevel, fullpath)
@@ -323,12 +336,12 @@ def grok_manifest(
 
             # XXX: need to add logic to make sure we don't break the world
             #      by removing a repository used as a reference for others
-            grokmirror.write_manifest(manifile, manifest, pretty=pretty)
+            grokmirror.write_manifest(manifile, manifest, pretty=options.pretty)
             return 0
 
         gitdirs: list[str] = []
 
-        if purge or not paths or not manifest:
+        if options.purge or not paths or not manifest:
             # We automatically purge when we do a full tree walk
             gitdirs.extend(ses.find_all_gitdirs(toplevel, ignore=ignore, exclude_objstore=True))
             purge_manifest(manifest, toplevel, gitdirs)
@@ -348,7 +361,7 @@ def grok_manifest(
         tofetch = set()
         for gitdir in gitdirs:
             # check to make sure this gitdir is ok to export
-            if check_export_ok and not Path(gitdir, 'git-daemon-export-ok').exists():
+            if options.check_export_ok and not Path(gitdir, 'git-daemon-export-ok').exists():
                 # is it curently in the manifest?
                 repo = grokmirror.fullpath_to_gitdir(toplevel, gitdir)
                 if repo in list(manifest):
@@ -363,15 +376,15 @@ def grok_manifest(
             if Path(gitdir).is_symlink():
                 symlinks.append(gitdir)
             else:
-                update_manifest(manifest, toplevel, gitdir, usenow, ignorerefs)
-                if fetchobst:
+                update_manifest(manifest, toplevel, gitdir, usenow, options.ignorerefs)
+                if options.fetchobst:
                     # Do it after we're done with manifest, to avoid keeping it locked
                     tofetch.add(gitdir)
 
         if symlinks:
             set_symlinks(manifest, toplevel, symlinks)
 
-        grokmirror.write_manifest(manifile, manifest, pretty=pretty)
+        grokmirror.write_manifest(manifile, manifest, pretty=options.pretty)
 
     fetched = set()
     for gitdir in tofetch:
@@ -382,7 +395,7 @@ def grok_manifest(
             try:
                 with grokmirror.locked_repo(altrepo, nonblocking=True):
                     logger.info(' manifest: objstore %s -> %s', gitdir, Path(altrepo).name)
-                    grokmirror.fetch_objstore_repo(altrepo, gitdir, use_plumbing=objstore_uses_plumbing)
+                    grokmirror.fetch_objstore_repo(altrepo, gitdir, use_plumbing=options.objstore_uses_plumbing)
                 fetched.add(altrepo)
             except (OSError, grokmirror.GrokLockError):
                 # grok-fsck will fetch this one, then
@@ -405,18 +418,20 @@ def command() -> int:
             opts.manifile,
             opts.toplevel,
             paths=opts.paths,
-            logfile=opts.logfile,
-            usenow=opts.usenow,
-            check_export_ok=opts.check_export_ok,
-            purge=opts.purge,
-            remove=opts.remove,
-            pretty=opts.pretty,
-            ignore=opts.ignore,
-            wait=opts.wait,
-            verbose=opts.verbose,
-            fetchobst=opts.fetchobst,
-            ignorerefs=opts.ignore_refs,
-            objstore_uses_plumbing=opts.objstore_uses_plumbing,
+            options=ManifestOptions(
+                logfile=opts.logfile,
+                usenow=opts.usenow,
+                check_export_ok=opts.check_export_ok,
+                purge=opts.purge,
+                remove=opts.remove,
+                pretty=opts.pretty,
+                ignore=opts.ignore,
+                wait=opts.wait,
+                verbose=opts.verbose,
+                fetchobst=opts.fetchobst,
+                ignorerefs=opts.ignore_refs,
+                objstore_uses_plumbing=opts.objstore_uses_plumbing,
+            ),
         )
     except grokmirror.GrokError as ex:
         sys.stderr.write(f'ERROR: {ex}\n')
