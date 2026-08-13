@@ -339,6 +339,136 @@ def objstore_repo_preload(ses: grokmirror.GrokSession, config: grokmirror.GrokCo
     bfile.unlink()
 
 
+def run_pull_action(
+    ses: grokmirror.GrokSession,
+    config: grokmirror.GrokConfigParser,
+    gitdir: str,
+    fullpath: grokmirror.StrPath,
+    action: str,
+    repoinfo: grokmirror.RepoInfo,
+    spa_actions: list[str],
+) -> bool:
+    """Handle the 'pull' and 'objstore_migrate' actions for pull_worker().
+
+    Recomputes the fingerprint, fetches if it moved (retrying up to
+    [pull] retries times), and on a successful fetch works out which
+    post-pull spa treatments (objstore/repack/packrefs) the repo now needs.
+    Appends to `spa_actions` in place, matching pull_worker()'s own
+    accumulation style, rather than returning a new list to merge back.
+    """
+    toplevel = os.path.realpath(config['core']['toplevel'])
+    obstdir = os.path.realpath(config['core']['objstore'])
+    site = config['remote']['site']
+    remotename = config['pull'].get('remotename', '_grokmirror')
+    maxretries = config['pull'].getint('retries', 3)
+    objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+
+    success = True
+    altrepo = grokmirror.get_altrepo(fullpath)
+    obstrepo = altrepo if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) else None
+
+    r_fp = repoinfo.get('fingerprint')
+    my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+    if obstrepo:
+        o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
+        if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
+            # Try to preload the objstore repo directly
+            objstore_repo_preload(ses, config, obstrepo)
+
+    if r_fp != my_fp:
+        # Make sure we have the remote set up
+        if action == 'pull' and remotename not in grokmirror.list_repo_remotes(fullpath):
+            logger.info(' reorigin: %s', gitdir)
+            fix_remotes(toplevel, gitdir, site, config)
+        logger.info('    fetch: %s', gitdir)
+        retries = 1
+        while True:
+            success = pull_repo(fullpath, remotename)
+            if success:
+                break
+            retries += 1
+            if retries > maxretries:
+                break
+            logger.info('  refetch: %s (try #%s)', gitdir, retries)
+
+        if success:
+            run_post_update_hook(config, fullpath)
+            post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+            repoinfo['fingerprint'] = post_pull_fp
+            altrepo = grokmirror.get_altrepo(fullpath)
+            if post_pull_fp != my_fp:
+                grokmirror.set_repo_fingerprint(toplevel, gitdir, fingerprint=post_pull_fp)
+                if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) and not repoinfo.get('private'):
+                    # do we have any objects in the objstore repo?
+                    o_obj_info = grokmirror.get_repo_obj_info(altrepo)
+                    if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0':
+                        # We fetch right now, as other repos may be waiting on these objects
+                        logger.info(' objstore: %s', gitdir)
+                        grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=objstore_uses_plumbing)
+                        if not objstore_uses_plumbing:
+                            spa_actions.append('repack')
+                    else:
+                        # We lazy-fetch in the spa
+                        spa_actions.append('objstore')
+                        if my_fp is None and not objstore_uses_plumbing:
+                            # Initial clone, trigger a repack after objstore
+                            spa_actions.append('repack')
+
+                if my_fp is None:
+                    # This was the initial clone, so pack all refs
+                    spa_actions.append('packrefs-all')
+
+                if not grokmirror.is_precious(fullpath):
+                    # See if doing a quick repack would be beneficial
+                    obj_info = grokmirror.get_repo_obj_info(fullpath)
+                    if grokmirror.get_repack_level(obj_info):
+                        # We only do quick repacks, so we don't care about precise level
+                        spa_actions.extend(('repack', 'packrefs'))
+
+            modified = repoinfo.get('modified')
+            if modified is not None:
+                set_agefile(toplevel, gitdir, modified)
+    else:
+        logger.debug('FP match, not pulling %s', gitdir)
+
+    if action == 'objstore_migrate':
+        spa_actions.extend(('objstore', 'repack'))
+
+    return success
+
+
+def sync_repo_symlinks(toplevel: str, gitdir: str, fullpath: grokmirror.StrPath, symlinks: list[str]) -> None:
+    """Make sure each of `symlinks` on disk actually points at `fullpath`.
+
+    A symlink already pointing elsewhere is recreated; a real directory
+    sitting where a symlink now belongs is deleted first, since otherwise
+    the same repository would stick around twice under different names.
+    """
+    for symlink in symlinks:
+        target = grokmirror.gitdir_to_fullpath(toplevel, symlink)
+
+        if target.is_symlink():
+            # are you pointing to where we need you?
+            # os.fspath() on the right-hand side: realpath() hands back a
+            # str, and a Path never compares equal to one, so every correct
+            # symlink would look wrong and get recreated on every run.
+            if os.path.realpath(target) != os.fspath(fullpath):
+                # Remove symlink and recreate below
+                logger.debug('Removed existing wrong symlink %s', target)
+                target.unlink()
+        elif target.exists():
+            logger.warning(f'Deleted repo {target}, because it is now a symlink to {fullpath}')
+            shutil.rmtree(target)
+
+        # Here we re-check if we still need to do anything
+        if not target.exists():
+            logger.info('  symlink: %s -> %s', symlink, gitdir)
+            # Make sure the leading dirs are in place; another worker may
+            # be placing a sibling symlink there at this very moment.
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(fullpath)
+
+
 def pull_worker(
     ses: grokmirror.GrokSession,
     config: grokmirror.GrokConfigParser,
@@ -353,26 +483,16 @@ def pull_worker(
     """
     (gitdir, repoinfo, action, _q_action) = item
     toplevel = os.path.realpath(config['core']['toplevel'])
-    obstdir = os.path.realpath(config['core']['objstore'])
-    maxretries = config['pull'].getint('retries', 3)
     # pull_mirror() checked these before starting us up
     site = config['remote']['site']
-    remotename = config['pull'].get('remotename', '_grokmirror')
-    # Should we use plumbing for objstore operations?
-    objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
 
     logger.debug('pull_worker: gitdir=%s, action=%s', gitdir, action)
     fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
     success = True
-    spa_actions = []
+    spa_actions: list[str] = []
 
     try:
         with grokmirror.locked_repo(fullpath, nonblocking=True):
-            altrepo = grokmirror.get_altrepo(fullpath)
-            obstrepo = None
-            if altrepo and grokmirror.is_obstrepo(altrepo, obstdir):
-                obstrepo = altrepo
-
             if action == 'purge':
                 # Is it a symlink?
                 if fullpath.is_symlink():
@@ -415,74 +535,7 @@ def pull_worker(
                     success = False
 
             if action in ('pull', 'objstore_migrate'):
-                r_fp = repoinfo.get('fingerprint')
-                my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
-                if obstrepo:
-                    o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
-                    if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
-                        # Try to preload the objstore repo directly
-                        objstore_repo_preload(ses, config, obstrepo)
-
-                if r_fp != my_fp:
-                    # Make sure we have the remote set up
-                    if action == 'pull' and remotename not in grokmirror.list_repo_remotes(fullpath):
-                        logger.info(' reorigin: %s', gitdir)
-                        fix_remotes(toplevel, gitdir, site, config)
-                    logger.info('    fetch: %s', gitdir)
-                    retries = 1
-                    while True:
-                        success = pull_repo(fullpath, remotename)
-                        if success:
-                            break
-                        retries += 1
-                        if retries > maxretries:
-                            break
-                        logger.info('  refetch: %s (try #%s)', gitdir, retries)
-
-                    if success:
-                        run_post_update_hook(config, fullpath)
-                        post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
-                        repoinfo['fingerprint'] = post_pull_fp
-                        altrepo = grokmirror.get_altrepo(fullpath)
-                        if post_pull_fp != my_fp:
-                            grokmirror.set_repo_fingerprint(toplevel, gitdir, fingerprint=post_pull_fp)
-                            if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) and not repoinfo.get('private'):
-                                # do we have any objects in the objstore repo?
-                                o_obj_info = grokmirror.get_repo_obj_info(altrepo)
-                                if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0':
-                                    # We fetch right now, as other repos may be waiting on these objects
-                                    logger.info(' objstore: %s', gitdir)
-                                    grokmirror.fetch_objstore_repo(
-                                        altrepo, fullpath, use_plumbing=objstore_uses_plumbing
-                                    )
-                                    if not objstore_uses_plumbing:
-                                        spa_actions.append('repack')
-                                else:
-                                    # We lazy-fetch in the spa
-                                    spa_actions.append('objstore')
-                                    if my_fp is None and not objstore_uses_plumbing:
-                                        # Initial clone, trigger a repack after objstore
-                                        spa_actions.append('repack')
-
-                            if my_fp is None:
-                                # This was the initial clone, so pack all refs
-                                spa_actions.append('packrefs-all')
-
-                            if not grokmirror.is_precious(fullpath):
-                                # See if doing a quick repack would be beneficial
-                                obj_info = grokmirror.get_repo_obj_info(fullpath)
-                                if grokmirror.get_repack_level(obj_info):
-                                    # We only do quick repacks, so we don't care about precise level
-                                    spa_actions.extend(('repack', 'packrefs'))
-
-                        modified = repoinfo.get('modified')
-                        if modified is not None:
-                            set_agefile(toplevel, gitdir, modified)
-                else:
-                    logger.debug('FP match, not pulling %s', gitdir)
-
-            if action == 'objstore_migrate':
-                spa_actions.extend(('objstore', 'repack'))
+                success = run_pull_action(ses, config, gitdir, fullpath, action, repoinfo, spa_actions)
 
     except grokmirror.GrokLockError:
         # Take a quick nap before letting the supervisor requeue this item.
@@ -492,29 +545,7 @@ def pull_worker(
 
     symlinks = repoinfo.get('symlinks')
     if fullpath.exists() and symlinks:
-        for symlink in symlinks:
-            target = grokmirror.gitdir_to_fullpath(toplevel, symlink)
-
-            if target.is_symlink():
-                # are you pointing to where we need you?
-                # os.fspath() on the right-hand side: realpath() hands back a
-                # str, and a Path never compares equal to one, so every correct
-                # symlink would look wrong and get recreated on every run.
-                if os.path.realpath(target) != os.fspath(fullpath):
-                    # Remove symlink and recreate below
-                    logger.debug('Removed existing wrong symlink %s', target)
-                    target.unlink()
-            elif target.exists():
-                logger.warning(f'Deleted repo {target}, because it is now a symlink to {fullpath}')
-                shutil.rmtree(target)
-
-            # Here we re-check if we still need to do anything
-            if not target.exists():
-                logger.info('  symlink: %s -> %s', symlink, gitdir)
-                # Make sure the leading dirs are in place; another worker may
-                # be placing a sibling symlink there at this very moment.
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.symlink_to(fullpath)
+        sync_repo_symlinks(toplevel, gitdir, fullpath, symlinks)
 
     if spa_actions:
         q_spa.put((gitdir, spa_actions))
