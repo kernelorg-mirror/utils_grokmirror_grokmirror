@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import queue
 import socket
+import stat
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -125,3 +126,64 @@ def test_junk_is_dropped_and_the_daemon_keeps_listening(
         # cost it the next, good one.
         tell(sockfile, b'/test/one.git\n')
         assert q_mani.get(timeout=TIMEOUT)[0] == '/test/one.git'
+
+
+# -- start_socket_listener() ---------------------------------------------------
+#
+# The tests above build the server/Handler by hand, bypassing
+# start_socket_listener() itself. These drive that function directly, since it
+# has its own decision logic (no-op when unconfigured, refuse a stale
+# non-socket file, bind+chmod+spawn a daemon thread on success) that none of
+# the above exercises.
+
+
+def test_start_socket_listener_is_a_noop_when_socket_is_unconfigured(tree: GrokTree) -> None:
+    # An empty [pull] section is the "no socket wanted" spelling: no sockfile
+    # path was ever computed, so there is nothing to check for existence.
+    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {}})))
+
+    grokmirror.pull.start_socket_listener(config, queue.Queue())
+
+
+def test_start_socket_listener_refuses_a_stale_non_socket_file(tree: GrokTree) -> None:
+    sockfile = tree.root / 'grok-pull.sock'
+    # A leftover regular file at the configured path -- not a socket at all,
+    # e.g. left behind by a crashed process that never got to bind it.
+    sockfile.write_text('not a socket\n')
+    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {'socket': str(sockfile)}})))
+
+    with pytest.raises(grokmirror.GrokError, match='File exists but is not a socket'):
+        grokmirror.pull.start_socket_listener(config, queue.Queue())
+
+
+def test_start_socket_listener_binds_and_serves(tree: GrokTree) -> None:
+    sockfile = tree.root / 'grok-pull.sock'
+    grokmirror.write_manifest(str(tree.manifest), {'/test/one.git': {'fingerprint': 'deadbeef', 'modified': 5}})
+    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {'socket': str(sockfile)}})))
+    q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
+
+    grokmirror.pull.start_socket_listener(config, q_mani)
+
+    # Deliberately world-writable: anyone able to reach the socket may ask the
+    # daemon to check a repository.
+    assert stat.S_IMODE(sockfile.stat().st_mode) == 0o777
+    tell(sockfile, b'/test/one.git\n')
+    assert q_mani.get(timeout=TIMEOUT)[0] == '/test/one.git'
+
+
+def test_start_socket_listener_replaces_a_stale_socket_file(tree: GrokTree) -> None:
+    # A socket left behind by a process that died without cleaning up: since
+    # nothing is listening on it any more, start_socket_listener() must unlink
+    # it and bind its own, rather than refusing like it does for a plain file.
+    sockfile = tree.root / 'grok-pull.sock'
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sockfile))
+    stale.close()
+    grokmirror.write_manifest(str(tree.manifest), {'/test/one.git': {'fingerprint': 'deadbeef', 'modified': 5}})
+    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {'socket': str(sockfile)}})))
+    q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
+
+    grokmirror.pull.start_socket_listener(config, q_mani)
+
+    tell(sockfile, b'/test/one.git\n')
+    assert q_mani.get(timeout=TIMEOUT)[0] == '/test/one.git'
