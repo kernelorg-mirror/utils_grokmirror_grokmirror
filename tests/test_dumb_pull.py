@@ -8,14 +8,12 @@ behavior before anyone touches it again.
 
 from __future__ import annotations
 
-import stat
-
 import pytest
 
 import grokmirror
 from grokmirror import dumb_pull
 
-from support import DECOY_URL, GrokTree, git
+from support import DECOY_URL, GrokTree, git, write_script
 
 # -- dumb_pull_repo() ---------------------------------------------------------
 
@@ -114,8 +112,7 @@ def test_run_post_update_hook_does_nothing_with_no_hook_configured() -> None:
 
 def test_run_post_update_hook_warns_when_not_executable(tree: GrokTree, caplog: pytest.LogCaptureFixture) -> None:
     hookscript = tree.root / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\necho should not run\n')
-    hookscript.chmod(0o644)
+    write_script(hookscript, 'echo should not run\n', executable=False)
 
     with caplog.at_level('WARNING'):
         dumb_pull.run_post_update_hook(str(hookscript), '/some/repo.git')
@@ -125,8 +122,7 @@ def test_run_post_update_hook_warns_when_not_executable(tree: GrokTree, caplog: 
 
 def test_run_post_update_hook_runs_and_logs_output(tree: GrokTree, caplog: pytest.LogCaptureFixture) -> None:
     hookscript = tree.root / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\necho "out: $1"\necho "err: $1" >&2\n')
-    hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
+    write_script(hookscript, 'echo "out: $1"\necho "err: $1" >&2\n')
 
     with caplog.at_level('DEBUG'):
         dumb_pull.run_post_update_hook(str(hookscript), '/some/repo.git')
@@ -174,8 +170,7 @@ def test_dumb_pull_runs_post_update_hook_only_when_something_changed(tree: GrokT
     changed_source.commit(message='Only fetched by the changed repo')
 
     hookscript = tree.root / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\necho "$1" >> ' + str(tree.root / 'hook.log') + '\n')
-    hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
+    write_script(hookscript, 'echo "$1" >> ' + str(tree.root / 'hook.log') + '\n')
 
     dumb_pull.dumb_pull([str(changed), str(unchanged)], posthook=str(hookscript))
 

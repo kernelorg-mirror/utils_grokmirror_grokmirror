@@ -15,7 +15,7 @@ import pytest
 
 from grokmirror.pi_piper import git_get_new_revs
 
-from support import GrokTree, git, pi_message
+from support import GrokTree, git, pi_message, write_script
 
 
 def write_piper_config(path: Path, body: str) -> Path:
@@ -72,8 +72,7 @@ def test_pipes_new_messages(tree: GrokTree, inbox: Path) -> None:
     # the test can prove the hook actually ran.
     outfile = tree.root / 'piped.txt'
     script = tree.root / 'pipe.sh'
-    script.write_text(f'#!/bin/sh\ncat >> {outfile}\necho "---" >> {outfile}\n')
-    script.chmod(0o755)
+    write_script(script, f'cat >> {outfile}\necho "---" >> {outfile}\n')
     cfgfile = write_piper_config(tree.root / 'pi-piper.conf', f'[DEFAULT]\npipe = {script}\n')
 
     # First run only records where we are, since piping the entire history of a
@@ -110,8 +109,7 @@ def test_exotic_subject_characters_do_not_split_a_record(tree: GrokTree, inbox: 
 
 def test_dry_run_changes_nothing(tree: GrokTree, inbox: Path) -> None:
     script = tree.root / 'pipe.sh'
-    script.write_text('#!/bin/sh\ncat > /dev/null\n')
-    script.chmod(0o755)
+    write_script(script, 'cat > /dev/null\n')
     cfgfile = write_piper_config(tree.root / 'pi-piper.conf', f'[DEFAULT]\npipe = {script}\n')
 
     tree.run('grok-pi-piper', '-c', str(cfgfile), '-d', str(inbox))
@@ -124,8 +122,7 @@ def test_unexecutable_pipe_is_reported(tree: GrokTree, inbox: Path) -> None:
     # only tested that the file exists. A pipe command without the execute bit
     # got as far as being run, and failed with a confusing error instead.
     script = tree.root / 'pipe.sh'
-    script.write_text('#!/bin/sh\ntrue\n')
-    script.chmod(0o644)
+    write_script(script, 'true\n', executable=False)
     cfgfile = write_piper_config(tree.root / 'pi-piper.conf', f'[DEFAULT]\npipe = {script}\n')
 
     res = tree.run('grok-pi-piper', '-c', str(cfgfile), str(inbox), expect=1)
@@ -144,8 +141,7 @@ def test_per_list_section_wins_over_default(tree: GrokTree, inbox: Path) -> None
     # file can pipe different lists to different commands.
     outfile = tree.root / 'piped.txt'
     script = tree.root / 'pipe.sh'
-    script.write_text(f'#!/bin/sh\ncat >> {outfile}\n')
-    script.chmod(0o755)
+    write_script(script, f'cat >> {outfile}\n')
     cfgfile = write_piper_config(
         tree.root / 'pi-piper.conf',
         f'[DEFAULT]\npipe = None\n\n[mylist]\npipe = {script}\n',
@@ -164,8 +160,7 @@ def test_repo_with_no_master_is_skipped(tree: GrokTree) -> None:
     # A public-inbox repository that has just been created has no master yet.
     inbox = tree.add_empty_repo('mylist/git/0.git')
     script = tree.root / 'pipe.sh'
-    script.write_text('#!/bin/sh\ncat > /dev/null\n')
-    script.chmod(0o755)
+    write_script(script, 'cat > /dev/null\n')
     cfgfile = write_piper_config(tree.root / 'pi-piper.conf', f'[DEFAULT]\npipe = {script}\n')
 
     res = tree.run('grok-pi-piper', '-c', str(cfgfile), '-v', str(inbox))

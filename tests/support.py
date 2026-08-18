@@ -166,6 +166,18 @@ def http_server(servedir: Path) -> Iterator[str]:
         thread.join(timeout=30)
 
 
+def write_script(path: Path, body: str, executable: bool = True) -> Path:
+    """Write a /bin/sh script at `path`; `body` follows the shebang line.
+
+    Pass executable=False for the tests that check what happens to a hook or
+    command someone forgot to chmod: saying so on the call line reads as the
+    deliberate choice it is, rather than as a mode nobody got round to setting.
+    """
+    path.write_text(f'#!/bin/sh\n{body}', encoding='utf-8')
+    path.chmod(0o755 if executable else 0o644)
+    return path
+
+
 def pi_message(subject: str, body: str = 'Nothing to see here.\n') -> str:
     """An RFC822-ish message body, as public-inbox stores it in the file 'm'."""
     return (

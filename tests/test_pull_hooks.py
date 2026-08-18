@@ -11,14 +11,13 @@ named hooks in dumb_pull.py are a different, unrelated set of functions.
 from __future__ import annotations
 
 import os
-import stat
 from pathlib import Path
 
 import pytest
 
 import grokmirror.pull
 
-from support import GrokTree
+from support import GrokTree, write_script
 
 # -- get_hookscripts() ---------------------------------------------------------
 
@@ -33,8 +32,7 @@ def test_get_hookscripts_skips_a_non_executable_script_and_warns(
     tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
     hookscript = tree.root / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\necho should not run\n')
-    hookscript.chmod(0o644)
+    write_script(hookscript, 'echo should not run\n', executable=False)
     config = tree.load_config(sections={'pull': {'post_clone_complete_hook': str(hookscript)}})
 
     with caplog.at_level('WARNING'):
@@ -48,8 +46,7 @@ def test_get_hookscripts_returns_one_argv_per_configured_line(tree: GrokTree) ->
     first = tree.root / 'first.sh'
     second = tree.root / 'second.sh'
     for hookscript in (first, second):
-        hookscript.write_text('#!/bin/sh\ntrue\n')
-        hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
+        write_script(hookscript, 'true\n')
     hookline = f'{first} --one\n{second} --two extra'
     config = tree.load_config(sections={'pull': {'post_clone_complete_hook': hookline}})
 
@@ -64,8 +61,7 @@ def test_get_hookscripts_expands_a_leading_tilde(tree: GrokTree) -> None:
     # $HOME somewhere else, which would just have to be undone afterwards.
     home = Path(os.environ['HOME'])
     hookscript = home / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\ntrue\n')
-    hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
+    write_script(hookscript, 'true\n')
     config = tree.load_config(sections={'pull': {'post_clone_complete_hook': '~/hook.sh'}})
 
     hookscripts = grokmirror.pull.get_hookscripts(config, 'post_clone_complete_hook')
@@ -86,8 +82,7 @@ def test_run_post_clone_complete_hook_pipes_the_clone_list_as_stdin(
     tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
     hookscript = tree.root / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\ncat\n')
-    hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
+    write_script(hookscript, 'cat\n')
     config = tree.load_config(sections={'pull': {'post_clone_complete_hook': str(hookscript)}})
 
     with caplog.at_level('INFO'):
@@ -107,8 +102,7 @@ def test_run_post_work_complete_hook_does_nothing_when_unconfigured(tree: GrokTr
 
 def test_run_post_work_complete_hook_runs_and_logs_output(tree: GrokTree, caplog: pytest.LogCaptureFixture) -> None:
     hookscript = tree.root / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\necho all done\necho went wrong >&2\n')
-    hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
+    write_script(hookscript, 'echo all done\necho went wrong >&2\n')
     config = tree.load_config(sections={'pull': {'post_work_complete_hook': str(hookscript)}})
 
     with caplog.at_level('INFO'):
@@ -131,8 +125,7 @@ def test_run_post_update_hook_appends_the_fullpath_and_logs_output(
     tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
     hookscript = tree.root / 'hook.sh'
-    hookscript.write_text('#!/bin/sh\necho "updated: $1"\necho "trouble: $1" >&2\n')
-    hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
+    write_script(hookscript, 'echo "updated: $1"\necho "trouble: $1" >&2\n')
     config = tree.load_config(sections={'pull': {'post_update_hook': str(hookscript)}})
 
     with caplog.at_level('INFO'):

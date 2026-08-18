@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from support import GrokTree
+from support import GrokTree, write_script
 
 # A [remote] section complete enough that only the setting under test is wrong.
 GOOD_REMOTE = {'site': 'file:///nonexistent', 'manifest': 'file:///nonexistent/manifest.js.gz'}
@@ -83,7 +83,7 @@ def test_pull_reports_a_failing_manifest_command(tree: GrokTree) -> None:
 
 def test_pull_reports_an_unexecutable_manifest_command(tree: GrokTree) -> None:
     script = tree.root / 'not-executable.sh'
-    script.write_text('#!/bin/sh\necho "{}"\n')
+    write_script(script, 'echo "{}"\n', executable=False)
     tree.write_config({'remote': {'site': GOOD_REMOTE['site'], 'manifest_command': str(script)}})
     res = tree.run_pull('-v', expect=1)
     assert 'not executable' in res.stdout + res.stderr
@@ -91,8 +91,7 @@ def test_pull_reports_an_unexecutable_manifest_command(tree: GrokTree) -> None:
 
 def test_pull_reports_unparseable_manifest_command_output(tree: GrokTree) -> None:
     script = tree.root / 'garbage.sh'
-    script.write_text('#!/bin/sh\necho "not json at all"\n')
-    script.chmod(0o755)
+    write_script(script, 'echo "not json at all"\n')
     tree.write_config({'remote': {'site': GOOD_REMOTE['site'], 'manifest_command': str(script)}})
     res = tree.run_pull('-v', expect=1)
     assert 'Failed to parse output' in res.stdout + res.stderr

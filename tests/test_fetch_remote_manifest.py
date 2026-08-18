@@ -19,7 +19,7 @@ import pytest
 import grokmirror
 import grokmirror.pull
 
-from support import GrokTree, http_server
+from support import GrokTree, http_server, write_script
 
 # -- plain HTTP -----------------------------------------------------------------
 
@@ -107,8 +107,7 @@ def test_raises_when_the_downloaded_content_is_not_valid_gzip(tree: GrokTree) ->
 
 def test_manifest_command_returns_the_parsed_manifest(tree: GrokTree) -> None:
     script = tree.root / 'manifest-command.sh'
-    script.write_text('#!/bin/sh\necho \'{"/test/one.git": {"fingerprint": "abc"}}\'\n')
-    script.chmod(0o755)
+    write_script(script, 'echo \'{"/test/one.git": {"fingerprint": "abc"}}\'\n')
     config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
@@ -119,8 +118,7 @@ def test_manifest_command_returns_the_parsed_manifest(tree: GrokTree) -> None:
 
 def test_manifest_command_exit_127_means_unchanged(tree: GrokTree, caplog: pytest.LogCaptureFixture) -> None:
     script = tree.root / 'manifest-command.sh'
-    script.write_text('#!/bin/sh\nexit 127\n')
-    script.chmod(0o755)
+    write_script(script, 'exit 127\n')
     config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
@@ -133,8 +131,7 @@ def test_manifest_command_exit_127_means_unchanged(tree: GrokTree, caplog: pytes
 
 def test_manifest_command_other_nonzero_exit_is_non_fatal(tree: GrokTree, caplog: pytest.LogCaptureFixture) -> None:
     script = tree.root / 'manifest-command.sh'
-    script.write_text('#!/bin/sh\nexit 2\n')
-    script.chmod(0o755)
+    write_script(script, 'exit 2\n')
     config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
@@ -147,8 +144,7 @@ def test_manifest_command_other_nonzero_exit_is_non_fatal(tree: GrokTree, caplog
 
 def test_manifest_command_empty_manifest_is_rejected(tree: GrokTree) -> None:
     script = tree.root / 'manifest-command.sh'
-    script.write_text("#!/bin/sh\necho '{}'\n")
-    script.chmod(0o755)
+    write_script(script, "echo '{}'\n")
     config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
