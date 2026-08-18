@@ -13,39 +13,12 @@ exercising for real.
 
 from __future__ import annotations
 
-import contextlib
-import functools
-import http.server
-import threading
-from collections.abc import Iterator
-from pathlib import Path
-
 import pytest
 
 import grokmirror
 import grokmirror.pull
 
-from support import GrokTree, git
-
-
-@contextlib.contextmanager
-def bundle_server(servedir: Path) -> Iterator[str]:
-    """Serve `servedir` over HTTP on loopback and yield its base URL."""
-
-    class QuietHandler(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-    handler = functools.partial(QuietHandler, directory=str(servedir))
-    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f'http://127.0.0.1:{server.server_port}'
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=30)
+from support import GrokTree, git, http_server
 
 
 def test_does_nothing_when_no_preload_url_is_configured(tree: GrokTree) -> None:
@@ -62,7 +35,7 @@ def test_does_nothing_when_no_preload_url_is_configured(tree: GrokTree) -> None:
 
 def test_downloads_and_preloads_a_real_bundle(tree: GrokTree) -> None:
     source = tree.source()
-    with bundle_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         git('bundle', 'create', str(tree.root / 'fg1.bundle'), '--all', cwd=source.path)
         obstrepo = tree.objstore / 'fg1.git'
         git('init', '-q', '--bare', str(obstrepo))
@@ -88,7 +61,7 @@ def test_falls_back_to_a_normal_clone_when_the_download_fails(tree: GrokTree) ->
     # clean up after, leaving the objstore repo untouched for a normal clone.
     obstrepo = tree.objstore / 'fg1.git'
     git('init', '-q', '--bare', str(obstrepo))
-    with bundle_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         config = grokmirror.load_config_file(
             str(tree.write_config(sections={'remote': {'preload_bundle_url': base_url}}))
         )
@@ -110,7 +83,7 @@ def test_falls_back_when_the_downloaded_file_is_not_a_valid_bundle(
     (tree.root / 'fg1.bundle').write_text('not a real bundle file\n')
     obstrepo = tree.objstore / 'fg1.git'
     git('init', '-q', '--bare', str(obstrepo))
-    with bundle_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         config = grokmirror.load_config_file(
             str(tree.write_config(sections={'remote': {'preload_bundle_url': base_url}}))
         )

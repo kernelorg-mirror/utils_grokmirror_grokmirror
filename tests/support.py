@@ -25,10 +25,15 @@ quietly reporting on whatever repository the test runner happens to stand in.
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import gzip
+import http.server
 import json
 import os
 import subprocess
+import threading
+from collections.abc import Iterator
 from configparser import ConfigParser
 from pathlib import Path
 from typing import Any
@@ -131,6 +136,32 @@ class Source:
         if refspec is None:
             refspec = f'HEAD:refs/heads/{self.branch}'
         git('push', '-q', str(dest), refspec, cwd=self.path)
+
+
+@contextlib.contextmanager
+def http_server(servedir: Path) -> Iterator[str]:
+    """Serve `servedir` over HTTP on loopback and yield its base URL.
+
+    grokmirror talks plain HTTP in two places -- fetching a remote manifest and
+    preloading an objstore bundle -- and both are worth exercising against a
+    real server rather than a mocked `requests`, since the retry adapter,
+    streaming download and status handling are the interesting parts.
+    """
+
+    class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    handler = functools.partial(QuietHandler, directory=str(servedir))
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f'http://127.0.0.1:{server.server_port}'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=30)
 
 
 def pi_message(subject: str, body: str = 'Nothing to see here.\n') -> str:

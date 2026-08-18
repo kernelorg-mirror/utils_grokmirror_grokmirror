@@ -11,41 +11,15 @@ manifest_command's success path and its other exit-code branches, and the
 
 from __future__ import annotations
 
-import contextlib
-import functools
 import gzip
-import http.server
 import json
-import threading
-from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 
 import grokmirror
 import grokmirror.pull
 
-from support import GrokTree
-
-
-@contextlib.contextmanager
-def manifest_server(servedir: Path) -> Iterator[str]:
-    """Serve `servedir` over HTTP on loopback and yield its base URL."""
-
-    class QuietHandler(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-    handler = functools.partial(QuietHandler, directory=str(servedir))
-    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f'http://127.0.0.1:{server.server_port}'
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=30)
+from support import GrokTree, http_server
 
 
 def load_config(
@@ -67,7 +41,7 @@ def test_fetches_a_gzipped_manifest_over_http(tree: GrokTree) -> None:
     with gzip.open(tree.root / 'manifest.js.gz', 'wt', encoding='utf-8') as fh:
         fh.write(json.dumps(data))
 
-    with manifest_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         config = load_config(tree, manifest_url=f'{base_url}/manifest.js.gz')
         ses = grokmirror.GrokSession()
 
@@ -83,7 +57,7 @@ def test_fetches_a_plain_json_manifest_over_http(tree: GrokTree) -> None:
     data = {'/test/one.git': {'fingerprint': 'abc'}}
     (tree.root / 'manifest.json').write_text(json.dumps(data))
 
-    with manifest_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         config = load_config(tree, manifest_url=f'{base_url}/manifest.json')
         ses = grokmirror.GrokSession()
 
@@ -96,7 +70,7 @@ def test_returns_none_when_the_server_reports_not_modified(tree: GrokTree, caplo
     data = {'/test/one.git': {'fingerprint': 'abc'}}
     (tree.root / 'manifest.json').write_text(json.dumps(data))
 
-    with manifest_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         config = load_config(tree, manifest_url=f'{base_url}/manifest.json')
         ses = grokmirror.GrokSession()
 
@@ -111,7 +85,7 @@ def test_returns_none_when_the_server_reports_not_modified(tree: GrokTree, caplo
 
 
 def test_raises_when_the_server_returns_an_error_status(tree: GrokTree) -> None:
-    with manifest_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         config = load_config(tree, manifest_url=f'{base_url}/does-not-exist.json')
         ses = grokmirror.GrokSession()
 
@@ -132,7 +106,7 @@ def test_raises_when_the_server_is_unreachable(tree: GrokTree) -> None:
 def test_raises_when_the_downloaded_content_is_not_valid_gzip(tree: GrokTree) -> None:
     (tree.root / 'manifest.js.gz').write_text('not actually gzip data\n')
 
-    with manifest_server(tree.root) as base_url:
+    with http_server(tree.root) as base_url:
         config = load_config(tree, manifest_url=f'{base_url}/manifest.js.gz')
         ses = grokmirror.GrokSession()
 
