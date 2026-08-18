@@ -11,7 +11,6 @@ matrix sweep is for.
 
 import importlib
 import subprocess
-import sys
 
 import pytest
 
@@ -62,8 +61,3 @@ def test_script_help(script: str) -> None:
     res = subprocess.run([script, '--help'], capture_output=True, text=True, check=False)
     assert res.returncode == 0, res.stderr
     assert 'usage:' in res.stdout
-
-
-def test_python_version_is_supported() -> None:
-    # Mirrors `requires-python` in pyproject.toml.
-    assert sys.version_info >= (3, 9)

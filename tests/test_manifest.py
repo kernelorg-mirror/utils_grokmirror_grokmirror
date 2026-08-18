@@ -34,7 +34,11 @@ def test_walks_the_toplevel(tree: GrokTree) -> None:
     for entry in manifest.values():
         assert entry['fingerprint']
         assert entry['head'] == 'ref: refs/heads/master'
+        # Nothing harvested from the current directory: `reference` is where
+        # the decoy's alternates would land, and its remote URL must not turn
+        # up anywhere in the entry either.
         assert entry['reference'] is None
+        assert DECOY_URL not in str(entry)
 
 
 def test_modified_is_the_latest_commit_timestamp(tree: GrokTree) -> None:

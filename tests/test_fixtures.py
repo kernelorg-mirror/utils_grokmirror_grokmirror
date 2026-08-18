@@ -122,23 +122,6 @@ def test_run_can_allow_a_traceback(tree: GrokTree) -> None:
     assert 'RuntimeError' in res.stderr
 
 
-def test_grok_manifest_runs_end_to_end(tree: GrokTree) -> None:
-    # The smallest real-repo round trip: build two repos, generate a manifest,
-    # and check it describes them. If this fails, nothing else will work.
-    tree.add_repo('test/one.git')
-    tree.add_repo('test/two.git', source='beta')
-    tree.run_manifest()
-    manifest = tree.read_manifest()
-    assert sorted(manifest.keys()) == ['/test/one.git', '/test/two.git']
-    for repoinfo in manifest.values():
-        assert repoinfo['fingerprint']
-        assert repoinfo['modified'] > 0
-        assert repoinfo['head'] == 'ref: refs/heads/master'
-        # Nothing should have been harvested from the current directory.
-        assert repoinfo.get('reference') is None
-        assert DECOY_URL not in str(repoinfo)
-
-
 def test_subprocesses_inherit_the_isolated_environment() -> None:
     # run() relies on this: grok-* subprocesses must see the same fake HOME.
     res = subprocess.run(
