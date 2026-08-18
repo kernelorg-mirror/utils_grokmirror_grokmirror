@@ -11,10 +11,12 @@ named hooks in dumb_pull.py are a different, unrelated set of functions.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+import grokmirror
 import grokmirror.pull
 
 from support import GrokTree, write_script
@@ -69,13 +71,32 @@ def test_get_hookscripts_expands_a_leading_tilde(tree: GrokTree) -> None:
     assert hookscripts == [[str(hookscript)]]
 
 
+# -- the three run_post_*_hook() wrappers ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    'run_hook',
+    [
+        pytest.param(
+            lambda config: grokmirror.pull.run_post_clone_complete_hook(config, ['/test/one.git']),
+            id='post_clone_complete',
+        ),
+        pytest.param(grokmirror.pull.run_post_work_complete_hook, id='post_work_complete'),
+        pytest.param(
+            lambda config: grokmirror.pull.run_post_update_hook(config, '/test/one.git'),
+            id='post_update',
+        ),
+    ],
+)
+def test_hook_wrappers_do_nothing_when_unconfigured(
+    tree: GrokTree, run_hook: Callable[[grokmirror.GrokConfigParser], None]
+) -> None:
+    # Most mirrors configure no hooks at all, so every one of these runs on
+    # every pass of a real grok-pull and must be a silent no-op.
+    run_hook(tree.load_config(sections={'pull': {}}))
+
+
 # -- run_post_clone_complete_hook() --------------------------------------------
-
-
-def test_run_post_clone_complete_hook_does_nothing_when_unconfigured(tree: GrokTree) -> None:
-    config = tree.load_config(sections={'pull': {}})
-
-    grokmirror.pull.run_post_clone_complete_hook(config, ['/test/one.git', '/test/two.git'])
 
 
 def test_run_post_clone_complete_hook_pipes_the_clone_list_as_stdin(
@@ -94,12 +115,6 @@ def test_run_post_clone_complete_hook_pipes_the_clone_list_as_stdin(
 # -- run_post_work_complete_hook() ---------------------------------------------
 
 
-def test_run_post_work_complete_hook_does_nothing_when_unconfigured(tree: GrokTree) -> None:
-    config = tree.load_config(sections={'pull': {}})
-
-    grokmirror.pull.run_post_work_complete_hook(config)
-
-
 def test_run_post_work_complete_hook_runs_and_logs_output(tree: GrokTree, caplog: pytest.LogCaptureFixture) -> None:
     hookscript = tree.root / 'hook.sh'
     write_script(hookscript, 'echo all done\necho went wrong >&2\n')
@@ -113,12 +128,6 @@ def test_run_post_work_complete_hook_runs_and_logs_output(tree: GrokTree, caplog
 
 
 # -- run_post_update_hook() -----------------------------------------------------
-
-
-def test_run_post_update_hook_does_nothing_when_unconfigured(tree: GrokTree) -> None:
-    config = tree.load_config(sections={'pull': {}})
-
-    grokmirror.pull.run_post_update_hook(config, '/test/one.git')
 
 
 def test_run_post_update_hook_appends_the_fullpath_and_logs_output(
