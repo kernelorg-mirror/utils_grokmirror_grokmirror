@@ -14,28 +14,16 @@ from __future__ import annotations
 
 import pytest
 
-import grokmirror
 import grokmirror.pull
 
 from support import GrokTree, git
-
-
-def wire_up(origin: GrokTree, tree: GrokTree, gitdir: str) -> tuple[str, str]:
-    """Bare-init `gitdir` in `tree` and point its remote at `origin`."""
-    origin.run_manifest()
-    config = tree.load_mirror_config(origin)
-    fullpath = str(tree.path(gitdir))
-    assert grokmirror.setup_bare_repo(fullpath)
-    assert grokmirror.pull.fix_remotes(str(tree.toplevel), gitdir, config['remote']['site'], config)
-    remotename = config['pull'].get('remotename', '_grokmirror')
-    return fullpath, remotename
 
 
 def test_successful_fetch_with_new_commits_returns_true_and_logs_at_debug(
     origin: GrokTree, tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
     origin.add_repo('test/one.git')
-    fullpath, remotename = wire_up(origin, tree, '/test/one.git')
+    fullpath, remotename, _config = tree.wire_mirror_repo(origin, '/test/one.git')
 
     with caplog.at_level('DEBUG'):
         result = grokmirror.pull.pull_repo(fullpath, remotename)
@@ -55,7 +43,7 @@ def test_up_to_date_fetch_returns_true_with_no_stderr_logging(
     origin: GrokTree, tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
     origin.add_repo('test/one.git')
-    fullpath, remotename = wire_up(origin, tree, '/test/one.git')
+    fullpath, remotename, _config = tree.wire_mirror_repo(origin, '/test/one.git')
     # First fetch brings us up to date; the interesting one is the second,
     # where git has nothing new to report at all.
     assert grokmirror.pull.pull_repo(fullpath, remotename) is True
@@ -104,7 +92,7 @@ def test_fetch_from_a_broken_remote_returns_false_and_logs_a_warning(
     origin: GrokTree, tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
     origin.add_repo('test/one.git')
-    fullpath, remotename = wire_up(origin, tree, '/test/one.git')
+    fullpath, remotename, _config = tree.wire_mirror_repo(origin, '/test/one.git')
     # Break the remote after fix_remotes() has already pointed it somewhere
     # real, the way a origin repository disappearing out from under a mirror
     # would.

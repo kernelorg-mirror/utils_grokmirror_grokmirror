@@ -36,9 +36,10 @@ import threading
 from collections.abc import Iterator
 from configparser import ConfigParser
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import grokmirror
+import grokmirror.pull
 
 # Fixed point in time for commits, so fingerprints and timestamps are
 # reproducible from run to run: 2020-09-13 12:26:40 UTC.
@@ -188,6 +189,14 @@ def pi_message(subject: str, body: str = 'Nothing to see here.\n') -> str:
         '\n'
         f'{body}'
     )
+
+
+class MirrorRepo(NamedTuple):
+    """A bare mirror repository wired up to an origin, and the config behind it."""
+
+    fullpath: str
+    remotename: str
+    config: grokmirror.GrokConfigParser
 
 
 class GrokTree:
@@ -389,6 +398,25 @@ class GrokTree:
     ) -> grokmirror.GrokConfigParser:
         """write_mirror_config(), parsed back the same way load_config() does."""
         return grokmirror.load_config_file(str(self.write_mirror_config(origin, sections)))
+
+    def wire_mirror_repo(
+        self,
+        origin: GrokTree,
+        gitdir: str,
+        sections: dict[str, dict[str, str]] | None = None,
+    ) -> MirrorRepo:
+        """Bare-init `gitdir` here and point its remote at `origin`.
+
+        This is what grok-pull's own init step leaves behind, minus the daemon
+        around it, so a test can call a single pull internal against a repo that
+        is already set up the way a real mirror run would have set it up.
+        """
+        origin.run_manifest()
+        config = self.load_mirror_config(origin, sections)
+        fullpath = str(self.path(gitdir))
+        assert grokmirror.setup_bare_repo(fullpath)
+        assert grokmirror.pull.fix_remotes(str(self.toplevel), gitdir, config['remote']['site'], config)
+        return MirrorRepo(fullpath, config['pull'].get('remotename', '_grokmirror'), config)
 
     def run_pull(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         """grok-pull with this tree's config file."""

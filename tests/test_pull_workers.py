@@ -169,13 +169,8 @@ def test_pull_worker_pulls_and_queues_spa_actions(origin: GrokTree, tree: GrokTr
     # minus the daemon around it) gets its objects fetched from the origin,
     # and the initial-clone treatments land in the spa queue.
     origin.add_repo('test/one.git')
-    origin.run_manifest()
-    config = tree.load_mirror_config(origin)
+    fullpath, _remotename, config = tree.wire_mirror_repo(origin, '/test/one.git')
     repoinfo = origin.read_manifest()['/test/one.git']
-
-    fullpath = str(tree.path('test/one.git'))
-    assert grokmirror.setup_bare_repo(fullpath)
-    assert grokmirror.pull.fix_remotes(str(tree.toplevel), '/test/one.git', config['remote']['site'], config)
     grokmirror.pull.set_repo_params(fullpath, repoinfo)
 
     q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
@@ -289,12 +284,8 @@ def test_run_pull_action_skips_fetch_when_fingerprint_matches(
     origin: GrokTree, tree: GrokTree, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     origin.add_repo('test/one.git')
-    origin.run_manifest()
-    config = tree.load_mirror_config(origin)
     gitdir = '/test/one.git'
-    fullpath = str(tree.path(gitdir))
-    assert grokmirror.setup_bare_repo(fullpath)
-    assert grokmirror.pull.fix_remotes(str(tree.toplevel), gitdir, config['remote']['site'], config)
+    fullpath, _remotename, config = tree.wire_mirror_repo(origin, gitdir)
     ses = grokmirror.GrokSession()
 
     # A real initial pull first, so the fingerprint we compare against below is
@@ -327,12 +318,8 @@ def test_run_pull_action_retries_before_giving_up(
     origin: GrokTree, tree: GrokTree, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     origin.add_repo('test/one.git')
-    origin.run_manifest()
-    config = tree.load_mirror_config(origin, {'pull': {'retries': '2'}})
     gitdir = '/test/one.git'
-    fullpath = str(tree.path(gitdir))
-    assert grokmirror.setup_bare_repo(fullpath)
-    assert grokmirror.pull.fix_remotes(str(tree.toplevel), gitdir, config['remote']['site'], config)
+    fullpath, _remotename, config = tree.wire_mirror_repo(origin, gitdir, {'pull': {'retries': '2'}})
 
     calls = 0
 
@@ -468,12 +455,8 @@ def test_run_pull_action_skips_repack_for_a_precious_repo(
     origin: GrokTree, tree: GrokTree, monkeypatch: pytest.MonkeyPatch, precious: bool, expect_repack: bool
 ) -> None:
     origin.add_repo('test/one.git')
-    origin.run_manifest()
-    config = tree.load_mirror_config(origin)
     gitdir = '/test/one.git'
-    fullpath = str(tree.path(gitdir))
-    assert grokmirror.setup_bare_repo(fullpath)
-    assert grokmirror.pull.fix_remotes(str(tree.toplevel), gitdir, config['remote']['site'], config)
+    fullpath, _remotename, config = tree.wire_mirror_repo(origin, gitdir)
     if precious:
         git('config', 'extensions.preciousObjects', 'true', cwd=fullpath)
     # A freshly-fetched, single-commit test repo is far too small to trigger a
@@ -495,12 +478,8 @@ def test_run_pull_action_skips_repack_for_a_precious_repo(
 
 def test_run_pull_action_writes_the_agefile_when_modified_is_set(origin: GrokTree, tree: GrokTree) -> None:
     origin.add_repo('test/one.git')
-    origin.run_manifest()
-    config = tree.load_mirror_config(origin)
     gitdir = '/test/one.git'
-    fullpath = str(tree.path(gitdir))
-    assert grokmirror.setup_bare_repo(fullpath)
-    assert grokmirror.pull.fix_remotes(str(tree.toplevel), gitdir, config['remote']['site'], config)
+    fullpath, _remotename, config = tree.wire_mirror_repo(origin, gitdir)
 
     # A bogus fingerprint forces a fetch attempt, same reasoning as the retry
     # test above: two Nones would otherwise look like a match, and the agefile
