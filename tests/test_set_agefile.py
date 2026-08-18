@@ -27,15 +27,11 @@ def test_writes_timestamp_and_cgit_formatted_agefile(tree: GrokTree) -> None:
     expected_cgit = time.strftime('%F %T', time.localtime(last_modified))
     assert agefile.read_text(encoding='utf-8') == f'{expected_cgit}\n'
 
+    # Every later pull calls this again on the same repository, so both files
+    # have to be replaced rather than appended to or refused as existing.
+    later = 1700000000
+    grokmirror.pull.set_agefile(str(tree.toplevel), '/test/one.git', later)
 
-def test_second_call_overwrites_both_files_without_error(tree: GrokTree) -> None:
-    fullpath = tree.add_empty_repo('test/one.git')
-
-    grokmirror.pull.set_agefile(str(tree.toplevel), '/test/one.git', 1600000000)
-    grokmirror.pull.set_agefile(str(tree.toplevel), '/test/one.git', 1700000000)
-
-    tsfile = fullpath / 'grokmirror.timestamp'
-    agefile = fullpath / 'info' / 'web' / 'last-modified'
-    assert tsfile.read_text(encoding='utf-8') == '1700000000'
-    expected_cgit = time.strftime('%F %T', time.localtime(1700000000))
+    assert tsfile.read_text(encoding='utf-8') == str(later)
+    expected_cgit = time.strftime('%F %T', time.localtime(later))
     assert agefile.read_text(encoding='utf-8') == f'{expected_cgit}\n'
