@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """sync_repo_symlinks(), which keeps a repo's configured symlinks pointed at it.
 
-pull_worker() already exercises three of this function's branches indirectly
-(creating a missing symlink, fixing one that points elsewhere, and replacing a
-stale real directory), in test_pull_workers.py. What's missing is direct
-coverage of the no-op case -- a correct symlink must be left alone, not
-unlinked and recreated -- plus missing parent directories and more than one
-symlink handled in a single call, which are easiest to check by calling the
-function directly instead of through the full pull_worker() machinery.
+This file owns the branch coverage: a correct symlink left alone rather than
+unlinked and recreated, one pointing elsewhere fixed, a missing one created
+along with its parent directories, and several of them handled independently
+in a single call. Driving them through pull_worker() would prove nothing extra
+about the branches themselves and costs a full worker run each.
+
+test_pull_workers.py keeps exactly one symlink test, for the destructive case
+(a real directory where a symlink now belongs), since that one is also about
+the warning pull_worker leaves behind for the admin.
 """
 
 from __future__ import annotations

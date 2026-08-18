@@ -192,40 +192,6 @@ def test_pull_worker_pulls_and_queues_spa_actions(origin: GrokTree, tree: GrokTr
     assert fullpath not in grokmirror.REPO_LOCKH
 
 
-def test_pull_worker_creates_a_missing_symlink(tree: GrokTree) -> None:
-    tree.add_repo('test/one.git')
-    config = tree.load_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
-    repoinfo: grokmirror.RepoInfo = {'symlinks': ['/test/link.git']}
-
-    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
-    result = grokmirror.pull.pull_worker(
-        grokmirror.GrokSession(), config, ('/test/one.git', repoinfo, 'fix_params', 'fix_params'), q_spa
-    )
-
-    assert result is True
-    linkpath = tree.path('test/link.git')
-    assert linkpath.is_symlink()
-    assert os.path.realpath(linkpath) == os.fspath(tree.path('test/one.git'))
-
-
-def test_pull_worker_fixes_a_symlink_pointing_the_wrong_way(tree: GrokTree) -> None:
-    tree.add_repo('test/one.git')
-    tree.add_repo('test/other.git')
-    tree.path('test/link.git').symlink_to(tree.path('test/other.git'))
-    config = tree.load_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
-    repoinfo: grokmirror.RepoInfo = {'symlinks': ['/test/link.git']}
-
-    q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
-    result = grokmirror.pull.pull_worker(
-        grokmirror.GrokSession(), config, ('/test/one.git', repoinfo, 'fix_params', 'fix_params'), q_spa
-    )
-
-    assert result is True
-    linkpath = tree.path('test/link.git')
-    assert linkpath.is_symlink()
-    assert os.path.realpath(linkpath) == os.fspath(tree.path('test/one.git'))
-
-
 def test_pull_worker_replaces_a_stale_directory_with_a_symlink(
     tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
