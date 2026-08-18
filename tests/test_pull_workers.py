@@ -41,8 +41,7 @@ def test_objstore_action_on_a_repo_with_no_alternates(
     # path, i.e. against the current working directory. Same class of bug as the
     # reference grok-manifest used to harvest from the cwd.
     tree.add_repo('test/one.git')
-    cfgfile = tree.write_config()
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config()
     monkeypatch.chdir(tree.decoy)
 
     q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
@@ -62,9 +61,8 @@ def test_objstore_action_fetches_when_alternates_are_set(tree: GrokTree) -> None
     tree.add_repo('test/one.git')
     tree.add_repo('test/fork.git')
     tree.run_manifest()
-    cfgfile = tree.write_config()
+    config = tree.load_config()
     tree.run_fsck('-f')
-    config = grokmirror.load_config_file(str(cfgfile))
 
     # A new commit that only exists in the toplevel repo, not in the objstore.
     source = tree.source('source')
@@ -83,8 +81,7 @@ def test_objstore_action_fetches_when_alternates_are_set(tree: GrokTree) -> None
 @pytest.mark.parametrize('action', ['repack', 'fingerprint'])
 def test_simple_actions_run(tree: GrokTree, action: str) -> None:
     tree.add_repo('test/one.git')
-    cfgfile = tree.write_config()
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config()
 
     q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     q_spa.put(('/test/one.git', [action]))
@@ -95,8 +92,7 @@ def test_simple_actions_run(tree: GrokTree, action: str) -> None:
 
 def test_an_unknown_action_is_ignored(tree: GrokTree) -> None:
     tree.add_repo('test/one.git')
-    cfgfile = tree.write_config()
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config()
 
     q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
     q_spa.put(('/test/one.git', ['no-such-action']))
@@ -113,8 +109,7 @@ def test_spa_worker_survives_a_failing_treatment(
     # and a --runonce drain would hang on q_spa.join(). The failed item still
     # has to be accounted with task_done(), and later items still have to run.
     tree.add_repo('test/one.git')
-    cfgfile = tree.write_config()
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config()
 
     real_spa_repo = grokmirror.pull._spa_repo
 
@@ -147,8 +142,7 @@ def test_pull_worker_defers_a_locked_repo(
     # grokmirror process on the same repository.
     origin.add_repo('test/one.git')
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
     repoinfo = origin.read_manifest()['/test/one.git']
 
     naps: list[float] = []
@@ -176,8 +170,7 @@ def test_pull_worker_pulls_and_queues_spa_actions(origin: GrokTree, tree: GrokTr
     # and the initial-clone treatments land in the spa queue.
     origin.add_repo('test/one.git')
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
     repoinfo = origin.read_manifest()['/test/one.git']
 
     fullpath = str(tree.path('test/one.git'))
@@ -206,8 +199,7 @@ def test_pull_worker_pulls_and_queues_spa_actions(origin: GrokTree, tree: GrokTr
 
 def test_pull_worker_creates_a_missing_symlink(tree: GrokTree) -> None:
     tree.add_repo('test/one.git')
-    cfgfile = tree.write_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
     repoinfo: grokmirror.RepoInfo = {'symlinks': ['/test/link.git']}
 
     q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
@@ -225,8 +217,7 @@ def test_pull_worker_fixes_a_symlink_pointing_the_wrong_way(tree: GrokTree) -> N
     tree.add_repo('test/one.git')
     tree.add_repo('test/other.git')
     tree.path('test/link.git').symlink_to(tree.path('test/other.git'))
-    cfgfile = tree.write_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
     repoinfo: grokmirror.RepoInfo = {'symlinks': ['/test/link.git']}
 
     q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
@@ -249,8 +240,7 @@ def test_pull_worker_replaces_a_stale_directory_with_a_symlink(
     # the same repository around under different names forever.
     tree.add_repo('test/one.git')
     tree.add_repo('test/link.git')
-    cfgfile = tree.write_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config({'pull': {}, 'remote': {'site': 'file:///dev/null'}})
     repoinfo: grokmirror.RepoInfo = {'symlinks': ['/test/link.git']}
 
     q_spa: queue.Queue[grokmirror.pull.SpaItem | None] = queue.Queue()
@@ -274,8 +264,7 @@ def test_remote_url_is_joined_as_a_url(origin: GrokTree, tree: GrokTree, site: s
     # '//' in 'https://' (or 'file://') down to one slash, so a conversion to
     # pathlib would hand git a remote nothing can fetch from. Both spellings of
     # site, with and without a trailing slash, must give the same URL.
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
 
     fullpath = str(tree.path('test/one.git'))
     assert grokmirror.setup_bare_repo(fullpath)
@@ -301,8 +290,7 @@ def test_run_pull_action_skips_fetch_when_fingerprint_matches(
 ) -> None:
     origin.add_repo('test/one.git')
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
     gitdir = '/test/one.git'
     fullpath = str(tree.path(gitdir))
     assert grokmirror.setup_bare_repo(fullpath)
@@ -340,8 +328,7 @@ def test_run_pull_action_retries_before_giving_up(
 ) -> None:
     origin.add_repo('test/one.git')
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin, {'pull': {'retries': '2'}})
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin, {'pull': {'retries': '2'}})
     gitdir = '/test/one.git'
     fullpath = str(tree.path(gitdir))
     assert grokmirror.setup_bare_repo(fullpath)
@@ -372,8 +359,7 @@ def test_run_pull_action_retries_before_giving_up(
 def test_run_pull_action_reorigins_before_fetching_if_the_remote_is_missing(origin: GrokTree, tree: GrokTree) -> None:
     origin.add_repo('test/one.git')
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
     gitdir = '/test/one.git'
     fullpath = str(tree.path(gitdir))
     assert grokmirror.setup_bare_repo(fullpath)
@@ -401,8 +387,7 @@ def test_run_pull_action_eagerly_fetches_objstore_when_the_alternate_is_still_em
     # the spa, since other forks may be waiting on those objects.
     obstrepo = tree.objstore / 'fg1.git'
     git('init', '-q', '--bare', str(obstrepo))
-    cfgfile = tree.write_config(sections={'pull': {}, 'remote': {'site': 'file:///dev/null'}})
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config(sections={'pull': {}, 'remote': {'site': 'file:///dev/null'}})
     gitdir = '/test/fork.git'
     fullpath = str(tree.path(gitdir))
     assert grokmirror.setup_bare_repo(fullpath)
@@ -444,9 +429,8 @@ def test_run_pull_action_lazily_queues_objstore_when_the_alternate_already_has_o
     tree.add_repo('test/one.git')
     tree.add_repo('test/fork.git')
     tree.run_manifest()
-    cfgfile = tree.write_config(sections={'pull': {}, 'remote': {'site': 'file:///dev/null'}})
+    config = tree.load_config(sections={'pull': {}, 'remote': {'site': 'file:///dev/null'}})
     tree.run_fsck('-f')
-    config = grokmirror.load_config_file(str(cfgfile))
     gitdir = '/test/fork.git'
     fullpath = str(tree.path(gitdir))
     obstrepo = tree.objstore_repos()[0]
@@ -485,8 +469,7 @@ def test_run_pull_action_skips_repack_for_a_precious_repo(
 ) -> None:
     origin.add_repo('test/one.git')
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
     gitdir = '/test/one.git'
     fullpath = str(tree.path(gitdir))
     assert grokmirror.setup_bare_repo(fullpath)
@@ -513,8 +496,7 @@ def test_run_pull_action_skips_repack_for_a_precious_repo(
 def test_run_pull_action_writes_the_agefile_when_modified_is_set(origin: GrokTree, tree: GrokTree) -> None:
     origin.add_repo('test/one.git')
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
     gitdir = '/test/one.git'
     fullpath = str(tree.path(gitdir))
     assert grokmirror.setup_bare_repo(fullpath)
@@ -536,8 +518,7 @@ def test_run_pull_action_objstore_migrate_always_extends_spa_actions(tree: GrokT
     # Even when the fingerprint already matches, and there is nothing to pull,
     # an explicit objstore_migrate action still queues its spa treatments.
     tree.add_repo('test/one.git')
-    cfgfile = tree.write_config(sections={'pull': {}, 'remote': {'site': 'file:///dev/null'}})
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_config(sections={'pull': {}, 'remote': {'site': 'file:///dev/null'}})
     gitdir = '/test/one.git'
     fullpath = str(tree.path(gitdir))
     my_fp = grokmirror.get_repo_fingerprint(str(tree.toplevel), gitdir, force=True)

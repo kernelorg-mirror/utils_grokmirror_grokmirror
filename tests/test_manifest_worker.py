@@ -28,7 +28,7 @@ def load_config(tree: GrokTree, remote_manifest_path: Path) -> grokmirror.GrokCo
         'remote': {'site': 'file:///nonexistent', 'manifest': f'file://{remote_manifest_path}'},
         'pull': {},
     }
-    return grokmirror.load_config_file(str(tree.write_config(sections=sections)))
+    return tree.load_config(sections=sections)
 
 
 def test_successful_run_queues_updates_and_logs_the_pacing_line(

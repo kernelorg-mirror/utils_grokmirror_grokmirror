@@ -38,6 +38,8 @@ from configparser import ConfigParser
 from pathlib import Path
 from typing import Any
 
+import grokmirror
+
 # Fixed point in time for commits, so fingerprints and timestamps are
 # reproducible from run to run: 2020-09-13 12:26:40 UTC.
 BASE_TIMESTAMP = 1600000000
@@ -334,6 +336,23 @@ class GrokTree:
         for name, values in (sections or {}).items():
             merged.setdefault(name, {}).update(values)
         return self.write_config(merged)
+
+    def load_config(self, sections: dict[str, dict[str, str]] | None = None) -> grokmirror.GrokConfigParser:
+        """Write a config file and parse it back the way the commands do.
+
+        Tests that call grokmirror's internals directly need a parsed config
+        rather than a path, but it has to be one that came off disk: the
+        commands only ever see what load_config_file() makes of the file.
+        """
+        return grokmirror.load_config_file(str(self.write_config(sections)))
+
+    def load_mirror_config(
+        self,
+        origin: GrokTree,
+        sections: dict[str, dict[str, str]] | None = None,
+    ) -> grokmirror.GrokConfigParser:
+        """write_mirror_config(), parsed back the same way load_config() does."""
+        return grokmirror.load_config_file(str(self.write_mirror_config(origin, sections)))
 
     def run_pull(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         """grok-pull with this tree's config file."""

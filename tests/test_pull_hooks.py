@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-import grokmirror
 import grokmirror.pull
 
 from support import GrokTree
@@ -25,7 +24,7 @@ from support import GrokTree
 
 
 def test_get_hookscripts_is_empty_when_unconfigured(tree: GrokTree) -> None:
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {}})))
+    config = tree.load_config(sections={'pull': {}})
 
     assert grokmirror.pull.get_hookscripts(config, 'post_clone_complete_hook') == []
 
@@ -36,9 +35,7 @@ def test_get_hookscripts_skips_a_non_executable_script_and_warns(
     hookscript = tree.root / 'hook.sh'
     hookscript.write_text('#!/bin/sh\necho should not run\n')
     hookscript.chmod(0o644)
-    config = grokmirror.load_config_file(
-        str(tree.write_config(sections={'pull': {'post_clone_complete_hook': str(hookscript)}}))
-    )
+    config = tree.load_config(sections={'pull': {'post_clone_complete_hook': str(hookscript)}})
 
     with caplog.at_level('WARNING'):
         hookscripts = grokmirror.pull.get_hookscripts(config, 'post_clone_complete_hook')
@@ -54,9 +51,7 @@ def test_get_hookscripts_returns_one_argv_per_configured_line(tree: GrokTree) ->
         hookscript.write_text('#!/bin/sh\ntrue\n')
         hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
     hookline = f'{first} --one\n{second} --two extra'
-    config = grokmirror.load_config_file(
-        str(tree.write_config(sections={'pull': {'post_clone_complete_hook': hookline}}))
-    )
+    config = tree.load_config(sections={'pull': {'post_clone_complete_hook': hookline}})
 
     hookscripts = grokmirror.pull.get_hookscripts(config, 'post_clone_complete_hook')
 
@@ -71,9 +66,7 @@ def test_get_hookscripts_expands_a_leading_tilde(tree: GrokTree) -> None:
     hookscript = home / 'hook.sh'
     hookscript.write_text('#!/bin/sh\ntrue\n')
     hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
-    config = grokmirror.load_config_file(
-        str(tree.write_config(sections={'pull': {'post_clone_complete_hook': '~/hook.sh'}}))
-    )
+    config = tree.load_config(sections={'pull': {'post_clone_complete_hook': '~/hook.sh'}})
 
     hookscripts = grokmirror.pull.get_hookscripts(config, 'post_clone_complete_hook')
 
@@ -84,7 +77,7 @@ def test_get_hookscripts_expands_a_leading_tilde(tree: GrokTree) -> None:
 
 
 def test_run_post_clone_complete_hook_does_nothing_when_unconfigured(tree: GrokTree) -> None:
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {}})))
+    config = tree.load_config(sections={'pull': {}})
 
     grokmirror.pull.run_post_clone_complete_hook(config, ['/test/one.git', '/test/two.git'])
 
@@ -95,9 +88,7 @@ def test_run_post_clone_complete_hook_pipes_the_clone_list_as_stdin(
     hookscript = tree.root / 'hook.sh'
     hookscript.write_text('#!/bin/sh\ncat\n')
     hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
-    config = grokmirror.load_config_file(
-        str(tree.write_config(sections={'pull': {'post_clone_complete_hook': str(hookscript)}}))
-    )
+    config = tree.load_config(sections={'pull': {'post_clone_complete_hook': str(hookscript)}})
 
     with caplog.at_level('INFO'):
         grokmirror.pull.run_post_clone_complete_hook(config, ['/test/one.git', '/test/two.git'])
@@ -109,7 +100,7 @@ def test_run_post_clone_complete_hook_pipes_the_clone_list_as_stdin(
 
 
 def test_run_post_work_complete_hook_does_nothing_when_unconfigured(tree: GrokTree) -> None:
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {}})))
+    config = tree.load_config(sections={'pull': {}})
 
     grokmirror.pull.run_post_work_complete_hook(config)
 
@@ -118,9 +109,7 @@ def test_run_post_work_complete_hook_runs_and_logs_output(tree: GrokTree, caplog
     hookscript = tree.root / 'hook.sh'
     hookscript.write_text('#!/bin/sh\necho all done\necho went wrong >&2\n')
     hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
-    config = grokmirror.load_config_file(
-        str(tree.write_config(sections={'pull': {'post_work_complete_hook': str(hookscript)}}))
-    )
+    config = tree.load_config(sections={'pull': {'post_work_complete_hook': str(hookscript)}})
 
     with caplog.at_level('INFO'):
         grokmirror.pull.run_post_work_complete_hook(config)
@@ -133,7 +122,7 @@ def test_run_post_work_complete_hook_runs_and_logs_output(tree: GrokTree, caplog
 
 
 def test_run_post_update_hook_does_nothing_when_unconfigured(tree: GrokTree) -> None:
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {}})))
+    config = tree.load_config(sections={'pull': {}})
 
     grokmirror.pull.run_post_update_hook(config, '/test/one.git')
 
@@ -144,9 +133,7 @@ def test_run_post_update_hook_appends_the_fullpath_and_logs_output(
     hookscript = tree.root / 'hook.sh'
     hookscript.write_text('#!/bin/sh\necho "updated: $1"\necho "trouble: $1" >&2\n')
     hookscript.chmod(hookscript.stat().st_mode | stat.S_IEXEC)
-    config = grokmirror.load_config_file(
-        str(tree.write_config(sections={'pull': {'post_update_hook': str(hookscript)}}))
-    )
+    config = tree.load_config(sections={'pull': {'post_update_hook': str(hookscript)}})
 
     with caplog.at_level('INFO'):
         grokmirror.pull.run_post_update_hook(config, '/test/one.git')

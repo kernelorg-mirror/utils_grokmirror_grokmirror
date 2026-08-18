@@ -30,7 +30,7 @@ def load_config(
         remote['manifest'] = manifest_url
     if manifest_command is not None:
         remote['manifest_command'] = manifest_command
-    return grokmirror.load_config_file(str(tree.write_config(sections={'remote': remote})))
+    return tree.load_config(sections={'remote': remote})
 
 
 # -- plain HTTP -----------------------------------------------------------------

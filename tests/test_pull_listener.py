@@ -38,7 +38,7 @@ def listener(
 ) -> Iterator[tuple[Path, queue.Queue[grokmirror.pull.ManiItem]]]:
     """Run a real listener on a unix socket, yielding it and its manifest queue."""
     grokmirror.write_manifest(str(tree.manifest), manifest)
-    config = grokmirror.load_config_file(str(tree.write_config()))
+    config = tree.load_config()
     sockfile = tree.toplevel.parent / 'grok-pull.sock'
 
     server = grokmirror.pull.ThreadedUnixStreamServer(str(sockfile), grokmirror.pull.Handler)
@@ -140,7 +140,7 @@ def test_junk_is_dropped_and_the_daemon_keeps_listening(
 def test_start_socket_listener_is_a_noop_when_socket_is_unconfigured(tree: GrokTree) -> None:
     # An empty [pull] section is the "no socket wanted" spelling: no sockfile
     # path was ever computed, so there is nothing to check for existence.
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {}})))
+    config = tree.load_config(sections={'pull': {}})
 
     grokmirror.pull.start_socket_listener(config, queue.Queue())
 
@@ -150,7 +150,7 @@ def test_start_socket_listener_refuses_a_stale_non_socket_file(tree: GrokTree) -
     # A leftover regular file at the configured path -- not a socket at all,
     # e.g. left behind by a crashed process that never got to bind it.
     sockfile.write_text('not a socket\n')
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {'socket': str(sockfile)}})))
+    config = tree.load_config(sections={'pull': {'socket': str(sockfile)}})
 
     with pytest.raises(grokmirror.GrokError, match='File exists but is not a socket'):
         grokmirror.pull.start_socket_listener(config, queue.Queue())
@@ -159,7 +159,7 @@ def test_start_socket_listener_refuses_a_stale_non_socket_file(tree: GrokTree) -
 def test_start_socket_listener_binds_and_serves(tree: GrokTree) -> None:
     sockfile = tree.root / 'grok-pull.sock'
     grokmirror.write_manifest(str(tree.manifest), {'/test/one.git': {'fingerprint': 'deadbeef', 'modified': 5}})
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {'socket': str(sockfile)}})))
+    config = tree.load_config(sections={'pull': {'socket': str(sockfile)}})
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
     grokmirror.pull.start_socket_listener(config, q_mani)
@@ -180,7 +180,7 @@ def test_start_socket_listener_replaces_a_stale_socket_file(tree: GrokTree) -> N
     stale.bind(str(sockfile))
     stale.close()
     grokmirror.write_manifest(str(tree.manifest), {'/test/one.git': {'fingerprint': 'deadbeef', 'modified': 5}})
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'pull': {'socket': str(sockfile)}})))
+    config = tree.load_config(sections={'pull': {'socket': str(sockfile)}})
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
     grokmirror.pull.start_socket_listener(config, q_mani)

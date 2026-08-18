@@ -23,8 +23,7 @@ from support import GrokTree, git
 def wire_up(origin: GrokTree, tree: GrokTree, gitdir: str) -> tuple[str, str]:
     """Bare-init `gitdir` in `tree` and point its remote at `origin`."""
     origin.run_manifest()
-    cfgfile = tree.write_mirror_config(origin)
-    config = grokmirror.load_config_file(str(cfgfile))
+    config = tree.load_mirror_config(origin)
     fullpath = str(tree.path(gitdir))
     assert grokmirror.setup_bare_repo(fullpath)
     assert grokmirror.pull.fix_remotes(str(tree.toplevel), gitdir, config['remote']['site'], config)

@@ -30,9 +30,7 @@ def test_an_invalid_purgeprotect_value_falls_back_to_the_default(
     # unsanitized '150' would never refuse anything, since no percentage can
     # reach 150.
     r_culled: grokmirror.Manifest = {f'/test/repo{n}.git': {} for n in range(4)}
-    config = grokmirror.load_config_file(
-        str(tree.write_config(sections={'pull': {'purge': 'yes', 'purgeprotect': '150'}}))
-    )
+    config = tree.load_config(sections={'pull': {'purge': 'yes', 'purgeprotect': '150'}})
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 

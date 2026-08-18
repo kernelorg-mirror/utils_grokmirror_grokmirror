@@ -34,7 +34,7 @@ def load_config(
     }
     for name, values in (extra or {}).items():
         sections.setdefault(name, {}).update(values)
-    return grokmirror.load_config_file(str(tree.write_config(sections=sections)))
+    return tree.load_config(sections=sections)
 
 
 def actions(q_mani: queue.Queue[grokmirror.pull.ManiItem]) -> list[tuple[str, str]]:

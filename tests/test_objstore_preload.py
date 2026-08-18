@@ -24,7 +24,7 @@ from support import GrokTree, git, http_server
 def test_does_nothing_when_no_preload_url_is_configured(tree: GrokTree) -> None:
     obstrepo = tree.objstore / 'fg1.git'
     git('init', '-q', '--bare', str(obstrepo))
-    config = grokmirror.load_config_file(str(tree.write_config(sections={'remote': {}})))
+    config = tree.load_config(sections={'remote': {}})
     ses = grokmirror.GrokSession()
 
     grokmirror.pull.objstore_repo_preload(ses, config, str(obstrepo))
@@ -39,9 +39,7 @@ def test_downloads_and_preloads_a_real_bundle(tree: GrokTree) -> None:
         git('bundle', 'create', str(tree.root / 'fg1.bundle'), '--all', cwd=source.path)
         obstrepo = tree.objstore / 'fg1.git'
         git('init', '-q', '--bare', str(obstrepo))
-        config = grokmirror.load_config_file(
-            str(tree.write_config(sections={'remote': {'preload_bundle_url': base_url}}))
-        )
+        config = tree.load_config(sections={'remote': {'preload_bundle_url': base_url}})
         ses = grokmirror.GrokSession()
 
         grokmirror.pull.objstore_repo_preload(ses, config, str(obstrepo))
@@ -62,9 +60,7 @@ def test_falls_back_to_a_normal_clone_when_the_download_fails(tree: GrokTree) ->
     obstrepo = tree.objstore / 'fg1.git'
     git('init', '-q', '--bare', str(obstrepo))
     with http_server(tree.root) as base_url:
-        config = grokmirror.load_config_file(
-            str(tree.write_config(sections={'remote': {'preload_bundle_url': base_url}}))
-        )
+        config = tree.load_config(sections={'remote': {'preload_bundle_url': base_url}})
         ses = grokmirror.GrokSession()
 
         grokmirror.pull.objstore_repo_preload(ses, config, str(obstrepo))
@@ -84,9 +80,7 @@ def test_falls_back_when_the_downloaded_file_is_not_a_valid_bundle(
     obstrepo = tree.objstore / 'fg1.git'
     git('init', '-q', '--bare', str(obstrepo))
     with http_server(tree.root) as base_url:
-        config = grokmirror.load_config_file(
-            str(tree.write_config(sections={'remote': {'preload_bundle_url': base_url}}))
-        )
+        config = tree.load_config(sections={'remote': {'preload_bundle_url': base_url}})
         ses = grokmirror.GrokSession()
 
         with caplog.at_level('INFO'):
