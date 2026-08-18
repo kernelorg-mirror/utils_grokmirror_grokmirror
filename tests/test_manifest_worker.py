@@ -13,7 +13,6 @@ in the exit code to say so.
 from __future__ import annotations
 
 import queue
-from pathlib import Path
 
 import pytest
 
@@ -21,14 +20,6 @@ import grokmirror
 import grokmirror.pull
 
 from support import GrokTree
-
-
-def load_config(tree: GrokTree, remote_manifest_path: Path) -> grokmirror.GrokConfigParser:
-    sections = {
-        'remote': {'site': 'file:///nonexistent', 'manifest': f'file://{remote_manifest_path}'},
-        'pull': {},
-    }
-    return tree.load_config(sections=sections)
 
 
 def test_successful_run_queues_updates_and_logs_the_pacing_line(
@@ -41,7 +32,7 @@ def test_successful_run_queues_updates_and_logs_the_pacing_line(
     tree.write_manifest({'/test/one.git': {'fingerprint': fp}}, remote_manifest_path)
     tree.write_manifest({}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -56,7 +47,7 @@ def test_successful_run_queues_updates_and_logs_the_pacing_line(
 def test_a_missing_remote_manifest_is_caught_and_logged_critically_not_raised(
     tree: GrokTree, caplog: pytest.LogCaptureFixture
 ) -> None:
-    config = load_config(tree, tree.root / 'does-not-exist.json')
+    config = tree.load_remote_config(tree.root / 'does-not-exist.json')
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 

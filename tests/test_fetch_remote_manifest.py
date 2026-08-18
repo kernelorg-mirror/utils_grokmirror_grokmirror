@@ -21,18 +21,6 @@ import grokmirror.pull
 
 from support import GrokTree, http_server
 
-
-def load_config(
-    tree: GrokTree, manifest_url: str | None = None, manifest_command: str | None = None
-) -> grokmirror.GrokConfigParser:
-    remote: dict[str, str] = {'site': 'file:///nonexistent'}
-    if manifest_url is not None:
-        remote['manifest'] = manifest_url
-    if manifest_command is not None:
-        remote['manifest_command'] = manifest_command
-    return tree.load_config(sections={'remote': remote})
-
-
 # -- plain HTTP -----------------------------------------------------------------
 
 
@@ -42,7 +30,7 @@ def test_fetches_a_gzipped_manifest_over_http(tree: GrokTree) -> None:
         fh.write(json.dumps(data))
 
     with http_server(tree.root) as base_url:
-        config = load_config(tree, manifest_url=f'{base_url}/manifest.js.gz')
+        config = tree.load_remote_config(manifest=f'{base_url}/manifest.js.gz')
         ses = grokmirror.GrokSession()
 
         r_manifest = grokmirror.pull.fetch_remote_manifest(ses, config)
@@ -58,7 +46,7 @@ def test_fetches_a_plain_json_manifest_over_http(tree: GrokTree) -> None:
     (tree.root / 'manifest.json').write_text(json.dumps(data))
 
     with http_server(tree.root) as base_url:
-        config = load_config(tree, manifest_url=f'{base_url}/manifest.json')
+        config = tree.load_remote_config(manifest=f'{base_url}/manifest.json')
         ses = grokmirror.GrokSession()
 
         r_manifest = grokmirror.pull.fetch_remote_manifest(ses, config)
@@ -71,7 +59,7 @@ def test_returns_none_when_the_server_reports_not_modified(tree: GrokTree, caplo
     (tree.root / 'manifest.json').write_text(json.dumps(data))
 
     with http_server(tree.root) as base_url:
-        config = load_config(tree, manifest_url=f'{base_url}/manifest.json')
+        config = tree.load_remote_config(manifest=f'{base_url}/manifest.json')
         ses = grokmirror.GrokSession()
 
         first = grokmirror.pull.fetch_remote_manifest(ses, config)
@@ -86,7 +74,7 @@ def test_returns_none_when_the_server_reports_not_modified(tree: GrokTree, caplo
 
 def test_raises_when_the_server_returns_an_error_status(tree: GrokTree) -> None:
     with http_server(tree.root) as base_url:
-        config = load_config(tree, manifest_url=f'{base_url}/does-not-exist.json')
+        config = tree.load_remote_config(manifest=f'{base_url}/does-not-exist.json')
         ses = grokmirror.GrokSession()
 
         with pytest.raises(grokmirror.GrokManifestError, match='404'):
@@ -96,7 +84,7 @@ def test_raises_when_the_server_returns_an_error_status(tree: GrokTree) -> None:
 def test_raises_when_the_server_is_unreachable(tree: GrokTree) -> None:
     # Port 1 has nobody listening on loopback, so the connection itself fails
     # -- distinct from the error-status case above, which gets a real reply.
-    config = load_config(tree, manifest_url='http://127.0.0.1:1/manifest.json')
+    config = tree.load_remote_config(manifest='http://127.0.0.1:1/manifest.json')
     ses = grokmirror.GrokSession()
 
     with pytest.raises(grokmirror.GrokManifestError, match='Remote server returned an error'):
@@ -107,7 +95,7 @@ def test_raises_when_the_downloaded_content_is_not_valid_gzip(tree: GrokTree) ->
     (tree.root / 'manifest.js.gz').write_text('not actually gzip data\n')
 
     with http_server(tree.root) as base_url:
-        config = load_config(tree, manifest_url=f'{base_url}/manifest.js.gz')
+        config = tree.load_remote_config(manifest=f'{base_url}/manifest.js.gz')
         ses = grokmirror.GrokSession()
 
         with pytest.raises(grokmirror.GrokManifestError, match='Failed to parse'):
@@ -121,7 +109,7 @@ def test_manifest_command_returns_the_parsed_manifest(tree: GrokTree) -> None:
     script = tree.root / 'manifest-command.sh'
     script.write_text('#!/bin/sh\necho \'{"/test/one.git": {"fingerprint": "abc"}}\'\n')
     script.chmod(0o755)
-    config = load_config(tree, manifest_command=str(script))
+    config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
     r_manifest = grokmirror.pull.fetch_remote_manifest(ses, config)
@@ -133,7 +121,7 @@ def test_manifest_command_exit_127_means_unchanged(tree: GrokTree, caplog: pytes
     script = tree.root / 'manifest-command.sh'
     script.write_text('#!/bin/sh\nexit 127\n')
     script.chmod(0o755)
-    config = load_config(tree, manifest_command=str(script))
+    config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
     with caplog.at_level('INFO'):
@@ -147,7 +135,7 @@ def test_manifest_command_other_nonzero_exit_is_non_fatal(tree: GrokTree, caplog
     script = tree.root / 'manifest-command.sh'
     script.write_text('#!/bin/sh\nexit 2\n')
     script.chmod(0o755)
-    config = load_config(tree, manifest_command=str(script))
+    config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
     with caplog.at_level('WARNING'):
@@ -161,7 +149,7 @@ def test_manifest_command_empty_manifest_is_rejected(tree: GrokTree) -> None:
     script = tree.root / 'manifest-command.sh'
     script.write_text("#!/bin/sh\necho '{}'\n")
     script.chmod(0o755)
-    config = load_config(tree, manifest_command=str(script))
+    config = tree.load_remote_config(manifest_command=str(script))
     ses = grokmirror.GrokSession()
 
     with pytest.raises(grokmirror.GrokManifestError, match='Empty manifest'):
@@ -174,7 +162,7 @@ def test_manifest_command_empty_manifest_is_rejected(tree: GrokTree) -> None:
 def test_file_url_with_an_empty_manifest_is_rejected(tree: GrokTree) -> None:
     remote_manifest = tree.root / 'remote-manifest.json'
     remote_manifest.write_text('{}')
-    config = load_config(tree, manifest_url=f'file://{remote_manifest}')
+    config = tree.load_remote_config(manifest=remote_manifest)
     ses = grokmirror.GrokSession()
 
     with pytest.raises(grokmirror.GrokManifestError, match='Empty manifest'):

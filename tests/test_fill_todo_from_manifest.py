@@ -15,7 +15,6 @@ directly against a real GrokTree and inspect the resulting q_mani queue.
 from __future__ import annotations
 
 import queue
-from pathlib import Path
 
 import pytest
 
@@ -23,18 +22,6 @@ import grokmirror
 import grokmirror.pull
 
 from support import GrokTree
-
-
-def load_config(
-    tree: GrokTree, remote_manifest_path: Path, extra: dict[str, dict[str, str]] | None = None
-) -> grokmirror.GrokConfigParser:
-    sections: dict[str, dict[str, str]] = {
-        'remote': {'site': 'file:///nonexistent', 'manifest': f'file://{remote_manifest_path}'},
-        'pull': {},
-    }
-    for name, values in (extra or {}).items():
-        sections.setdefault(name, {}).update(values)
-    return tree.load_config(sections=sections)
 
 
 def actions(q_mani: queue.Queue[grokmirror.pull.ManiItem]) -> list[tuple[str, str]]:
@@ -50,7 +37,7 @@ def test_reclone_marker_file_queues_a_reclone_and_nothing_else(tree: GrokTree) -
     tree.write_manifest({'/test/one.git': {'fingerprint': fp}}, remote_manifest_path)
     tree.write_manifest({'/test/one.git': {'fingerprint': fp}}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -67,7 +54,7 @@ def test_repo_on_disk_but_unknown_to_local_manifest_queues_fix_remotes(tree: Gro
     tree.write_manifest({'/test/one.git': {'fingerprint': fp}}, remote_manifest_path)
     tree.write_manifest({}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -85,7 +72,7 @@ def test_description_mismatch_queues_fix_params_only(tree: GrokTree) -> None:
     tree.write_manifest({'/test/one.git': {**common, 'description': 'new description'}}, remote_manifest_path)
     tree.write_manifest({'/test/one.git': {**common, 'description': 'old description'}}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -106,7 +93,7 @@ def test_symlink_mismatch_queues_fix_params_only(tree: GrokTree) -> None:
     tree.write_manifest({'/test/one.git': {**entry, 'symlinks': ['/test/link.git']}}, remote_manifest_path)
     tree.write_manifest({'/test/one.git': dict(entry)}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -128,7 +115,7 @@ def test_stale_local_manifest_fingerprint_forces_a_pull(tree: GrokTree, caplog: 
     # and only the remote-recorded fingerprint has moved on.
     tree.write_manifest({'/test/one.git': {**entry, 'fingerprint': 'stale-value'}}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -159,7 +146,7 @@ def test_existing_objstore_repo_for_forkgroup_takes_the_easy_init_path(tree: Gro
     )
     tree.write_manifest({'/test/existing.git': {**existing_entry, 'forkgroup': 'fg1'}}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -188,7 +175,7 @@ def test_unmigrated_sibling_on_disk_is_queued_for_objstore_migration_before_the_
     # build_optimal_forkgroups() will not consider it part of the same group.
     tree.write_manifest({'/test/existing.git': {**existing_entry, 'forkgroup': 'fg1'}}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path)
+    config = tree.load_remote_config(remote_manifest_path)
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 
@@ -213,7 +200,7 @@ def test_private_repo_clones_its_public_siblings_first(tree: GrokTree) -> None:
     )
     tree.write_manifest({}, tree.manifest)
 
-    config = load_config(tree, remote_manifest_path, extra={'core': {'private': '/test/priv.git'}})
+    config = tree.load_remote_config(remote_manifest_path, extra={'core': {'private': '/test/priv.git'}})
     ses = grokmirror.GrokSession()
     q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
 

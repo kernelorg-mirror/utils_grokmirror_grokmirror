@@ -346,6 +346,30 @@ class GrokTree:
         """
         return grokmirror.load_config_file(str(self.write_config(sections)))
 
+    def load_remote_config(
+        self,
+        manifest: Path | str | None = None,
+        manifest_command: str | None = None,
+        extra: dict[str, dict[str, str]] | None = None,
+    ) -> grokmirror.GrokConfigParser:
+        """A parsed config with a [remote] whose site must never be contacted.
+
+        For tests that call a pull internal directly and only care about the
+        manifest: `site` points at a path that does not exist, so anything
+        actually trying to reach the origin fails loudly instead of quietly
+        succeeding against something real. `manifest` may be a URL or a Path,
+        which is turned into the file:// URL a local origin would use.
+        """
+        remote: dict[str, str] = {'site': 'file:///nonexistent'}
+        if manifest is not None:
+            remote['manifest'] = manifest if isinstance(manifest, str) else f'file://{manifest}'
+        if manifest_command is not None:
+            remote['manifest_command'] = manifest_command
+        sections: dict[str, dict[str, str]] = {'remote': remote, 'pull': {}}
+        for name, values in (extra or {}).items():
+            sections.setdefault(name, {}).update(values)
+        return self.load_config(sections)
+
     def load_mirror_config(
         self,
         origin: GrokTree,
