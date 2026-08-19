@@ -27,6 +27,7 @@ import os
 import re
 import socket
 from configparser import ConfigParser, ExtendedInterpolation
+from configparser import Error as ConfigParserError
 from pathlib import Path
 
 import falcon
@@ -35,17 +36,20 @@ import falcon
 MAX_PROJ_LEN = 32
 MAX_REPO_LEN = 1024
 
+# Proj becomes part of a filename we open, so allow it a known-good set of
+# characters instead of trying to name every bad one. This rules out slashes,
+# whitespace and null bytes in one go -- the last of these makes os.access()
+# raise, and is not whitespace, so a "no whitespace" check lets it through.
+PROJ_PATT = re.compile(r'^[\w.-]+$')
 
-# noinspection PyBroadException
+
 class PubsubListener:
-    # Signature is dictated by falcon, which passes both positionally.
-    def on_get(self, req: falcon.Request, resp: falcon.Response) -> None:  # noqa: ARG002
-        resp.status = falcon.HTTP_200
-        resp.text = "We don't serve GETs here\n"
-
+    # There is deliberately no on_get(). Falcon answers anything we do not
+    # implement with a 405 and a correct Allow header, which is a better
+    # answer than a 200 whose body says no.
     def on_post(self, req: falcon.Request, resp: falcon.Response) -> None:
         if not req.content_length:
-            resp.status = falcon.HTTP_500
+            resp.status = falcon.HTTP_400
             resp.text = 'Payload required\n'
             return
 
@@ -56,7 +60,7 @@ class PubsubListener:
             doc = json.load(req.bounded_stream)
         except ValueError:
             # JSONDecodeError and UnicodeDecodeError are both ValueErrors
-            resp.status = falcon.HTTP_500
+            resp.status = falcon.HTTP_400
             resp.text = 'Failed to parse payload as json\n'
             return
 
@@ -64,18 +68,24 @@ class PubsubListener:
             proj = doc['message']['attributes']['proj']
             repo = doc['message']['attributes']['repo']
         except (KeyError, TypeError):
-            resp.status = falcon.HTTP_500
+            resp.status = falcon.HTTP_400
             resp.text = 'Not a pubsub v1 payload\n'
             return
 
+        # Json gives us whatever type was on the wire, and len() on a number
+        # raises rather than returning an unhelpful answer
+        if not isinstance(proj, str) or not isinstance(repo, str):
+            resp.status = falcon.HTTP_400
+            resp.text = 'Repo and project must be strings\n'
+            return
+
         if len(proj) > MAX_PROJ_LEN or len(repo) > MAX_REPO_LEN:
-            resp.status = falcon.HTTP_500
+            resp.status = falcon.HTTP_400
             resp.text = 'Repo or project value too long\n'
             return
 
-        # Proj shouldn't contain slashes or whitespace
-        if re.search(r'[\s/]', proj):
-            resp.status = falcon.HTTP_500
+        if not PROJ_PATT.search(proj):
+            resp.status = falcon.HTTP_400
             resp.text = 'Invalid characters in project name\n'
             return
 
@@ -83,18 +93,24 @@ class PubsubListener:
         # a single message queue several repos, since the daemon reads its
         # socket a line at a time.
         if re.search(r'\s', repo):
-            resp.status = falcon.HTTP_500
+            resp.status = falcon.HTTP_400
             resp.text = 'Invalid characters in repo name\n'
             return
 
         confdir = os.environ.get('GROKMIRROR_CONFIG_DIR', '/etc/grokmirror')
         cfgfile = Path(confdir, f'{proj}.conf')
         if not os.access(cfgfile, os.R_OK):
-            resp.status = falcon.HTTP_500
+            resp.status = falcon.HTTP_400
             resp.text = 'Invalid project name\n'
             return
         config = ConfigParser(interpolation=ExtendedInterpolation())
-        config.read(cfgfile, encoding='utf-8')
+        try:
+            config.read(cfgfile, encoding='utf-8')
+        except (ConfigParserError, UnicodeDecodeError):
+            # Ours to fix, not the sender's, so this one really is a 500
+            resp.status = falcon.HTTP_500
+            resp.text = 'Invalid project configuration (cannot be parsed)\n'
+            return
         sockfile = config['pull'].get('socket') if 'pull' in config else None
         if not sockfile:
             resp.status = falcon.HTTP_500

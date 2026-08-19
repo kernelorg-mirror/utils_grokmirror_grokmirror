@@ -75,22 +75,24 @@ def test_a_valid_payload_reaches_the_socket(client: testing.TestClient, listenin
 def test_get_is_refused_politely(client: testing.TestClient) -> None:
     res = client.simulate_get('/pubsub_v1')
 
-    # 200 with an explanation, not a traceback: this endpoint is public.
-    assert res.status_code == 200
-    assert "don't serve GETs" in res.text
+    # Falcon answers the methods we do not implement, so a GET gets a real 405
+    # with the header that tells the caller what it may use instead
+    assert res.status_code == 405
+    # Falcon adds its own OPTIONS handler, so match loosely
+    assert 'POST' in res.headers['allow']
 
 
 def test_no_payload(client: testing.TestClient) -> None:
     res = client.simulate_post('/pubsub_v1')
 
-    assert res.status_code == 500
+    assert res.status_code == 400
     assert res.text == 'Payload required\n'
 
 
 def test_unparseable_payload(client: testing.TestClient) -> None:
     res = client.simulate_post('/pubsub_v1', body='{not json')
 
-    assert res.status_code == 500
+    assert res.status_code == 400
     assert res.text == 'Failed to parse payload as json\n'
 
 
@@ -107,23 +109,49 @@ def test_unparseable_payload(client: testing.TestClient) -> None:
 def test_payload_that_is_not_pubsub_v1(client: testing.TestClient, body: Any) -> None:
     res = client.simulate_post('/pubsub_v1', body=json.dumps(body))
 
-    assert res.status_code == 500
+    assert res.status_code == 400
     assert res.text == 'Not a pubsub v1 payload\n'
+
+
+@pytest.mark.parametrize(
+    'attributes',
+    [
+        pytest.param({'proj': 5, 'repo': '/test/one.git'}, id='proj-is-a-number'),
+        pytest.param({'proj': 'test', 'repo': ['/test/one.git']}, id='repo-is-a-list'),
+        pytest.param({'proj': None, 'repo': None}, id='both-are-null'),
+    ],
+)
+def test_values_that_are_not_strings(client: testing.TestClient, attributes: Any) -> None:
+    # Json hands us whatever type was on the wire, and len() on a number raises
+    res = client.simulate_post('/pubsub_v1', json={'message': {'attributes': attributes}})
+
+    assert res.status_code == 400
+    assert res.text == 'Repo and project must be strings\n'
 
 
 def test_overlong_values(client: testing.TestClient, pubsubv1: Any) -> None:
     res = client.simulate_post('/pubsub_v1', json=payload(proj='p' * (pubsubv1.MAX_PROJ_LEN + 1)))
 
-    assert res.status_code == 500
+    assert res.status_code == 400
     assert res.text == 'Repo or project value too long\n'
 
 
-@pytest.mark.parametrize('proj', ['../etc/shadow', 'two words'])
+@pytest.mark.parametrize(
+    'proj',
+    [
+        pytest.param('../etc/shadow', id='traversal'),
+        pytest.param('two words', id='whitespace'),
+        pytest.param('test\x00', id='null-byte'),
+        pytest.param('', id='empty'),
+    ],
+)
 def test_project_names_are_restricted(client: testing.TestClient, proj: str) -> None:
     # The project name becomes part of a path, so a slash in it is a traversal.
+    # A null byte is not whitespace, and reaching os.access() with one in hand
+    # raises ValueError, so the check has to be a positive one.
     res = client.simulate_post('/pubsub_v1', json=payload(proj=proj))
 
-    assert res.status_code == 500
+    assert res.status_code == 400
     assert res.text == 'Invalid characters in project name\n'
 
 
@@ -139,7 +167,7 @@ def test_repo_names_are_restricted(client: testing.TestClient, listening: socket
     # queue one repo per line from a single message
     res = client.simulate_post('/pubsub_v1', json=payload(repo=repo))
 
-    assert res.status_code == 500
+    assert res.status_code == 400
     assert res.text == 'Invalid characters in repo name\n'
     listening.settimeout(0.2)
     with pytest.raises(socket.timeout):
@@ -150,8 +178,20 @@ def test_unknown_project(client: testing.TestClient, tmp_path: Path, monkeypatch
     monkeypatch.setenv('GROKMIRROR_CONFIG_DIR', str(tmp_path))
     res = client.simulate_post('/pubsub_v1', json=payload(proj='nosuchproj'))
 
-    assert res.status_code == 500
+    assert res.status_code == 400
     assert res.text == 'Invalid project name\n'
+
+
+def test_unparseable_project_config(
+    client: testing.TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Our config, not the sender's payload, so this one really is a 500
+    (tmp_path / 'test.conf').write_text('this is not an ini file at all\n')
+    monkeypatch.setenv('GROKMIRROR_CONFIG_DIR', str(tmp_path))
+    res = client.simulate_post('/pubsub_v1', json=payload())
+
+    assert res.status_code == 500
+    assert 'cannot be parsed' in res.text
 
 
 def test_project_with_no_socket_configured(
