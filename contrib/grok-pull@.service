@@ -1,7 +1,15 @@
 [Unit]
 Description=Grok-pull service for %I
-After=network.target
+# network.target only orders us after the network stack is initialized, not
+# after it can actually reach anything, which is what -o's continuous pulling
+# actually needs
+After=network-online.target
+Wants=network-online.target
 Documentation=https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git
+# Give up after 5 restarts within 10 minutes instead of hot-looping forever
+# on a config that will never come up
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Environment="EXTRA_PULL_OPTS="
@@ -10,6 +18,9 @@ EnvironmentFile=-/etc/sysconfig/grokmirror.%i
 ExecStart=/usr/bin/grok-pull -o -c /etc/grokmirror/%i.conf $EXTRA_PULL_OPTS
 Type=simple
 Restart=on-failure
+# The default RestartSec (100ms) means a config that never comes up gets
+# hammered in a tight restart loop; back off between attempts instead
+RestartSec=30
 # To override these users, create a drop-in systemd conf file in
 # /etc/systemd/system/grok-pull@[foo].service.d/10-usergroup.conf:
 # [Service]
