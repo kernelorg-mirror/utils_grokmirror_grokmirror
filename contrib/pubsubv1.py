@@ -79,8 +79,10 @@ class PubsubListener:
             resp.text = 'Invalid characters in project name\n'
             return
 
-        # Repo shouldn't contain whitespace
-        if re.search(r'\s', proj):
+        # Repo shouldn't contain whitespace. A newline in particular would let
+        # a single message queue several repos, since the daemon reads its
+        # socket a line at a time.
+        if re.search(r'\s', repo):
             resp.status = falcon.HTTP_500
             resp.text = 'Invalid characters in repo name\n'
             return
@@ -106,7 +108,10 @@ class PubsubListener:
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                 client.connect(sockfile)
-                client.send(repo.encode())
+                # The daemon reads with readline(), so terminate the repo name
+                # rather than relying on the close to end it. sendall(), because
+                # send() is free to write only part of what we handed it.
+                client.sendall(f'{repo}\n'.encode())
         except OSError:
             resp.status = falcon.HTTP_500
             resp.text = 'Unable to communicate with the socket\n'

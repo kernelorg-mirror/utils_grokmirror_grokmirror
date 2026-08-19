@@ -67,7 +67,9 @@ def test_a_valid_payload_reaches_the_socket(client: testing.TestClient, listenin
     assert res.status_code == 204
     conn, _addr = listening.accept()
     with conn:
-        assert conn.recv(1024).decode() == '/test/one.git'
+        # Newline-terminated, because the daemon reads the socket with
+        # readline() and must not have to rely on our close for the last line
+        assert conn.recv(1024).decode() == '/test/one.git\n'
 
 
 def test_get_is_refused_politely(client: testing.TestClient) -> None:
@@ -123,6 +125,25 @@ def test_project_names_are_restricted(client: testing.TestClient, proj: str) -> 
 
     assert res.status_code == 500
     assert res.text == 'Invalid characters in project name\n'
+
+
+@pytest.mark.parametrize(
+    'repo',
+    [
+        pytest.param('/test/one.git\n/test/two.git', id='embedded-newline'),
+        pytest.param('/test/one.git two.git', id='space'),
+    ],
+)
+def test_repo_names_are_restricted(client: testing.TestClient, listening: socket.socket, repo: str) -> None:
+    # The daemon reads its socket a line at a time, so a newline here used to
+    # queue one repo per line from a single message
+    res = client.simulate_post('/pubsub_v1', json=payload(repo=repo))
+
+    assert res.status_code == 500
+    assert res.text == 'Invalid characters in repo name\n'
+    listening.settimeout(0.2)
+    with pytest.raises(socket.timeout):
+        listening.accept()
 
 
 def test_unknown_project(client: testing.TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
