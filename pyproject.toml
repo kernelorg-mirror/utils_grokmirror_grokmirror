@@ -33,7 +33,6 @@ dynamic = ["version"]
 [project.urls]
 Homepage = "https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git"
 Repository = "https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git"
-Tracker = "https://github.com/mricon/grokmirror/issues"
 
 [project.scripts]
 grok-bundle = "grokmirror.bundle:command"

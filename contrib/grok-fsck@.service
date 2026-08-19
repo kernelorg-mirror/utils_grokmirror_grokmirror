@@ -1,6 +1,6 @@
 [Unit]
 Description=Grok-fsck service for %I
-Documentation=https://github.com/mricon/grokmirror
+Documentation=https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git
 
 [Service]
 Type=oneshot

@@ -1,7 +1,7 @@
 [Unit]
 Description=Grok-pull service for %I
 After=network.target
-Documentation=https://github.com/mricon/grokmirror
+Documentation=https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git
 
 [Service]
 Environment="EXTRA_PULL_OPTS="
