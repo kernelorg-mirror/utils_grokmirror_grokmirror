@@ -21,6 +21,14 @@
 #        by the running grok-pull daemon (it will ignore anything else)
 #
 # Any other attributes or the "data" field are ignored.
+#
+# NOTE: this listener authenticates nothing. Pubsub push can be configured to
+# send a signed JWT in the Authorization header, and nothing here looks at it,
+# so anyone able to reach this endpoint can ask the daemon to refresh any repo
+# already in its manifest. Put it behind something that verifies the token, or
+# somewhere only pubsub can reach. Treating this as an access control boundary
+# would be a mistake in any case: the daemon's socket is deliberately
+# world-writable, so a local user does not need to come through here at all.
 
 import json
 import os
