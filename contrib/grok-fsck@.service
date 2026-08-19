@@ -4,6 +4,10 @@ Documentation=https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git
 
 [Service]
 Type=oneshot
+# oneshot only got an implicit exemption from the startup timeout in systemd
+# v254; on anything older, fsck/repack running past the default ~90s would be
+# killed mid-operation. Make it explicit rather than depend on the version.
+TimeoutStartSec=infinity
 Environment="EXTRA_FSCK_OPTS="
 EnvironmentFile=-/etc/sysconfig/grokmirror.default
 EnvironmentFile=-/etc/sysconfig/grokmirror.%i

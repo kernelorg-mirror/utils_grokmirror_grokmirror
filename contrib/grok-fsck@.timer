@@ -4,6 +4,12 @@ Documentation=https://git.kernel.org/pub/scm/utils/grokmirror/grokmirror.git
 
 [Timer]
 OnCalendar=Sat 04:00
+# Run the fsck we missed if the host was down at 04:00, instead of waiting
+# a full week for the next scheduled run
+Persistent=true
+# Spread out the load when several collections are instantiated on the same
+# host -- otherwise every %i fires at exactly the same second
+RandomizedDelaySec=1800
 
 [Install]
 WantedBy=timers.target
