@@ -16,6 +16,7 @@ whole is the point.
 
 from __future__ import annotations
 
+import os
 import random
 from pathlib import Path
 
@@ -88,8 +89,9 @@ def test_standalone_full_repack(tree: GrokTree) -> None:
 
     # No -f: delta islands are enforced even on reused deltas, so recomputing
     # every delta from scratch is pure CPU cost. It can be restored through
-    # extra_repack_flags_full (proven below).
-    assert flags[str(repo)] == '-a -b --unpack-unreachable=yesterday --pack-kept-objects -d'
+    # extra_repack_flags_full (proven below). Unreachable objects go into a
+    # cruft pack with a grace period instead of being exploded loose.
+    assert flags[str(repo)] == '--cruft --cruft-expiration=yesterday -b --pack-kept-objects -d'
     assert_clean(repo)
 
 
@@ -204,6 +206,55 @@ def test_alt_parent_and_grandchild_repack(tree: GrokTree) -> None:
     assert_clean(grandma, mommy, child)
     for repo, head in heads.items():
         assert git('cat-file', '-e', head, cwd=repo) == ''
+
+
+def test_full_repack_moves_unreachables_into_a_cruft_pack(tree: GrokTree) -> None:
+    # A full repack used to explode every unreachable object into its own
+    # loose file (-A --unpack-unreachable). Now they ride in a single cruft
+    # pack, with their mtimes tracked in its .mtimes file: a recent
+    # unreachable object survives the repack, while one already past the
+    # grace period is left out of the pack for git prune (which grok-fsck
+    # runs right after) to remove.
+    repo = tree.add_repo('test/solo.git')
+    tree.run_manifest()
+    tree.write_config()
+
+    scratch = repo / 'cruft-fodder'
+    scratch.write_text('fresh unreachable')
+    fresh = git('hash-object', '-w', str(scratch), cwd=repo).strip()
+    scratch.write_text('old unreachable')
+    old = git('hash-object', '-w', str(scratch), cwd=repo).strip()
+    scratch.unlink()
+    oldpath = repo / 'objects' / old[:2] / old[2:]
+    tendays = 10 * 24 * 3600
+    os.utime(oldpath, (oldpath.stat().st_atime - tendays, oldpath.stat().st_mtime - tendays))
+
+    tree.run_fsck('--repack-all-full')
+
+    assert list((repo / 'objects' / 'pack').glob('*.mtimes'))
+    assert git('cat-file', '-e', fresh, cwd=repo) == ''
+    # cat-file -t prints the type only when the object exists, so unlike -e
+    # its stdout tells absence apart from presence even with check=False.
+    assert git('cat-file', '-t', old, cwd=repo, check=False).strip() == ''
+    assert_clean(repo)
+
+
+def test_child_full_repack_uses_cruft_and_alt_parent_does_not(tree: GrokTree) -> None:
+    # The cruft-pack expiration is only for repositories whose unreachable
+    # objects nobody else can possibly need. A repository providing
+    # alternates must never expire anything -- a borrower may reference
+    # objects that are unreachable here -- so it keeps -k.
+    parent = tree.add_repo('test/parent.git', source='psource')
+    child = tree.add_repo('test/child.git', source='csource')
+    (child / 'objects' / 'info' / 'alternates').write_text(f'{parent / "objects"}\n')
+    tree.run_manifest()
+    tree.write_config({'fsck': {'ignore_errors': BITMAP_WARNING}})
+
+    flags = repacked(tree, '--repack-all-full')
+
+    assert flags[str(child)] == '--cruft --cruft-expiration=yesterday -l --pack-kept-objects -d'
+    assert flags[str(parent)] == '-a -b -k --pack-kept-objects -d'
+    assert_clean(parent, child)
 
 
 def test_repeated_geometric_repacks_keep_the_repo_whole(tree: GrokTree) -> None:

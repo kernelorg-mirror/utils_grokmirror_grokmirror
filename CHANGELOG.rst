@@ -1,6 +1,14 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- Full repacks of standalone and child repositories now collect
+  unreachable objects into a cruft pack (git repack --cruft) instead of
+  exploding them into loose objects with -A. The grace period stays the
+  same (--cruft-expiration=yesterday when pruning); with pruning off,
+  the cruft pack keeps unreachable objects indefinitely, where the old
+  standalone flags silently dropped packed unreachable objects.
+  Repositories that provide alternates to others still never expire
+  anything. Requires git 2.41 or newer; older git keeps the old flags
 - Quick repacks are now geometric (git repack --geometric=2) when git is
   2.41 or newer. An all-into-one repack rewrote every pack on every
   nightly run, which on a large server means rewriting terabytes to move

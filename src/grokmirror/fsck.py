@@ -388,7 +388,15 @@ def run_git_repack(
     # repacking of repositories that borrow from alternates has no known
     # corner-case bugs (see ps/fix-geom-repack-with-alternates), so anything
     # older keeps the historical all-into-one behavior.
-    geometric = level <= 1 and grokmirror.git_newer_than('2.41.0')
+    #
+    # The same version boundary switches full repacks of the repositories
+    # that expire unreachable objects (standalone repos and children) from -A
+    # to --cruft: instead of exploding every unreachable object into a loose
+    # file -- inode churn now, a pile of work for git-prune later -- they go
+    # into a single cruft pack with their expiration times riding along in
+    # its .mtimes file.
+    modern_git = grokmirror.git_newer_than('2.41.0')
+    geometric = level <= 1 and modern_git
 
     if grokmirror.is_obstrepo(fullpath, obstdir):
         set_precious_after = True
@@ -435,6 +443,13 @@ def run_git_repack(
             # that path simple. Nothing is dropped, so prune's
             # --unpack-unreachable grace period does not apply.
             repack_flags += ['--geometric=2', '-l']
+        elif modern_git:
+            # Full repack. Without prune the cruft pack simply holds the
+            # unreachables forever, like -A used to keep them loose forever.
+            repack_flags.append('--cruft')
+            if prune:
+                repack_flags.append('--cruft-expiration=yesterday')
+            repack_flags.append('-l')
         else:
             repack_flags.append('-l')
             repack_flags.append('-A')
@@ -444,6 +459,16 @@ def run_git_repack(
     elif geometric:
         # we have no relationships with other repos
         repack_flags += ['--geometric=2', '--write-midx', '-b']
+
+    elif modern_git:
+        # No relationships with other repos; full repack. --cruft implies -a,
+        # and as a bonus over the old flags, running without prune no longer
+        # silently drops packed unreachable objects -- they stay in the cruft
+        # pack.
+        repack_flags.append('--cruft')
+        if prune:
+            repack_flags.append('--cruft-expiration=yesterday')
+        repack_flags.append('-b')
 
     else:
         # we have no relationships with other repos

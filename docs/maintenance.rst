@@ -53,8 +53,9 @@ Useful modes
     Repack everything, either quickly or thoroughly. A quick repack is
     geometric (with git 2.41 or newer): it only rolls up the small packs
     and never rewrites or drops the bulk of a repository. A full repack
-    consolidates everything into a single pack, which on a large tree is
-    expensive -- reach for it after a bulk import, not routinely.
+    consolidates everything into a single pack (plus a cruft pack holding
+    the unreachable objects), which on a large tree is expensive -- reach
+    for it after a bulk import, not routinely.
 
 Object Storage
 ==============
