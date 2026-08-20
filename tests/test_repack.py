@@ -62,8 +62,10 @@ def assert_clean(*repos: object) -> None:
 
 
 def test_standalone_quick_repack(tree: GrokTree) -> None:
-    # No alternates in either direction: the only class allowed to drop
-    # unreachable objects, with a grace period via --unpack-unreachable.
+    # A quick repack is geometric: it rolls up only the packs at the small
+    # end of a geometric progression, so it never rewrites (or drops) the
+    # bulk of a large repository. With several packs the bitmap has to live
+    # in a multi-pack-index, hence --write-midx.
     repo = tree.add_repo('test/solo.git')
     head = git('rev-parse', 'HEAD', cwd=repo).strip()
     tree.run_manifest()
@@ -71,7 +73,8 @@ def test_standalone_quick_repack(tree: GrokTree) -> None:
 
     flags = repacked(tree, '--repack-all-quick')
 
-    assert flags[str(repo)] == '-a -b --unpack-unreachable=yesterday -d'
+    assert flags[str(repo)] == '--geometric=2 --write-midx -b -d'
+    assert (repo / 'objects' / 'pack' / 'multi-pack-index').exists()
     assert_clean(repo)
     assert git('cat-file', '-e', head, cwd=repo) == ''
 
@@ -123,10 +126,10 @@ def test_extra_repack_flags_are_passed_through(tree: GrokTree) -> None:
 
 
 def test_fork_group_repack(tree: GrokTree) -> None:
-    # Two forks share an objstore repository. The objstore repo is repacked
-    # with -a and no -b (repack.writeBitmaps is set in its config instead);
-    # the children only ever repack their own objects (-l) and never delete
-    # unreachable ones outright (-A).
+    # Two forks share an objstore repository. Neither the objstore repo nor
+    # the children ever delete anything on a quick repack -- geometric
+    # repacking only rolls small packs together. No -b for the objstore repo:
+    # repack.writeBitmaps is set in its config instead.
     one = tree.add_repo('test/one.git')
     fork = tree.add_repo('test/fork.git')
     tree.run_manifest()
@@ -153,8 +156,12 @@ def test_fork_group_repack(tree: GrokTree) -> None:
 
     flags = repacked(tree, '--repack-all-quick')
 
-    assert flags[str(one)] == '-l -A --unpack-unreachable=yesterday -d'
-    assert flags[str(obstrepo)] == '-a -d'
+    # Children get no --write-midx: the objstore fetch hardlinks pack files
+    # out of them, and a multi-pack-index must never travel between repos.
+    assert flags[str(one)] == '--geometric=2 -l -d'
+    assert flags[str(obstrepo)] == '--geometric=2 --write-midx -d'
+    assert (obstrepo / 'objects' / 'pack' / 'multi-pack-index').exists()
+    assert not (one / 'objects' / 'pack' / 'multi-pack-index').exists()
     assert_clean(one, fork, obstrepo)
     for repo, head in heads.items():
         assert git('cat-file', '-e', head, cwd=repo) == ''
@@ -170,14 +177,15 @@ def test_alt_parent_and_grandchild_repack(tree: GrokTree) -> None:
     # migrate anybody into an objstore repository.
     #
     # grandma is used by others: unreachable objects may be reachable from a
-    # borrower, so they are kept in the pack (-k) and nothing is ever pruned.
+    # borrower, so nothing may ever be dropped -- which a geometric repack
+    # never does anyway.
     #
     # mommy both has and provides alternates. That is the grandchild-corruption
-    # arrangement, so she is handled extra carefully: only her own objects
-    # (-l), unreachables kept loose (-A), and a warning in the log.
+    # arrangement, so she keeps the maximally conservative all-into-one flags:
+    # only her own objects (-l), unreachables kept loose (-A), and a warning
+    # in the log.
     #
-    # child only borrows, so she repacks her own objects and keeps
-    # unreachables with a grace period.
+    # child only borrows, so she geometrically repacks her own objects.
     grandma = tree.add_repo('test/grandma.git', source='gsource')
     mommy = tree.add_repo('test/mommy.git', source='msource')
     child = tree.add_repo('test/child.git', source='csource')
@@ -189,13 +197,69 @@ def test_alt_parent_and_grandchild_repack(tree: GrokTree) -> None:
 
     flags = repacked(tree, '--repack-all-quick')
 
-    assert flags[str(grandma)] == '-a -b -k -d'
+    assert flags[str(grandma)] == '--geometric=2 --write-midx -b -d'
     assert flags[str(mommy)] == '-A -l -d'
-    assert flags[str(child)] == '-l -A --unpack-unreachable=yesterday -d'
+    assert flags[str(child)] == '--geometric=2 -l -d'
     assert 'grandchild corruption' in tree.log_text()
     assert_clean(grandma, mommy, child)
     for repo, head in heads.items():
         assert git('cat-file', '-e', head, cwd=repo) == ''
+
+
+def test_repeated_geometric_repacks_keep_the_repo_whole(tree: GrokTree) -> None:
+    # The steady state grok-fsck now lives in: pushes trickle in, quick
+    # repacks roll them up geometrically, and once in a while a full repack
+    # consolidates everything. Nothing may ever go missing along the way.
+    repo = tree.add_repo('test/solo.git')
+    tree.run_manifest()
+    tree.write_config()
+    src = tree.source()
+
+    heads = []
+    for _ in range(4):
+        src.commit()
+        src.push(repo)
+        heads.append(git('rev-parse', 'HEAD', cwd=repo).strip())
+        tree.run_fsck('--repack-all-quick')
+        assert_clean(repo)
+
+    packdir = repo / 'objects' / 'pack'
+    assert (packdir / 'multi-pack-index').exists()
+
+    # The consolidating full repack must cope with the multi-pack-index the
+    # geometric runs left behind: everything ends up in a single pack and no
+    # stale midx is left pointing at deleted packs.
+    src.commit()
+    src.push(repo)
+    tree.run_fsck('--repack-all-full')
+    heads.append(git('rev-parse', 'HEAD', cwd=repo).strip())
+
+    assert len(list(packdir.glob('*.pack'))) == 1
+    assert_clean(repo)
+    for head in heads:
+        assert git('cat-file', '-e', head, cwd=repo) == ''
+
+
+def test_midx_is_never_hardlinked_into_the_objstore(tree: GrokTree) -> None:
+    # The objstore fetch hardlinks pack files straight out of the child repo.
+    # A multi-pack-index describes the packs of the repository it was written
+    # in, so one must never make the trip -- and it must not be deleted from
+    # the child either, since the child still needs it.
+    child = tree.add_repo('test/one.git')
+    git('repack', '-a', '-d', cwd=child)
+    git('multi-pack-index', 'write', cwd=child)
+    assert (child / 'objects' / 'pack' / 'multi-pack-index').exists()
+    head = git('rev-parse', 'HEAD', cwd=child).strip()
+
+    obstrepo = grokmirror.setup_objstore_repo(str(tree.objstore))
+    virtref = grokmirror.objstore_virtref(str(child))
+    assert grokmirror._fetch_objstore_repo_using_plumbing(str(child), obstrepo, virtref)
+
+    obstpacks = Path(obstrepo, 'objects', 'pack')
+    assert not list(obstpacks.glob('multi-pack-index*'))
+    assert (child / 'objects' / 'pack' / 'multi-pack-index').exists()
+    # The objects themselves did make the trip.
+    assert git('cat-file', '-e', head, cwd=obstrepo) == ''
 
 
 def test_objstore_compression_is_left_at_the_zlib_default(tree: GrokTree, tmp_path: Path) -> None:

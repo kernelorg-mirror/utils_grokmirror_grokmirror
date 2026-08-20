@@ -940,6 +940,13 @@ def _fetch_objstore_repo_using_plumbing(srcrepo: StrPath, obstrepo: StrPath, vir
             if file.endswith('.bitmap'):
                 torm.add(srcpath)
                 continue
+            # A multi-pack-index (and its .rev/.bitmap under multi-pack-index.d)
+            # describes the packs of the repository it was written in; it must
+            # never travel to another one. Child repos are not supposed to have
+            # one, but a manual "git repack --write-midx" is enough to create
+            # it, so skip them without marking them for removal.
+            if file.startswith('multi-pack-index'):
+                continue
             # relpath says '.' for the top of the walk, which Path() drops on
             # its own -- the normpath() this used to need is gone with it.
             dstpath = Path(dstobj, subpath, file)

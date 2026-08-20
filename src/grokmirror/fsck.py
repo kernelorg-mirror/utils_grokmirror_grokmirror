@@ -373,6 +373,23 @@ def run_git_repack(
     if rfull:
         full_repack_flags += rfull
 
+    # A quick repack used to be an all-into-one repack, same as a full one
+    # minus the delta recomputation -- so every nightly run rewrote every
+    # multi-gigabyte pack on the server in its entirety. Geometric repacking
+    # only rolls up the packs (and loose objects) at the small end of a
+    # geometric progression, so steady-state quick repacks touch megabytes
+    # instead of gigabytes, and drop nothing. Full repacks still consolidate
+    # everything into a single pack the old way.
+    #
+    # Bitmaps require everything reachable in one pack, which a geometric
+    # repack does not promise -- with several packs they have to live in a
+    # multi-pack-index instead, hence --write-midx wherever we used to rely
+    # on single-pack bitmaps. Git 2.41 is the first version where geometric
+    # repacking of repositories that borrow from alternates has no known
+    # corner-case bugs (see ps/fix-geom-repack-with-alternates), so anything
+    # older keeps the historical all-into-one behavior.
+    geometric = level <= 1 and grokmirror.git_newer_than('2.41.0')
+
     if grokmirror.is_obstrepo(fullpath, obstdir):
         set_precious_after = True
         # Grokmirror used to force pack.compression=9 on objstore repos. The
@@ -382,9 +399,16 @@ def run_git_repack(
         # this to the value we used to set; a different level someone chose on
         # purpose stays.
         grokmirror.set_git_config(fullpath, 'pack.compression', '^9$', operation='--unset')
-        repack_flags.append('-a')
-        if not prune and not always_precious:
-            repack_flags.append('-k')
+        if geometric:
+            # Geometric repacking never deletes objects, so the -k that
+            # protects unreachable objects from an all-into-one rewrite has
+            # nothing to protect against here (and -k does not combine with
+            # the pack list a geometric repack feeds to pack-objects anyway).
+            repack_flags += ['--geometric=2', '--write-midx']
+        else:
+            repack_flags.append('-a')
+            if not prune and not always_precious:
+                repack_flags.append('-k')
 
     elif ses.is_alt_repo(toplevel, gitdir):
         set_precious_after = True
@@ -394,6 +418,8 @@ def run_git_repack(
             logger.warning('         : this can cause grandchild corruption')
             repack_flags.append('-A')
             repack_flags.append('-l')
+        elif geometric:
+            repack_flags += ['--geometric=2', '--write-midx', '-b']
         else:
             repack_flags.append('-a')
             repack_flags.append('-b')
@@ -402,10 +428,22 @@ def run_git_repack(
 
     elif grokmirror.get_altrepo(fullpath):
         # we are a "child repo"
-        repack_flags.append('-l')
-        repack_flags.append('-A')
-        if prune:
-            repack_flags.append('--unpack-unreachable=yesterday')
+        if geometric:
+            # No --write-midx: the objstore fetch hardlinks pack files out of
+            # child repos, and a multi-pack-index makes no sense outside the
+            # repository it was written in. Keeping children midx-free keeps
+            # that path simple. Nothing is dropped, so prune's
+            # --unpack-unreachable grace period does not apply.
+            repack_flags += ['--geometric=2', '-l']
+        else:
+            repack_flags.append('-l')
+            repack_flags.append('-A')
+            if prune:
+                repack_flags.append('--unpack-unreachable=yesterday')
+
+    elif geometric:
+        # we have no relationships with other repos
+        repack_flags += ['--geometric=2', '--write-midx', '-b']
 
     else:
         # we have no relationships with other repos

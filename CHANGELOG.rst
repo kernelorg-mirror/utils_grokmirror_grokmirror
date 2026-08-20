@@ -1,6 +1,17 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- Quick repacks are now geometric (git repack --geometric=2) when git is
+  2.41 or newer. An all-into-one repack rewrote every pack on every
+  nightly run, which on a large server means rewriting terabytes to move
+  a few megabytes of new objects; a geometric repack only rolls up the
+  small packs and never deletes anything. Bitmaps move into a
+  multi-pack-index where more than one pack remains. Full repacks still
+  consolidate everything into a single pack, and unreachable objects now
+  only get expired by those, so expect somewhat higher disk usage between
+  full repack cycles. With git older than 2.41 (the first version where
+  geometric repacking of repositories borrowing from alternates has no
+  known corner-case bugs) the old behavior is kept
 - Full repacks no longer pass -f to git repack. Recomputing every delta
   from scratch is very expensive on large repositories and buys nothing
   for correctness -- delta islands are respected even for reused deltas.
