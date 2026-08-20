@@ -34,6 +34,7 @@ import time
 from email.message import EmailMessage
 from fcntl import LOCK_EX, LOCK_NB, LOCK_UN, lockf
 from pathlib import Path
+from typing import Any
 
 import grokmirror
 
@@ -45,6 +46,91 @@ OID_RE = re.compile(r'\b[0-9a-f]{40,64}\b')
 
 # git fsck's way of saying "this ref does not resolve to an object".
 NULL_REF_RE = re.compile(r'^(?:error: )?(?P<ref>\S+): invalid sha1 pointer 0{40,64}$')
+
+# How many repositories a report block names before it just gives a count.
+REPORT_CAP = 10
+
+
+def check_manifest_fingerprint(
+    toplevel: str,
+    gitdir: str,
+    minfo: grokmirror.RepoInfo,
+    stentry: dict[str, Any],
+    ignorerefs: list[str] | None,
+) -> tuple[str, str] | None:
+    """Compare the repository on disk against what the manifest says about it.
+
+    The fingerprint is the whole of grokmirror's "does this need updating?"
+    logic, so a repository that disagrees with its manifest entry is one that
+    is not being replicated -- and nothing else in grokmirror ever looks.
+
+    Two different things turn up here. Either git will not list the refs at
+    all, usually because a ref file is damaged, in which case nothing can
+    fingerprint the repository and grok-manifest has been quietly leaving its
+    entry frozen at whatever it last said. Or the refs list fine and simply do
+    not match: on an origin that means grok-manifest is not being run, on a
+    replica that grok-pull is not getting through.
+
+    Returns ('broken'|'stale', detail), or None when all is well. A replica is
+    legitimately behind for a while after a push, so a mismatch has to still be
+    there on the next run before it counts.
+    """
+    fullpath = grokmirror.gitdir_to_fullpath(toplevel, gitdir)
+    fingerprint = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True, ignorerefs=ignorerefs)
+    if fingerprint is None:
+        _retcode, _out, error = grokmirror.run_git_command(fullpath, ['show-ref'])
+        stentry.pop('fp_mismatch', None)
+        if not error.strip():
+            # No refs at all -- show-ref exits non-zero for that too, but says
+            # nothing. grok-manifest does not fingerprint those either.
+            return None
+        return 'broken', error.strip().splitlines()[-1].strip()
+
+    m_fp = minfo.get('fingerprint')
+    if not m_fp or fingerprint == m_fp:
+        stentry.pop('fp_mismatch', None)
+        return None
+
+    if stentry.get('fp_mismatch') != m_fp:
+        stentry['fp_mismatch'] = m_fp
+        logger.debug('%s does not match the manifest yet', gitdir)
+        return None
+
+    return 'stale', f'manifest says {m_fp}, on disk {fingerprint}'
+
+
+def report_fingerprint_mismatches(broken: list[tuple[str, str]], stale: list[tuple[str, str]]) -> None:
+    """Put everything the fingerprint comparison found into the report."""
+
+    def log_block(header: str, entries: list[tuple[str, str]], explanation: list[str]) -> None:
+        if not entries:
+            return
+        logger.critical('%s', header)
+        for fullpath, detail in entries[:REPORT_CAP]:
+            logger.critical('\t%s', fullpath)
+            logger.critical('\t\t%s', detail)
+        if len(entries) > REPORT_CAP:
+            logger.critical('\t [ %s more not listed ]', len(entries) - REPORT_CAP)
+        for line in explanation:
+            logger.critical('\t%s', line)
+
+    log_block(
+        'Repositories that git cannot fingerprint:',
+        broken,
+        [
+            'Grok-manifest cannot update these, so their manifest entries stay',
+            'frozen and no replica will ever see them change again.',
+        ],
+    )
+    log_block(
+        'Repositories that do not match the manifest:',
+        stale,
+        [
+            'On an origin this means grok-manifest is not running or not finishing;',
+            'on a replica, that grok-pull is not getting through. If this lists most',
+            'of the tree, check that [manifest]ignore_refs matches the origin.',
+        ],
+    )
 
 
 def log_errors(fullpath: grokmirror.StrPath, cmdargs: list[str], lines: list[str]) -> None:
@@ -913,6 +999,8 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
                 #      'nextcheck': 'YYYY-MM-DD',
                 #      'lastrepack': 'YYYY-MM-DD',
                 #      'fingerprint': 'sha-1',
+                #      'fp_mismatch': 'sha-1' (manifest fingerprint we already
+                #                     disagreed with on the previous run),
                 #      's_elapsed': seconds,
                 #      'quick_repack_count': times,
                 #    },
@@ -1013,6 +1101,12 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
     logger.info('Analyzing %s (%s repos)', toplevel, len(status))
     stattime = time.time()
     baselines = [x.strip() for x in config['fsck'].get('baselines', '').splitlines()]
+    # Same setting grok-manifest fingerprints with, or the comparison below
+    # flags every repository that has a ref the origin leaves out.
+    cfg_ignorerefs = config['manifest'].get('ignore_refs', '') if 'manifest' in config else ''
+    ignorerefs = [x.strip() for x in cfg_ignorerefs.splitlines() if x.strip()]
+    fp_broken: list[tuple[str, str]] = []
+    fp_stale: list[tuple[str, str]] = []
     for fullpath in list(status):
         # Give me a status every 5 seconds
         if time.time() - stattime >= 5:
@@ -1032,6 +1126,12 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
             status.pop(fullpath)
             logger.debug('%s is gone, no longer in manifest', gitdir)
             continue
+
+        # Is the manifest still telling the truth about this repository?
+        verdict = check_manifest_fingerprint(toplevel, gitdir, manifest[gitdir], status[fullpath], ignorerefs)
+        if verdict is not None:
+            kind, detail = verdict
+            (fp_broken if kind == 'broken' else fp_stale).append((fullpath, detail))
 
         # Make sure FETCH_HEAD is pointing to /dev/null
         fetch_headf = Path(fullpath, 'FETCH_HEAD')
@@ -1161,6 +1261,7 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
         to_process.add((fullpath, kind, level))
 
     logger.info('     done: %s analyzed, %s queued', analyzed, queued)
+    report_fingerprint_mismatches(fp_broken, fp_stale)
 
     if obst_changes:
         # Refresh the alt repo map cache

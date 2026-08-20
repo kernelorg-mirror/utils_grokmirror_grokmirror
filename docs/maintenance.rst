@@ -120,6 +120,34 @@ This only works on a replica. A repository with no mirror remote has
 nowhere to reclone from and no grok-pull run to do it, so grok-fsck
 reports it as needing manual attention and leaves it alone.
 
+Repositories That Stop Replicating
+==================================
+
+Every ``grok-fsck`` run fingerprints every repository and compares the result
+with the manifest, because the fingerprint is the whole of grokmirror's
+"does this need updating?" logic. A repository that disagrees with its
+manifest entry is a repository that is not being replicated, and nothing
+else in grokmirror ever notices.
+
+Two things show up this way, and both go into the report.
+
+``Repositories that git cannot fingerprint`` means ``git show-ref`` failed,
+usually because a ref file is damaged. Nothing can fingerprint such a
+repository, so ``grok-manifest`` skips it and leaves its manifest entry
+frozen at whatever it last said -- pushes keep landing on the origin, and no
+replica ever hears about them. This is silent otherwise: the only message
+``grok-manifest`` produces goes to whoever ran ``git push``.
+
+``Repositories that do not match the manifest`` means the refs list fine and
+simply disagree. On an origin that points at ``grok-manifest`` not running
+or not finishing; on a replica, at ``grok-pull`` not getting through. A
+replica is legitimately behind for a few minutes after a push, so a
+mismatch is only reported if it is still there on the next run.
+
+If that second list covers most of the tree, the fingerprints are being
+calculated differently on the two ends: set ``manifest.ignore_refs`` to
+match the origin.
+
 Log Rotation
 ============
 

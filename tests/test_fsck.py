@@ -486,3 +486,71 @@ def test_precious_repo_gets_a_full_repack_when_due(tree: GrokTree) -> None:
     assert queued(tree, '--repack-all-quick') == ['full repack']
     after = json.loads(tree.statusfile.read_text())[str(tree.path('test/one.git'))]
     assert after['nextcheck'] > '2000-01-01'
+
+
+def test_repository_that_cannot_be_fingerprinted_is_reported(tree: GrokTree) -> None:
+    # git will not list any refs when it cannot parse one of them, so
+    # grok-manifest leaves the entry frozen at whatever it last said and
+    # replicas never hear about this repository again. Nothing says so today.
+    repo = tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+    tree.run_fsck('-f')
+    Path(repo, 'refs', 'heads', 'broken').write_text('0' * 40 + '\n')
+
+    res = tree.run_fsck('-f')
+
+    out = res.stdout + res.stderr
+    assert 'Repositories that git cannot fingerprint' in out
+    assert 'refs/heads/broken' in out
+    assert 'frozen' in out
+
+
+def test_stale_manifest_entry_is_reported_on_the_second_run(tree: GrokTree) -> None:
+    # A replica is behind the manifest for a moment after every push, so one
+    # run seeing a mismatch is not worth an email. Two in a row is.
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+    tree.run_fsck('-f')
+
+    manifest = tree.read_manifest()
+    manifest['/test/one.git']['fingerprint'] = 'f' * 40
+    tree.write_manifest(manifest)
+
+    res = tree.run_fsck('-f')
+    assert 'do not match the manifest' not in res.stdout + res.stderr
+    status = json.loads(tree.statusfile.read_text())
+    assert status[str(tree.toplevel / 'test/one.git')]['fp_mismatch'] == 'f' * 40
+
+    res = tree.run_fsck('-f')
+
+    out = res.stdout + res.stderr
+    assert 'Repositories that do not match the manifest' in out
+    assert 'f' * 40 in out
+
+
+def test_matching_repository_is_not_reported(tree: GrokTree) -> None:
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.write_config()
+
+    tree.run_fsck('-f')
+    res = tree.run_fsck('-f')
+
+    out = res.stdout + res.stderr
+    assert 'manifest' not in out.lower()
+
+
+def test_ignored_refs_are_left_out_of_the_manifest_comparison(tree: GrokTree) -> None:
+    # The origin fingerprints without refs/meta/*; a replica that counts them
+    # in would report every repository having one as out of date, forever.
+    repo = tree.add_repo('test/one.git')
+    git('update-ref', 'refs/meta/config', 'refs/heads/master', cwd=repo)
+    tree.write_config(sections={'manifest': {'ignore_refs': 'refs/meta/*'}})
+    tree.run_manifest('-c', str(tree.cfgfile))
+
+    tree.run_fsck('-f')
+    res = tree.run_fsck('-f')
+
+    assert 'do not match the manifest' not in res.stdout + res.stderr

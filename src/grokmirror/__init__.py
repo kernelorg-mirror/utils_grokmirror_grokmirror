@@ -1199,8 +1199,15 @@ def get_repo_fingerprint(
         logger.debug('Fingerprint for %s: %s', gitdir, fingerprint)
     else:
         logger.debug('Generating fingerprint for %s', gitdir)
-        ecode, out, _err = run_git_command(fullpath, ['show-ref'])
-        if ecode > 0 or not out:
+        ecode, out, err = run_git_command(fullpath, ['show-ref'])
+        if ecode > 0:
+            # Not the same thing as having no refs: git refuses to list any of
+            # them if it cannot parse even one, so this is usually a damaged
+            # ref file. grok-fsck reports it when the repository drops out of
+            # the manifest; here we only make the log say what happened.
+            logger.debug('Could not list refs in %s: %s', fullpath, err.strip())
+            return None
+        if not out:
             logger.debug('No heads in %s, nothing to fingerprint.', fullpath)
             return None
 

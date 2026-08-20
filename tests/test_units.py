@@ -913,3 +913,109 @@ class TestFsckOptions:
         options = grokmirror.fsck.FsckOptions(force=True)
 
         assert not options.repack_all
+
+
+class TestManifestFingerprintCheck:
+    """Every fsck run asks whether the manifest still describes the repository.
+
+    The fingerprint is all grokmirror has to decide whether something needs
+    replicating, so a repository that disagrees with its manifest entry is one
+    that has quietly stopped being mirrored.
+    """
+
+    @staticmethod
+    def _repo(tmp_path: Path, refs: tuple[str, ...] = ('refs/heads/master',)) -> tuple[Path, Path]:
+        top = tmp_path / 'top'
+        repo = top / 'test.git'
+        subprocess.run(['git', 'init', '-q', '--bare', str(repo)], check=True)
+
+        def run(*args: str) -> str:
+            res = subprocess.run(['git', *args], cwd=repo, capture_output=True, text=True, check=True)
+            return res.stdout.strip()
+
+        # An empty tree is enough of a commit for a fingerprint.
+        commit = run('commit-tree', run('hash-object', '-t', 'tree', '-w', os.devnull), '-m', 'one')
+        for ref in refs:
+            run('update-ref', ref, commit)
+        return top, repo
+
+    def _fingerprint(self, top: Path, ignorerefs: list[str] | None = None) -> str:
+        fingerprint = grokmirror.get_repo_fingerprint(top, '/test.git', force=True, ignorerefs=ignorerefs)
+        assert fingerprint is not None
+        return fingerprint
+
+    def test_matching_fingerprint_is_not_reported(self, tmp_path: Path) -> None:
+        top, _repo = self._repo(tmp_path)
+        minfo: grokmirror.RepoInfo = {'fingerprint': self._fingerprint(top)}
+        stentry: dict[str, object] = {'fp_mismatch': 'left over from a mismatch that has since been fixed'}
+
+        assert grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, None) is None
+        assert 'fp_mismatch' not in stentry
+
+    def test_mismatch_is_reported_only_when_it_persists(self, tmp_path: Path) -> None:
+        # A replica is legitimately behind the manifest for a while after a
+        # push, so one run seeing a mismatch means nothing on its own.
+        top, _repo = self._repo(tmp_path)
+        minfo: grokmirror.RepoInfo = {'fingerprint': 'a' * 40}
+        stentry: dict[str, object] = {}
+
+        assert grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, None) is None
+        assert stentry['fp_mismatch'] == 'a' * 40
+
+        verdict = grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, None)
+
+        assert verdict is not None
+        kind, detail = verdict
+        assert kind == 'stale'
+        assert 'a' * 40 in detail
+
+    def test_a_moving_target_is_not_reported(self, tmp_path: Path) -> None:
+        # The manifest changed between the two runs, so the repository is being
+        # updated -- we just keep catching it at a different moment.
+        top, _repo = self._repo(tmp_path)
+        stentry: dict[str, object] = {}
+
+        first: grokmirror.RepoInfo = {'fingerprint': 'a' * 40}
+        second: grokmirror.RepoInfo = {'fingerprint': 'b' * 40}
+        assert grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', first, stentry, None) is None
+        assert grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', second, stentry, None) is None
+        assert stentry['fp_mismatch'] == 'b' * 40
+
+    def test_unreadable_refs_are_reported_at_once(self, tmp_path: Path) -> None:
+        # git refuses to list any refs when it cannot parse one of them, so
+        # nothing can fingerprint this repository -- including grok-manifest,
+        # which is why its manifest entry has been frozen ever since.
+        top, repo = self._repo(tmp_path)
+        minfo: grokmirror.RepoInfo = {'fingerprint': self._fingerprint(top)}
+        Path(repo, 'refs', 'heads', 'broken').write_text('0' * 40 + '\n')
+        stentry: dict[str, object] = {}
+
+        verdict = grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, None)
+
+        assert verdict is not None
+        kind, detail = verdict
+        assert kind == 'broken'
+        assert 'refs/heads/broken' in detail
+        assert 'fp_mismatch' not in stentry
+
+    def test_repository_without_refs_is_not_reported(self, tmp_path: Path) -> None:
+        # grok-manifest does not fingerprint an empty repository either.
+        top = tmp_path / 'top'
+        subprocess.run(['git', 'init', '-q', '--bare', str(top / 'test.git')], check=True)
+
+        assert grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', {}, {}, None) is None
+
+    def test_ignored_refs_are_left_out_of_the_comparison(self, tmp_path: Path) -> None:
+        # The origin fingerprints without refs/meta/*, so a replica that counts
+        # them would report every such repository as out of date forever.
+        top, _repo = self._repo(tmp_path, refs=('refs/heads/master', 'refs/meta/config'))
+        minfo: grokmirror.RepoInfo = {'fingerprint': self._fingerprint(top, ignorerefs=['refs/meta/*'])}
+        stentry: dict[str, object] = {}
+
+        # Counting refs/meta/config in makes it disagree, twice over.
+        grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, None)
+        assert grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, None) is not None
+
+        stentry.clear()
+        verdict = grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, ['refs/meta/*'])
+        assert verdict is None

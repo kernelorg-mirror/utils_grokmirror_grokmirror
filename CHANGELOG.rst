@@ -1,6 +1,18 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- grok-fsck now fingerprints every repository on every run and compares
+  the result with the manifest, reporting the ones that disagree. A
+  repository git cannot fingerprint at all -- a damaged ref file makes
+  "git show-ref" fail for the whole repository -- is one grok-manifest
+  has been skipping, leaving its manifest entry frozen and the
+  repository silently unreplicated. One that fingerprints fine but does
+  not match means grok-manifest or grok-pull is not getting through. A
+  mismatch has to survive two runs before it is reported, since a
+  replica is legitimately behind for a while after a push
+- New ``[manifest]ignore_refs`` setting, the config-file equivalent of
+  grok-manifest's ``--ignore-refs``. grok-fsck uses it for the
+  comparison above, so on a replica it should match the origin
 - grok-fsck now explains what "<ref>: invalid sha1 pointer 000...0" is
   about. Git reports every ref it cannot resolve that way, and the usual
   cause is a symbolic ref whose target has been deleted -- which git

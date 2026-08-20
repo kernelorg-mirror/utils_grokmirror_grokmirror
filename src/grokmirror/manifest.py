@@ -243,6 +243,10 @@ def parse_args() -> argparse.Namespace:
         if 'manifest' in config:
             if not opts.ignore:
                 opts.ignore = [x.strip() for x in config['manifest'].get('ignore', '').splitlines()]
+            if not opts.ignore_refs:
+                opts.ignore_refs = [
+                    x.strip() for x in config['manifest'].get('ignore_refs', '').splitlines() if x.strip()
+                ]
             if not opts.check_export_ok:
                 opts.check_export_ok = config['manifest'].getboolean('check_export_ok', False)
             if not opts.pretty:

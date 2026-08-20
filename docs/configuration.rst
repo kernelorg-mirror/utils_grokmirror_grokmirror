@@ -102,6 +102,13 @@ flag, and the flag wins.
 ``ignore``
     Repository paths to leave out, as shell globs.
 
+``ignore_refs``
+    Refs to leave out of the fingerprint calculation, as shell globs, one
+    per line -- ``refs/meta/*``, say. ``grok-fsck`` compares repositories
+    against the manifest using the same setting, so on a replica it should
+    be set to whatever the origin uses, or the comparison flags every
+    repository that has such a ref.
+
 ``fetch_objstore``
     Fetch objects into objstore repositories from the post-commit hook.
     This can help when somebody pushes the same objects to a sibling, but
