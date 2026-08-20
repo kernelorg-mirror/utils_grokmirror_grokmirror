@@ -1019,3 +1019,36 @@ class TestManifestFingerprintCheck:
         stentry.clear()
         verdict = grokmirror.fsck.check_manifest_fingerprint(str(top), '/test.git', minfo, stentry, ['refs/meta/*'])
         assert verdict is None
+
+
+class TestGetIgnorerefs:
+    """[manifest]ignore_refs has to read the same on every command.
+
+    A fingerprint only means anything next to another one, so a replica that
+    calculates them differently from its origin disagrees about repositories
+    that are perfectly up to date -- and refetches them for ever, because the
+    two numbers can never converge.
+    """
+
+    @staticmethod
+    def _config(sections: dict[str, dict[str, str]]) -> grokmirror.GrokConfigParser:
+        config = grokmirror.GrokConfigParser(interpolation=ExtendedInterpolation())
+        config.read_dict(sections)
+        return config
+
+    def test_no_manifest_section_is_not_an_error(self) -> None:
+        # grok-bundle and grok-pull configs need not have one at all.
+        assert grokmirror.get_ignorerefs(self._config({'core': {}})) == []
+
+    def test_unset_means_nothing_is_ignored(self) -> None:
+        assert grokmirror.get_ignorerefs(self._config({'manifest': {}})) == []
+
+    def test_blank_value_does_not_become_an_empty_glob(self) -> None:
+        # compile_globs() turns [''] into a pattern matching the empty string,
+        # which is the kind of thing that silently changes every fingerprint.
+        assert grokmirror.get_ignorerefs(self._config({'manifest': {'ignore_refs': '\n  \n'}})) == []
+
+    def test_one_per_line_and_stripped(self) -> None:
+        config = self._config({'manifest': {'ignore_refs': 'refs/meta/*\n   refs/changes/*  '}})
+
+        assert grokmirror.get_ignorerefs(config) == ['refs/meta/*', 'refs/changes/*']

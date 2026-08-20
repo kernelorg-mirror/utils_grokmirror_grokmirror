@@ -21,7 +21,7 @@ import pytest
 import grokmirror
 import grokmirror.pull
 
-from support import GrokTree
+from support import GrokTree, git
 
 
 def actions(q_mani: queue.Queue[grokmirror.pull.ManiItem]) -> list[tuple[str, str]]:
@@ -210,3 +210,48 @@ def test_private_repo_clones_its_public_siblings_first(tree: GrokTree) -> None:
     assert len(result) == 3
     assert set(result[:2]) == {('/test/pub1.git', 'init'), ('/test/pub2.git', 'init')}
     assert result[2] == ('/test/priv.git', 'init')
+
+
+def test_refs_the_origin_ignores_do_not_trigger_a_pull(tree: GrokTree) -> None:
+    # The origin fingerprints without refs/meta/*, so a replica counting them
+    # in can never agree with the manifest. Every run found a "discrepancy",
+    # fetched, changed nothing, and found the same discrepancy the next time.
+    fullpath = tree.add_repo('test/one.git')
+    git('update-ref', 'refs/meta/config', 'refs/heads/master', cwd=fullpath)
+    origin_fp = grokmirror.get_repo_fingerprint(
+        str(tree.toplevel), '/test/one.git', force=True, ignorerefs=['refs/meta/*']
+    )
+
+    remote_manifest_path = tree.root / 'remote-manifest.json'
+    tree.write_manifest({'/test/one.git': {'fingerprint': origin_fp}}, remote_manifest_path)
+    tree.write_manifest({'/test/one.git': {'fingerprint': origin_fp}}, tree.manifest)
+
+    config = tree.load_remote_config(remote_manifest_path, extra={'manifest': {'ignore_refs': 'refs/meta/*'}})
+    ses = grokmirror.GrokSession()
+    q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
+
+    grokmirror.pull.fill_todo_from_manifest(ses, config, q_mani)
+
+    assert actions(q_mani) == []
+
+
+def test_refs_the_origin_ignores_still_trigger_a_pull_when_unconfigured(tree: GrokTree) -> None:
+    # The same tree without the setting: this is the behaviour being fixed,
+    # kept as a test so the difference the setting makes is visible.
+    fullpath = tree.add_repo('test/one.git')
+    git('update-ref', 'refs/meta/config', 'refs/heads/master', cwd=fullpath)
+    origin_fp = grokmirror.get_repo_fingerprint(
+        str(tree.toplevel), '/test/one.git', force=True, ignorerefs=['refs/meta/*']
+    )
+
+    remote_manifest_path = tree.root / 'remote-manifest.json'
+    tree.write_manifest({'/test/one.git': {'fingerprint': origin_fp}}, remote_manifest_path)
+    tree.write_manifest({'/test/one.git': {'fingerprint': origin_fp}}, tree.manifest)
+
+    config = tree.load_remote_config(remote_manifest_path)
+    ses = grokmirror.GrokSession()
+    q_mani: queue.Queue[grokmirror.pull.ManiItem] = queue.Queue()
+
+    grokmirror.pull.fill_todo_from_manifest(ses, config, q_mani)
+
+    assert actions(q_mani) == [('/test/one.git', 'pull')]

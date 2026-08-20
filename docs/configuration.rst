@@ -104,10 +104,19 @@ flag, and the flag wins.
 
 ``ignore_refs``
     Refs to leave out of the fingerprint calculation, as shell globs, one
-    per line -- ``refs/meta/*``, say. ``grok-fsck`` compares repositories
-    against the manifest using the same setting, so on a replica it should
-    be set to whatever the origin uses, or the comparison flags every
-    repository that has such a ref.
+    per line -- ``refs/meta/*``, say.
+
+    Every grokmirror command that fingerprints reads this, not just
+    ``grok-manifest``, so **a replica has to be given the same value as its
+    origin**. A fingerprint only means something next to another one: if
+    the two ends count different refs, the numbers can never agree, and a
+    replica refetches such repositories on every single run without
+    anything ever changing. ``grok-fsck`` reports them as not matching the
+    manifest, which is one way to notice.
+
+    Changing the value leaves the fingerprint recorded in each repository
+    stale until something recalculates it. That sorts itself out over the
+    next pull or fsck run.
 
 ``fetch_objstore``
     Fetch objects into objstore repositories from the post-commit hook.

@@ -1185,6 +1185,20 @@ def get_forkgroups(obstdir: StrPath, toplevel: StrPath) -> dict[str, set[str]]:
     return forkgroups
 
 
+def get_ignorerefs(config: GrokConfigParser) -> list[str]:
+    """Refs to leave out of fingerprints, from [manifest]ignore_refs.
+
+    A fingerprint is only useful next to another one, and the other one is
+    usually the origin's. Every command that fingerprints has to leave out the
+    same refs, or a replica disagrees with the manifest about repositories that
+    are perfectly up to date -- and grok-pull refetches them every run, for
+    ever, because the fingerprints can never converge.
+    """
+    if 'manifest' not in config:
+        return []
+    return [x.strip() for x in config['manifest'].get('ignore_refs', '').splitlines() if x.strip()]
+
+
 def get_repo_fingerprint(
     toplevel: StrPath, gitdir: str, force: bool = False, ignorerefs: list[str] | None = None
 ) -> str | None:
@@ -1233,11 +1247,15 @@ def get_repo_fingerprint(
     return fingerprint
 
 
-def set_repo_fingerprint(toplevel: StrPath, gitdir: str, fingerprint: str | None = None) -> str | None:
+def set_repo_fingerprint(
+    toplevel: StrPath, gitdir: str, fingerprint: str | None = None, ignorerefs: list[str] | None = None
+) -> str | None:
     fpfile = gitdir_to_fullpath(toplevel, gitdir) / 'grokmirror.fingerprint'
 
     if fingerprint is None:
-        fingerprint = get_repo_fingerprint(toplevel, gitdir, force=True)
+        # Whatever lands in the file is what every later comparison reads, so
+        # it has to be calculated the same way the caller calculates the rest.
+        fingerprint = get_repo_fingerprint(toplevel, gitdir, force=True, ignorerefs=ignorerefs)
         if fingerprint is None:
             # The repo has no refs at all (or is gone), so there is nothing to
             # record. Writing it out anyway stores the literal string "None",

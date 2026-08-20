@@ -893,6 +893,7 @@ def decide_repo_action(
 
     schedcheck = datetime.datetime.strptime(entry['nextcheck'], '%Y-%m-%d')  # noqa: DTZ007
     nextcheck = today + datetime.timedelta(days=checkdelay)
+    ignorerefs = grokmirror.get_ignorerefs(config)
 
     if not cfg_repack:
         # don't look at me if you turned off repack
@@ -904,7 +905,7 @@ def decide_repo_action(
     elif options.repack_all_quick and count_loose > 0:
         logger.debug('repack_level=1 due to repack_all_quick')
         repack_level = 1
-    elif entry.get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir):
+    elif entry.get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir, ignorerefs=ignorerefs):
         logger.debug('Checking repack level of %s', fullpath)
         repack_level = grokmirror.get_repack_level(obj_info)
     else:
@@ -914,7 +915,7 @@ def decide_repo_action(
     if (
         not repack_level
         and schedcheck <= today
-        and entry.get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir)
+        and entry.get('fingerprint') != grokmirror.get_repo_fingerprint(toplevel, gitdir, ignorerefs=ignorerefs)
     ):
         entry['nextcheck'] = nextcheck.strftime('%F')
         logger.info('     aged: %s (forcing repack)', fullpath)
@@ -1038,6 +1039,9 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
 
         # Go through the manifest and compare with status
         toplevel = os.path.realpath(config['core']['toplevel'])
+        # Whatever grok-manifest fingerprints with, we have to fingerprint with
+        # too, or every comparison against the manifest disagrees for ever.
+        ignorerefs = grokmirror.get_ignorerefs(config)
         changed = False
         for gitdir in list(manifest):
             # str(), because fullpath is the key the status file is written
@@ -1064,7 +1068,7 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
                 status[fullpath] = {
                     'lastcheck': 'never',
                     'nextcheck': nextcheckiso,
-                    'fingerprint': grokmirror.get_repo_fingerprint(toplevel, gitdir),
+                    'fingerprint': grokmirror.get_repo_fingerprint(toplevel, gitdir, ignorerefs=ignorerefs),
                 }
                 logger.info('%s:', fullpath)
                 logger.info('    added: next check on %s', nextcheckiso)
@@ -1101,10 +1105,6 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
     logger.info('Analyzing %s (%s repos)', toplevel, len(status))
     stattime = time.time()
     baselines = [x.strip() for x in config['fsck'].get('baselines', '').splitlines()]
-    # Same setting grok-manifest fingerprints with, or the comparison below
-    # flags every repository that has a ref the origin leaves out.
-    cfg_ignorerefs = config['manifest'].get('ignore_refs', '') if 'manifest' in config else ''
-    ignorerefs = [x.strip() for x in cfg_ignorerefs.splitlines() if x.strip()]
     fp_broken: list[tuple[str, str]] = []
     fp_stale: list[tuple[str, str]] = []
     for fullpath in list(status):
@@ -1521,7 +1521,7 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
                 logger.info('     next: %s', status[fullpath]['nextcheck'])
 
             gitdir = grokmirror.fullpath_to_gitdir(toplevel, fullpath)
-            status[fullpath]['fingerprint'] = grokmirror.get_repo_fingerprint(toplevel, gitdir)
+            status[fullpath]['fingerprint'] = grokmirror.get_repo_fingerprint(toplevel, gitdir, ignorerefs=ignorerefs)
 
             # noinspection PyTypeChecker
             elapsed = int(time.time() - startt)

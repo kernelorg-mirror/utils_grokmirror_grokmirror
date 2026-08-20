@@ -146,7 +146,9 @@ mismatch is only reported if it is still there on the next run.
 
 If that second list covers most of the tree, the fingerprints are being
 calculated differently on the two ends: set ``manifest.ignore_refs`` to
-match the origin.
+match the origin. Every command that fingerprints reads that setting, so
+until it matches, ``grok-pull`` also refetches each of those repositories
+on every run without anything ever changing.
 
 Log Rotation
 ============

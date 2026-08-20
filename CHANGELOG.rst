@@ -11,8 +11,12 @@ v3.0 (TBD)
   mismatch has to survive two runs before it is reported, since a
   replica is legitimately behind for a while after a push
 - New ``[manifest]ignore_refs`` setting, the config-file equivalent of
-  grok-manifest's ``--ignore-refs``. grok-fsck uses it for the
-  comparison above, so on a replica it should match the origin
+  grok-manifest's ``--ignore-refs``, honoured by every command that
+  fingerprints. Only grok-manifest used to know about ignored refs, so a
+  replica of an origin that ignores any could never agree with the
+  manifest: grok-pull refetched those repositories on every run, for
+  ever, without anything having changed. Set it to the same value the
+  origin uses
 - grok-fsck now explains what "<ref>: invalid sha1 pointer 000...0" is
   about. Git reports every ref it cannot resolve that way, and the usual
   cause is a symbolic ref whose target has been deleted -- which git

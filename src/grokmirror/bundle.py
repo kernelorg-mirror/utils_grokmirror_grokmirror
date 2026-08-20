@@ -51,6 +51,7 @@ def generate_bundles(
     # load_config_file() guarantees both of these are set
     manifest = grokmirror.read_manifest(config['core']['manifest'])
     toplevel = Path(config['core']['toplevel']).resolve()
+    ignorerefs = grokmirror.get_ignorerefs(config)
     # An empty string means "no extra arguments", and str.split() already
     # returns an empty list for it -- but only if we don't skip the split.
     git_args = gitargs.split()
@@ -76,7 +77,7 @@ def generate_bundles(
         bundledir = Path(outdir, bundlename.removesuffix('.git'))
         bundledir.mkdir(parents=True, exist_ok=True)
 
-        repofpr = grokmirror.get_repo_fingerprint(str(toplevel), bundlename)
+        repofpr = grokmirror.get_repo_fingerprint(str(toplevel), bundlename, ignorerefs=ignorerefs)
         logger.debug('%s fingerprint is %s', bundlename, repofpr)
         if not repofpr:
             # Either the repo is gone or it has no refs at all. Either way there

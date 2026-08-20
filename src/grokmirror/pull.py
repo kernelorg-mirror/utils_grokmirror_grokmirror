@@ -367,8 +367,10 @@ def run_pull_action(
     altrepo = grokmirror.get_altrepo(fullpath)
     obstrepo = altrepo if altrepo and grokmirror.is_obstrepo(altrepo, obstdir) else None
 
+    ignorerefs = grokmirror.get_ignorerefs(config)
+
     r_fp = repoinfo.get('fingerprint')
-    my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+    my_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True, ignorerefs=ignorerefs)
     if obstrepo:
         o_obj_info = grokmirror.get_repo_obj_info(obstrepo)
         if o_obj_info.get('count') == '0' and o_obj_info.get('in-pack') == '0' and not my_fp:
@@ -393,7 +395,7 @@ def run_pull_action(
 
         if success:
             run_post_update_hook(config, fullpath)
-            post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True)
+            post_pull_fp = grokmirror.get_repo_fingerprint(toplevel, gitdir, force=True, ignorerefs=ignorerefs)
             repoinfo['fingerprint'] = post_pull_fp
             altrepo = grokmirror.get_altrepo(fullpath)
             if post_pull_fp != my_fp:
@@ -1017,6 +1019,7 @@ def fill_todo_from_manifest(
     obstdir = os.path.realpath(config['core']['objstore'])
     forkgroups = build_optimal_forkgroups(l_manifest, r_culled, toplevel, obstdir)
     privmatch = grokmirror.compile_globs(config['core'].get('private', '').splitlines())
+    ignorerefs = grokmirror.get_ignorerefs(config)
 
     # populate private/forkgroup info in r_culled
     for fg, siblings in forkgroups.items():
@@ -1083,7 +1086,7 @@ def fill_todo_from_manifest(
                         q_mani.put((gitdir, repoinfo, 'fix_params'))
                         break
 
-            my_fingerprint = grokmirror.get_repo_fingerprint(toplevel, gitdir)
+            my_fingerprint = grokmirror.get_repo_fingerprint(toplevel, gitdir, ignorerefs=ignorerefs)
             if my_fingerprint != l_manifest[gitdir].get('fingerprint'):
                 logger.debug('Fingerprint discrepancy, forcing a fetch')
                 q_mani.put((gitdir, repoinfo, 'pull'))
