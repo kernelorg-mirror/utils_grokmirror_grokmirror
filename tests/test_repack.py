@@ -28,12 +28,6 @@ from support import GrokTree, git
 
 pytestmark = pytest.mark.slow
 
-# Modern git tries to write bitmaps on any repack-into-one of a bare repo, and
-# warns when alternates make that impossible. The stock grokmirror.conf ships
-# this warning in ignore_errors, so the tests run with it ignored too --
-# without it, every repack of a repo with alternates counts as failed.
-BITMAP_WARNING = 'warning: disabling bitmap writing'
-
 
 def repacked(tree: GrokTree, *args: str) -> dict[str, str]:
     """Run grok-fsck and map each repacked repository's path to its flags.
@@ -135,7 +129,9 @@ def test_fork_group_repack(tree: GrokTree) -> None:
     one = tree.add_repo('test/one.git')
     fork = tree.add_repo('test/fork.git')
     tree.run_manifest()
-    tree.write_config({'fsck': {'ignore_errors': BITMAP_WARNING}})
+    # No ignore_errors: repacks with alternates pass --no-write-bitmap-index,
+    # so the old "disabling bitmap writing" warning must not appear at all.
+    tree.write_config()
 
     # The first run migrates the pair into a new objstore repository, which
     # always gets an immediate full repack.
@@ -160,7 +156,7 @@ def test_fork_group_repack(tree: GrokTree) -> None:
 
     # Children get no --write-midx: the objstore fetch hardlinks pack files
     # out of them, and a multi-pack-index must never travel between repos.
-    assert flags[str(one)] == '--geometric=2 -l -d'
+    assert flags[str(one)] == '--geometric=2 -l --no-write-bitmap-index -d'
     assert flags[str(obstrepo)] == '--geometric=2 --write-midx -d'
     assert (obstrepo / 'objects' / 'pack' / 'multi-pack-index').exists()
     assert not (one / 'objects' / 'pack' / 'multi-pack-index').exists()
@@ -195,13 +191,15 @@ def test_alt_parent_and_grandchild_repack(tree: GrokTree) -> None:
     (child / 'objects' / 'info' / 'alternates').write_text(f'{mommy / "objects"}\n')
     heads = {repo: git('rev-parse', 'HEAD', cwd=repo).strip() for repo in (grandma, mommy, child)}
     tree.run_manifest()
-    tree.write_config({'fsck': {'ignore_errors': BITMAP_WARNING}})
+    # No ignore_errors: repacks with alternates pass --no-write-bitmap-index,
+    # so the old "disabling bitmap writing" warning must not appear at all.
+    tree.write_config()
 
     flags = repacked(tree, '--repack-all-quick')
 
     assert flags[str(grandma)] == '--geometric=2 --write-midx -b -d'
-    assert flags[str(mommy)] == '-A -l -d'
-    assert flags[str(child)] == '--geometric=2 -l -d'
+    assert flags[str(mommy)] == '-A -l --no-write-bitmap-index -d'
+    assert flags[str(child)] == '--geometric=2 -l --no-write-bitmap-index -d'
     assert 'grandchild corruption' in tree.log_text()
     assert_clean(grandma, mommy, child)
     for repo, head in heads.items():
@@ -248,11 +246,13 @@ def test_child_full_repack_uses_cruft_and_alt_parent_does_not(tree: GrokTree) ->
     child = tree.add_repo('test/child.git', source='csource')
     (child / 'objects' / 'info' / 'alternates').write_text(f'{parent / "objects"}\n')
     tree.run_manifest()
-    tree.write_config({'fsck': {'ignore_errors': BITMAP_WARNING}})
+    # No ignore_errors: repacks with alternates pass --no-write-bitmap-index,
+    # so the old "disabling bitmap writing" warning must not appear at all.
+    tree.write_config()
 
     flags = repacked(tree, '--repack-all-full')
 
-    assert flags[str(child)] == '--cruft --cruft-expiration=yesterday -l --pack-kept-objects -d'
+    assert flags[str(child)] == '--cruft --cruft-expiration=yesterday -l --no-write-bitmap-index --pack-kept-objects -d'
     assert flags[str(parent)] == '-a -b -k --pack-kept-objects -d'
     assert_clean(parent, child)
 
@@ -325,7 +325,9 @@ def test_objstore_compression_is_left_at_the_zlib_default(tree: GrokTree, tmp_pa
     tree.add_repo('test/one.git')
     tree.add_repo('test/fork.git')
     tree.run_manifest()
-    tree.write_config({'fsck': {'ignore_errors': BITMAP_WARNING}})
+    # No ignore_errors: repacks with alternates pass --no-write-bitmap-index,
+    # so the old "disabling bitmap writing" warning must not appear at all.
+    tree.write_config()
     tree.run_fsck('-f')
     (obstrepo,) = tree.objstore_repos()
 

@@ -426,6 +426,11 @@ def run_git_repack(
             logger.warning('         : this can cause grandchild corruption')
             repack_flags.append('-A')
             repack_flags.append('-l')
+            # Bitmaps can never work in a repo that borrows objects it does
+            # not repack, and git says so with a warning that would count as
+            # a failed repack unless ignore_errors happens to cover it. Say
+            # up front that we know, here and on every other -l repack.
+            repack_flags.append('--no-write-bitmap-index')
         elif geometric:
             repack_flags += ['--geometric=2', '--write-midx', '-b']
         else:
@@ -442,7 +447,7 @@ def run_git_repack(
             # repository it was written in. Keeping children midx-free keeps
             # that path simple. Nothing is dropped, so prune's
             # --unpack-unreachable grace period does not apply.
-            repack_flags += ['--geometric=2', '-l']
+            repack_flags += ['--geometric=2', '-l', '--no-write-bitmap-index']
         elif modern_git:
             # Full repack. Without prune the cruft pack simply holds the
             # unreachables forever, like -A used to keep them loose forever.
@@ -450,8 +455,10 @@ def run_git_repack(
             if prune:
                 repack_flags.append('--cruft-expiration=yesterday')
             repack_flags.append('-l')
+            repack_flags.append('--no-write-bitmap-index')
         else:
             repack_flags.append('-l')
+            repack_flags.append('--no-write-bitmap-index')
             repack_flags.append('-A')
             if prune:
                 repack_flags.append('--unpack-unreachable=yesterday')

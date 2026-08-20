@@ -1,6 +1,13 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- Repacks of repositories that use alternates now pass
+  --no-write-bitmap-index explicitly, since bitmaps cannot cover objects
+  borrowed from an alternate. Previously git emitted "warning: disabling
+  bitmap writing" on every such repack, and only the matching
+  ignore_errors entry in the sample config kept it from being counted as
+  a repack failure; that entry is no longer needed and has been removed
+  from the sample config (existing configs keep working)
 - Full repacks of standalone and child repositories now collect
   unreachable objects into a cruft pack (git repack --cruft) instead of
   exploding them into loose objects with -A. The grace period stays the
