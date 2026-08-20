@@ -98,6 +98,12 @@ Not everything git reports is worth waking up for. ``fsck.ignore_errors``
 holds substrings to treat as benign, and its default covers the usual
 harmless notices.
 
+Some things grok-fsck simply fixes. A commit-graph that still lists
+commits the repository no longer has -- they became unreachable and were
+pruned -- makes ``git fsck`` complain about every one of them. That is
+not damage, so the graph is thrown away and rewritten, and nothing is
+reported.
+
 At the other end, ``fsck.reclone_on_errors`` lists substrings that mean
 the repository is damaged past local repair -- a missing tree, a broken
 link. When one matches, grok-fsck marks the repository for recloning and

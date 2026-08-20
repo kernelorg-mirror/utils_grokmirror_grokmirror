@@ -26,6 +26,7 @@ import logging
 import os
 import platform
 import random
+import re
 import shutil
 import smtplib
 import sys
@@ -38,6 +39,9 @@ import grokmirror
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
+
+# Object IDs as git prints them, sha1 or sha256.
+OID_RE = re.compile(r'\b[0-9a-f]{40,64}\b')
 
 
 def log_errors(fullpath: grokmirror.StrPath, cmdargs: list[str], lines: list[str]) -> None:
@@ -564,6 +568,81 @@ def run_git_repack(
     return repack_ok
 
 
+def split_commit_graph_errors(errors: list[str]) -> tuple[list[str], list[str]]:
+    """Separate stale commit-graph complaints from real fsck errors.
+
+    Git fsck verifies the commit-graph when core.commitGraph is set, and a
+    graph listing commits the object database no longer has produces a pair of
+    lines for each of them::
+
+        error: Could not read 01fbb5471cca68fd07bc020e2da2b0bbb9a011dd
+        failed to parse commit 01fbb5471cca68fd07bc020e2da2b0bbb9a011dd from object database for commit-graph
+
+    Only the second line says what it is about, so the first is recognized by
+    the object id it shares with one of the graph complaints. Anything else
+    stays in the error list: if those commits were also reachable from a ref,
+    fsck says so separately and that is real damage.
+    """
+
+    def is_graph_line(line: str) -> bool:
+        return 'commit-graph' in line or 'commit graph' in line
+
+    if not any(is_graph_line(x) for x in errors):
+        return [], errors
+
+    graph_oids: set[str] = set()
+    for line in errors:
+        if is_graph_line(line):
+            graph_oids.update(OID_RE.findall(line))
+
+    def is_stale_graph_error(line: str) -> bool:
+        if is_graph_line(line):
+            return True
+        # The other half of the pair only says an object could not be read, so
+        # go by the object id it shares with one of the graph complaints.
+        oids = set(OID_RE.findall(line))
+        return line.startswith('error: Could not read ') and bool(oids) and oids <= graph_oids
+
+    graph = []
+    rest = []
+    for line in errors:
+        if is_stale_graph_error(line):
+            graph.append(line)
+        else:
+            rest.append(line)
+    return graph, rest
+
+
+def repair_commit_graph(fullpath: str, config: grokmirror.GrokConfigParser, errors: list[str]) -> list[str]:
+    """Rebuild a stale commit-graph and return the errors that remain.
+
+    A commit-graph that has fallen behind the object database is not damage and
+    needs neither a reclone nor a human -- the commits it still lists became
+    unreachable and were pruned. Throw the graph away and write a new one.
+    """
+    graph, rest = split_commit_graph_errors(errors)
+    if not graph:
+        return errors
+
+    logger.info('    graph: commit-graph is out of date, rebuilding')
+    logger.debug('%s: %s stale commit-graph complaints', fullpath, len(graph))
+    # Remove it first, so that a graph git refuses to even read cannot keep the
+    # rewrite from happening. Both layouts, since a split graph may have been
+    # written by something other than grokmirror.
+    with contextlib.suppress(OSError):
+        Path(fullpath, 'objects', 'info', 'commit-graph').unlink()
+    shutil.rmtree(Path(fullpath, 'objects', 'info', 'commit-graphs'), ignore_errors=True)
+
+    if config['fsck'].get('commitgraph', 'yes') != 'yes':
+        # Graphs are turned off, so a missing one is the correct end state.
+        return rest
+
+    if not run_git_commit_graph(fullpath, ['--reachable']):
+        logger.critical('%s: could not rebuild the commit-graph', fullpath)
+
+    return rest
+
+
 def run_git_fsck(
     ses: grokmirror.GrokSession, fullpath: str, config: grokmirror.GrokConfigParser, conn_only: bool = False
 ) -> None:
@@ -585,6 +664,8 @@ def run_git_fsck(
 
     if output:
         warn = remove_ignored_errors(output, config)
+        if warn:
+            warn = repair_commit_graph(fullpath, config, warn)
         if warn:
             log_errors(fullpath, args, warn)
             check_reclone_error(ses, fullpath, config, warn)

@@ -12,6 +12,7 @@ a path that has historically been much less travelled.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -100,6 +101,59 @@ def test_dangling_alternates_on_an_origin_are_not_recloned(tree: GrokTree) -> No
     assert 'needs manual attention' in out
     assert 'reclone' not in out
     assert not (excluded / 'grokmirror.reclone').exists()
+
+
+def stale_commit_graph(repo: Path) -> str:
+    """Leave `repo` with a commit-graph listing a commit that no longer exists.
+
+    This is the ordinary end of an unreachable commit: it was in the graph when
+    the graph was written, then it lost its ref and got pruned. Returns the id
+    of the commit that went away.
+    """
+    head = git('rev-parse', 'HEAD', cwd=repo).strip()
+    treeish = git('rev-parse', 'HEAD^{tree}', cwd=repo).strip()
+    doomed = git('commit-tree', treeish, '-p', head, '-m', 'doomed', cwd=repo).strip()
+    git('update-ref', 'refs/heads/doomed', doomed, cwd=repo)
+    git('commit-graph', 'write', '--reachable', cwd=repo)
+    git('update-ref', '-d', 'refs/heads/doomed', cwd=repo)
+    git('prune', '--expire=now', cwd=repo)
+    git('config', 'core.commitGraph', 'true', cwd=repo)
+    return doomed
+
+
+def test_stale_commit_graph_is_rebuilt_instead_of_reported(tree: GrokTree) -> None:
+    # git fsck verifies the commit-graph, and a graph that has fallen behind the
+    # object database makes it shout about every commit that is gone. Nothing is
+    # damaged and nobody needs to look at it: rebuild the graph and move on.
+    repo = tree.add_repo('test/one.git')
+    doomed = stale_commit_graph(repo)
+    tree.run_manifest()
+    tree.write_config()
+
+    res = tree.run_fsck('-f')
+
+    out = res.stdout + res.stderr
+    assert 'commit-graph is out of date, rebuilding' in tree.log_text()
+    assert 'reports errors' not in out
+    assert doomed not in out
+    assert not (repo / 'grokmirror.fsck.err').exists()
+    # The graph is back, and now agrees with the object database.
+    assert (repo / 'objects' / 'info' / 'commit-graph').exists()
+    assert git('fsck', '--no-progress', '--no-dangling', '--no-reflogs', cwd=repo, check=False) == ''
+
+
+def test_stale_commit_graph_is_removed_when_graphs_are_disabled(tree: GrokTree) -> None:
+    # With commitgraph = no the correct end state is no graph at all, rather
+    # than a stale one nobody will ever rewrite.
+    repo = tree.add_repo('test/one.git')
+    stale_commit_graph(repo)
+    tree.run_manifest()
+    tree.write_config({'fsck': {'commitgraph': 'no'}})
+
+    res = tree.run_fsck('-f')
+
+    assert 'reports errors' not in res.stdout + res.stderr
+    assert not (repo / 'objects' / 'info' / 'commit-graph').exists()
 
 
 def test_private_repo_contributes_no_objects(tree: GrokTree) -> None:

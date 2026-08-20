@@ -1,6 +1,14 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- grok-fsck now repairs a stale commit-graph itself. A graph still
+  listing commits that have since been pruned makes git fsck complain
+  about every one of them, which used to fill the report with hundreds
+  of lines (and, before the fix above, hundreds of reclone requests).
+  The graph is now thrown away and rewritten, and only the errors that
+  are not about the commit-graph are reported
+- The reclone decision is now logged once per repository instead of once
+  per matching error line
 - grok-fsck no longer requests auto-reclones for repositories that have
   no mirror remote to reclone from. On an origin server there is no
   grok-pull to act on the request, so the marker file was never picked

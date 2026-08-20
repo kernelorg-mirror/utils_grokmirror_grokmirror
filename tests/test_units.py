@@ -476,6 +476,19 @@ class TestFsckErrorClassification:
         grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: bad tree object deadbeef'])
         assert (repo / 'grokmirror.reclone').exists()
 
+    def test_many_matching_errors_are_reported_once(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # A repository with a few hundred bad objects used to produce a few
+        # hundred identical "requested auto-reclone" lines in the report, since
+        # the loop kept going after it had made up its mind.
+        repo = self._replica_repo(tmp_path)
+        config = self._config(tmp_path / 'mirror')
+        config['fsck']['reclone_on_errors'] = 'missing commit'
+        ses = grokmirror.GrokSession()
+        errors = [f'missing commit {n:040x}' for n in range(200)]
+        with caplog.at_level('CRITICAL'):
+            grokmirror.fsck.check_reclone_error(ses, str(repo), config, errors)
+        assert caplog.text.count('requested auto-reclone') == 1
+
     def test_repo_without_a_mirror_remote_is_not_recloned(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -492,6 +505,45 @@ class TestFsckErrorClassification:
         assert not (repo / 'grokmirror.reclone').exists()
         assert 'needs manual attention' in caplog.text
         assert 'auto-reclone' not in caplog.text
+
+
+class TestCommitGraphErrors:
+    """A stale commit-graph is not damage, and grok-fsck sorts it out itself.
+
+    git fsck verifies the commit-graph, so a graph still listing commits that
+    have since been pruned produces two lines per commit -- and only one of them
+    says what it is about.
+    """
+
+    STALE: ClassVar[list[str]] = [
+        'error: Could not read 01fbb5471cca68fd07bc020e2da2b0bbb9a011dd',
+        'failed to parse commit 01fbb5471cca68fd07bc020e2da2b0bbb9a011dd from object database for commit-graph',
+    ]
+
+    def test_stale_graph_pairs_are_split_off(self) -> None:
+        graph, rest = grokmirror.fsck.split_commit_graph_errors(self.STALE)
+        assert graph == self.STALE
+        assert rest == []
+
+    def test_real_errors_are_kept(self) -> None:
+        real = ['broken link from tree 05bf1a1c5e3ee1d9a2b1e3ee0aae94cbbd0b7dd3']
+        graph, rest = grokmirror.fsck.split_commit_graph_errors([*self.STALE, *real])
+        assert graph == self.STALE
+        assert rest == real
+
+    def test_unrelated_unreadable_object_is_kept(self) -> None:
+        # Only the object ids the graph complained about get paired up. Anything
+        # else git could not read is a genuine problem.
+        other = 'error: Could not read 5f2a0d97a51f3a0f8c0c1c0dbb6c9a1d38d6b60c'
+        graph, rest = grokmirror.fsck.split_commit_graph_errors([*self.STALE, other])
+        assert graph == self.STALE
+        assert rest == [other]
+
+    def test_errors_without_a_graph_complaint_pass_through(self) -> None:
+        errors = ['error: Could not read 5f2a0d97a51f3a0f8c0c1c0dbb6c9a1d38d6b60c', 'missing blob deadbeef']
+        graph, rest = grokmirror.fsck.split_commit_graph_errors(errors)
+        assert graph == []
+        assert rest == errors
 
 
 class TestCompileGlobs:
