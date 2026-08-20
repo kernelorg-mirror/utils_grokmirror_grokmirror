@@ -83,7 +83,10 @@ def test_standalone_full_repack(tree: GrokTree) -> None:
 
     flags = repacked(tree, '--repack-all-full')
 
-    assert flags[str(repo)] == '-a -b --unpack-unreachable=yesterday -f --pack-kept-objects -d'
+    # No -f: delta islands are enforced even on reused deltas, so recomputing
+    # every delta from scratch is pure CPU cost. It can be restored through
+    # extra_repack_flags_full (proven below).
+    assert flags[str(repo)] == '-a -b --unpack-unreachable=yesterday --pack-kept-objects -d'
     assert_clean(repo)
 
 
@@ -96,7 +99,8 @@ def test_extra_repack_flags_are_passed_through(tree: GrokTree) -> None:
         {
             'fsck': {
                 'extra_repack_flags': '--threads=1',
-                'extra_repack_flags_full': '--window=250 --depth=50',
+                # -f restores the old recompute-all-deltas full repacks
+                'extra_repack_flags_full': '-f --window=250 --depth=50',
             }
         }
     )
@@ -114,7 +118,7 @@ def test_extra_repack_flags_are_passed_through(tree: GrokTree) -> None:
 
     flags = repacked(tree, '--repack-all-full')
     assert '--threads=1' in flags[str(repo)]
-    assert '--window=250 --depth=50' in flags[str(repo)]
+    assert '-f --window=250 --depth=50' in flags[str(repo)]
     assert_clean(repo)
 
 
@@ -132,7 +136,7 @@ def test_fork_group_repack(tree: GrokTree) -> None:
     # always gets an immediate full repack.
     flags = repacked(tree, '-f')
     (obstrepo,) = tree.objstore_repos()
-    assert flags[str(obstrepo)] == '-a -f --pack-kept-objects -d'
+    assert flags[str(obstrepo)] == '-a --pack-kept-objects -d'
 
     # An objstore repo is only requeued when its loose objects are worth the
     # bother: more than 10% of a total that exceeds 1MB. An incompressible

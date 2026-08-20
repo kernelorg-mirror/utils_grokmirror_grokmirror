@@ -286,7 +286,10 @@ Repacking
     for things like ``--threads`` and ``--window-memory``.
 
 ``extra_repack_flags_full``
-    Added on top of ``extra_repack_flags`` for full repacks. Default:
+    Added on top of ``extra_repack_flags`` for full repacks. Add ``-f``
+    here if you want full repacks to recompute every delta from scratch
+    like grokmirror used to; the marginally better deltas are rarely
+    worth the CPU on large repositories. Default:
     ``--window=250 --depth=50``.
 
 ``commitgraph``

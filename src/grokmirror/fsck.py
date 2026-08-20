@@ -363,7 +363,12 @@ def run_git_repack(
     if rregular:
         repack_flags += rregular
 
-    full_repack_flags = ['-f', '--pack-kept-objects']
+    # Full repacks used to pass -f to recompute every delta from scratch.
+    # Delta islands are enforced even on reused deltas, so -f buys nothing for
+    # correctness -- only marginally better deltas at an enormous CPU cost on
+    # large repos. Anyone who wants the old behavior back can put -f in
+    # extra_repack_flags_full.
+    full_repack_flags = ['--pack-kept-objects']
     rfull = config['fsck'].get('extra_repack_flags_full', '').split()
     if rfull:
         full_repack_flags += rfull
@@ -410,7 +415,7 @@ def run_git_repack(
             repack_flags.append('--unpack-unreachable=yesterday')
 
     if level > 1:
-        logger.info('   repack: performing a full repack for optimal deltas')
+        logger.info('   repack: performing a full consolidating repack')
         repack_flags += full_repack_flags
 
     if not always_precious:

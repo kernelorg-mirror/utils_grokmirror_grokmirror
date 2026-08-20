@@ -1,6 +1,10 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- Full repacks no longer pass -f to git repack. Recomputing every delta
+  from scratch is very expensive on large repositories and buys nothing
+  for correctness -- delta islands are respected even for reused deltas.
+  Add -f to extra_repack_flags_full if you want the old behavior back
 - Stop forcing pack.compression=9 on objstore repositories. The
   strongest zlib level costs a lot of CPU on every repack of the
   largest repositories on a server and only wins a percent or two of
