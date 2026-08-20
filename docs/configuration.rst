@@ -339,8 +339,9 @@ Error handling
 ``reclone_on_errors``
     Substrings that mean the repository is damaged beyond local repair.
     When one matches, grokmirror asks grok-pull to reclone that repository
-    on its next run. This only makes sense on replicas -- an origin has
-    nowhere to reclone from.
+    on its next run. Repositories without a mirror remote -- the ones on
+    an origin server, which has nowhere to reclone from -- are reported as
+    needing manual attention instead.
 
 Reporting
 ---------

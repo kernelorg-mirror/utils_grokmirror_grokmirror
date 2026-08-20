@@ -63,6 +63,7 @@ def test_do_not_objstore_repo_with_dangling_alternates(tree: GrokTree) -> None:
     tree.add_repo('test/one.git')
     tree.add_repo('test/fork.git')
     excluded = tree.add_repo('test/excluded.git')
+    git('remote', 'add', '--mirror=fetch', '_grokmirror', 'https://example.invalid/excluded.git', cwd=excluded)
     (excluded / 'grokmirror.do-not-objstore').touch()
     altfile = excluded / 'objects' / 'info' / 'alternates'
     altfile.write_text(str(tree.objstore / 'nosuchrepo.git' / 'objects') + '\n')
@@ -77,6 +78,28 @@ def test_do_not_objstore_repo_with_dangling_alternates(tree: GrokTree) -> None:
     assert (excluded / 'grokmirror.reclone').exists()
     # The other two are unaffected.
     assert len(tree.objstore_repos()) == 1
+
+
+def test_dangling_alternates_on_an_origin_are_not_recloned(tree: GrokTree) -> None:
+    # Same breakage, but on a server that has no grok-pull: the repository has
+    # no mirror remote, so there is nothing to reclone from. Say so plainly
+    # instead of leaving a marker file nobody will ever act on.
+    tree.add_repo('test/one.git')
+    tree.add_repo('test/fork.git')
+    excluded = tree.add_repo('test/excluded.git')
+    (excluded / 'grokmirror.do-not-objstore').touch()
+    altfile = excluded / 'objects' / 'info' / 'alternates'
+    altfile.write_text(str(tree.objstore / 'nosuchrepo.git' / 'objects') + '\n')
+    tree.run_manifest()
+    tree.write_config()
+
+    res = tree.run_fsck('-f')
+
+    out = res.stdout + res.stderr
+    assert 'BROKEN: /test/excluded.git' in out
+    assert 'needs manual attention' in out
+    assert 'reclone' not in out
+    assert not (excluded / 'grokmirror.reclone').exists()
 
 
 def test_private_repo_contributes_no_objects(tree: GrokTree) -> None:

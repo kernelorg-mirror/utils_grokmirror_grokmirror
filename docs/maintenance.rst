@@ -101,8 +101,11 @@ harmless notices.
 At the other end, ``fsck.reclone_on_errors`` lists substrings that mean
 the repository is damaged past local repair -- a missing tree, a broken
 link. When one matches, grok-fsck marks the repository for recloning and
-the next ``grok-pull`` run fetches a fresh copy. This only makes sense on
-a replica; an origin has nowhere to reclone from.
+the next ``grok-pull`` run fetches a fresh copy.
+
+This only works on a replica. A repository with no mirror remote has
+nowhere to reclone from and no grok-pull run to do it, so grok-fsck
+reports it as needing manual attention and leaves it alone.
 
 Log Rotation
 ============

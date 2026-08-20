@@ -445,14 +445,53 @@ class TestFsckErrorClassification:
         grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: any error at all'])
         assert not (repo / 'grokmirror.reclone').exists()
 
-    def test_configured_reclone_pattern_triggers_reclone(self, tmp_path: Path) -> None:
+    @staticmethod
+    def _replica_repo(tmp_path: Path, remotename: str = '_grokmirror') -> Path:
+        """A repository that grok-pull maintains, i.e. one we can reclone."""
         repo = tmp_path / 'mirror' / 'test.git'
-        repo.mkdir(parents=True)
+        subprocess.run(['git', 'init', '-q', '--bare', str(repo)], check=True)
+        subprocess.run(
+            ['git', 'remote', 'add', '--mirror=fetch', remotename, 'https://example.invalid/test.git'],
+            cwd=repo,
+            check=True,
+        )
+        return repo
+
+    def test_configured_reclone_pattern_triggers_reclone(self, tmp_path: Path) -> None:
+        repo = self._replica_repo(tmp_path)
         config = self._config(tmp_path / 'mirror')
         config['fsck']['reclone_on_errors'] = 'fatal: bad tree object'
         ses = grokmirror.GrokSession()
         grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: bad tree object deadbeef'])
         assert (repo / 'grokmirror.reclone').exists()
+
+    def test_custom_remotename_is_recognized(self, tmp_path: Path) -> None:
+        # Whether a reclone is possible is decided by the remote grok-pull would
+        # fetch from, so the name configured in [pull] is the one to look for.
+        repo = self._replica_repo(tmp_path, remotename='upstream')
+        config = self._config(tmp_path / 'mirror')
+        config['fsck']['reclone_on_errors'] = 'fatal: bad tree object'
+        config.read_dict({'pull': {'remotename': 'upstream'}})
+        ses = grokmirror.GrokSession()
+        grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: bad tree object deadbeef'])
+        assert (repo / 'grokmirror.reclone').exists()
+
+    def test_repo_without_a_mirror_remote_is_not_recloned(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # On an origin server there is no grok-pull and no remote to refetch
+        # from, so a reclone marker would sit there forever while every report
+        # claimed a reclone had been requested.
+        repo = tmp_path / 'mirror' / 'test.git'
+        subprocess.run(['git', 'init', '-q', '--bare', str(repo)], check=True)
+        config = self._config(tmp_path / 'mirror')
+        config['fsck']['reclone_on_errors'] = 'fatal: bad tree object'
+        ses = grokmirror.GrokSession()
+        with caplog.at_level('CRITICAL'):
+            grokmirror.fsck.check_reclone_error(ses, str(repo), config, ['fatal: bad tree object deadbeef'])
+        assert not (repo / 'grokmirror.reclone').exists()
+        assert 'needs manual attention' in caplog.text
+        assert 'auto-reclone' not in caplog.text
 
 
 class TestCompileGlobs:

@@ -1,6 +1,11 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- grok-fsck no longer requests auto-reclones for repositories that have
+  no mirror remote to reclone from. On an origin server there is no
+  grok-pull to act on the request, so the marker file was never picked
+  up and every report repeated the same "requested auto-reclone" line.
+  Such repositories are now reported as needing manual attention
 - grok-fsck now requires git 2.20 or newer and says so up front, instead
   of failing midway through the tree when an objstore repository needs
   delta islands the running git does not have. Git 2.41 or newer is

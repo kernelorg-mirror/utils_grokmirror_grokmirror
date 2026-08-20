@@ -196,6 +196,19 @@ def merge_siblings(siblings: set[str], amap: dict[str, set[str]]) -> str | None:
     return mdest
 
 
+def can_reclone(fullpath: grokmirror.StrPath, config: grokmirror.GrokConfigParser) -> bool:
+    """Is there anywhere to reclone this repository from?
+
+    A reclone request is a message left for grok-pull, which refetches the
+    repository from the remote it maintains. An origin server runs grok-fsck
+    without grok-pull and the repositories have no such remote, so the marker
+    file would never be picked up and the same "requested auto-reclone" line
+    would show up in every report.
+    """
+    remotename = config['pull'].get('remotename', '_grokmirror') if 'pull' in config else '_grokmirror'
+    return remotename in grokmirror.list_repo_remotes(fullpath)
+
+
 def check_reclone_error(
     ses: grokmirror.GrokSession, fullpath: grokmirror.StrPath, config: grokmirror.GrokConfigParser, errors: list[str]
 ) -> None:
@@ -205,25 +218,25 @@ def check_reclone_error(
     # entry (or an unset option) would request a reclone for any error at all.
     errlist = [x.strip() for x in config['fsck'].get('reclone_on_errors', '').splitlines() if x.strip()]
     for line in errors:
-        for estring in errlist:
-            if estring in line:
-                # is this repo used for alternates?
-                # No lstrip('/') on the way out: relpath() never returns a
-                # leading slash of its own, so the one we prepend is the only
-                # one there ever was.
-                gitdir = grokmirror.fullpath_to_gitdir(toplevel, fullpath)
-                if ses.is_alt_repo(toplevel, gitdir):
-                    logger.critical('\tused for alternates, not requesting auto-reclone')
-                    return
-                else:
-                    reclone = line
-                    logger.critical('\trequested auto-reclone')
-                break
-            if reclone is not None:
-                break
+        if any(estring in line for estring in errlist):
+            reclone = line
+            break
     if reclone is None:
         return
 
+    # is this repo used for alternates?
+    # No lstrip('/') on the way out: relpath() never returns a leading slash of
+    # its own, so the one we prepend is the only one there ever was.
+    gitdir = grokmirror.fullpath_to_gitdir(toplevel, fullpath)
+    if ses.is_alt_repo(toplevel, gitdir):
+        logger.critical('\tused for alternates, not requesting auto-reclone')
+        return
+
+    if not can_reclone(fullpath, config):
+        logger.critical('\tno mirror remote, this repository needs manual attention')
+        return
+
+    logger.critical('\trequested auto-reclone')
     set_repo_reclone(fullpath, reclone)
 
 
@@ -987,8 +1000,11 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
                     refresh_obst_roots(obst_roots, obstrepo)
 
         elif not Path(altdir).is_dir():
-            logger.critical('  reclone: %s (alternates repo gone)', gitdir)
-            set_repo_reclone(fullpath, 'Alternates repository gone')
+            if can_reclone(fullpath, config):
+                logger.critical('  reclone: %s (alternates repo gone)', gitdir)
+                set_repo_reclone(fullpath, 'Alternates repository gone')
+            else:
+                logger.critical('   BROKEN: %s (alternates repo gone, needs manual attention)', gitdir)
             continue
 
         elif not grokmirror.is_obstrepo(altdir, obstdir):
