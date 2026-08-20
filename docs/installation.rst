@@ -6,7 +6,10 @@ Prerequisites
 =============
 
 * Python 3.9 or newer
-* Git (any reasonably recent version; some optimizations need 2.24 or newer)
+* Git 2.20 or newer (grok-fsck refuses to run with anything older, since
+  objstore repositories depend on delta islands); 2.41 or newer is
+  recommended, as it enables geometric repacking and cruft packs, which
+  dramatically reduce the repacking load on large trees
 * An httpd on the origin server, to publish the manifest, though it can
   also be configured to work over ssh
 

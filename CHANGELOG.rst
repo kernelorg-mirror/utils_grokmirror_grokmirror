@@ -1,6 +1,11 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- grok-fsck now requires git 2.20 or newer and says so up front, instead
+  of failing midway through the tree when an objstore repository needs
+  delta islands the running git does not have. Git 2.41 or newer is
+  recommended (geometric repacks and cruft packs); older versions log a
+  note that the all-into-one repack strategy is in use
 - Repacks of repositories that use alternates now pass
   --no-write-bitmap-index explicitly, since bitmaps cannot cover objects
   borrowed from an alternate. Previously git emitted "warning: disabling

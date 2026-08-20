@@ -1397,6 +1397,12 @@ def parse_args() -> argparse.Namespace:
 def grok_fsck(cfgfile: str, verbose: bool = False, options: FsckOptions | None = None) -> None:
     if options is None:
         options = FsckOptions()
+    # Objstore repositories are configured with delta islands, which appeared
+    # in git 2.20 -- refuse to run with anything older, up front and with a
+    # clear message, instead of failing halfway through the tree with baffling
+    # git errors.
+    if not grokmirror.git_newer_than('2.20.0'):
+        raise grokmirror.GrokError('grok-fsck requires git 2.20.0 or newer')
     config = grokmirror.load_config_file(cfgfile)
 
     obstdir = config['core'].get('objstore', None)
@@ -1418,6 +1424,9 @@ def grok_fsck(cfgfile: str, verbose: bool = False, options: FsckOptions | None =
     # The report must capture messages from every grokmirror module, so it
     # attaches to the shared parent logger, not this module's child.
     root_logger.addHandler(ch)
+
+    if not grokmirror.git_newer_than('2.41.0'):
+        logger.info('Git older than 2.41 detected: quick repacks will be all-into-one instead of geometric')
 
     fsck_mirror(config, options)
 

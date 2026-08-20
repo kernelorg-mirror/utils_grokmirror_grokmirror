@@ -358,3 +358,64 @@ def test_precious_repo_is_repacked_without_d(tree: GrokTree) -> None:
     assert '-d' not in flags[str(repo)].split()
     assert grokmirror.is_precious(str(repo))
     assert_clean(repo)
+
+
+def fake_git(tmp_path: Path, version: str) -> Path:
+    """A git shim that lies about its version and delegates everything else.
+
+    grok-fsck finds git through the GITBIN environment variable, so pointing
+    that at the shim lets the tests exercise the version-dependent paths on
+    whatever git the test host actually has.
+    """
+    shim = tmp_path / f'git-{version}'
+    # grokmirror prepends --no-pager to every invocation, so --version has to
+    # be looked for anywhere in the argument list, not just in $1.
+    shim.write_text(
+        '#!/bin/sh\n'
+        'for a in "$@"; do\n'
+        '    if [ "$a" = "--version" ]; then\n'
+        f'        echo "git version {version}"\n'
+        '        exit 0\n'
+        '    fi\n'
+        'done\n'
+        'exec git "$@"\n'
+    )
+    shim.chmod(0o755)
+    return shim
+
+
+def test_ancient_git_is_refused_up_front(tree: GrokTree, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Objstore repositories are configured with delta islands, which need git
+    # 2.20. An older git must get a clear one-line refusal before any work
+    # starts, not a baffling failure halfway through the tree.
+    tree.add_repo('test/solo.git')
+    tree.run_manifest()
+    tree.write_config()
+    monkeypatch.setenv('GITBIN', str(fake_git(tmp_path, '2.19.5')))
+
+    res = tree.run_fsck(expect=1)
+
+    assert 'requires git 2.20.0 or newer' in res.stderr
+
+
+def test_pre_geometric_git_gets_the_legacy_flag_matrix(
+    tree: GrokTree, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Anything between 2.20 and 2.41 keeps the historical all-into-one flags
+    # for every repository class, and says so in the log. The three sources
+    # are unrelated so nobody gets migrated into an objstore repository.
+    solo = tree.add_repo('test/solo.git')
+    parent = tree.add_repo('test/parent.git', source='psource')
+    child = tree.add_repo('test/child.git', source='csource')
+    (child / 'objects' / 'info' / 'alternates').write_text(f'{parent / "objects"}\n')
+    tree.run_manifest()
+    tree.write_config()
+    monkeypatch.setenv('GITBIN', str(fake_git(tmp_path, '2.40.1')))
+
+    flags = repacked(tree, '--repack-all-quick')
+
+    assert flags[str(solo)] == '-a -b --unpack-unreachable=yesterday -d'
+    assert flags[str(parent)] == '-a -b -k -d'
+    assert flags[str(child)] == '-l --no-write-bitmap-index -A --unpack-unreachable=yesterday -d'
+    assert 'all-into-one instead of geometric' in tree.log_text()
+    assert_clean(solo, parent, child)
