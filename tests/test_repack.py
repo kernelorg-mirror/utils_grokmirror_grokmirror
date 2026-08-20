@@ -17,6 +17,7 @@ whole is the point.
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import pytest
 
@@ -191,6 +192,36 @@ def test_alt_parent_and_grandchild_repack(tree: GrokTree) -> None:
     assert_clean(grandma, mommy, child)
     for repo, head in heads.items():
         assert git('cat-file', '-e', head, cwd=repo) == ''
+
+
+def test_objstore_compression_is_left_at_the_zlib_default(tree: GrokTree, tmp_path: Path) -> None:
+    # Grokmirror used to force pack.compression=9 on objstore repositories.
+    # The last percent of pack size is not worth what level 9 costs in CPU on
+    # every repack of the largest repos on a server, so new objstore repos now
+    # leave compression alone, and a repack removes the old forced setting.
+    # (Created in its own directory so it does not join the tree's objstore.)
+    fresh = grokmirror.setup_objstore_repo(str(tmp_path / 'freshobst'))
+    assert git('config', '--get', 'pack.compression', cwd=fresh, check=False).strip() == ''
+
+    tree.add_repo('test/one.git')
+    tree.add_repo('test/fork.git')
+    tree.run_manifest()
+    tree.write_config({'fsck': {'ignore_errors': BITMAP_WARNING}})
+    tree.run_fsck('-f')
+    (obstrepo,) = tree.objstore_repos()
+
+    # An objstore repo carrying the old forced setting is healed when it is
+    # next repacked...
+    git('config', 'pack.compression', '9', cwd=obstrepo)
+    (obstrepo / 'grokmirror.repack').touch()
+    tree.run_fsck()
+    assert git('config', '--get', 'pack.compression', cwd=obstrepo, check=False).strip() == ''
+
+    # ...but a compression level someone chose on purpose is not ours to undo.
+    git('config', 'pack.compression', '1', cwd=obstrepo)
+    (obstrepo / 'grokmirror.repack').touch()
+    tree.run_fsck()
+    assert git('config', '--get', 'pack.compression', cwd=obstrepo).strip() == '1'
 
 
 def test_precious_repo_is_repacked_without_d(tree: GrokTree) -> None:

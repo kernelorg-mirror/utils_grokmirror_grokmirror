@@ -370,6 +370,13 @@ def run_git_repack(
 
     if grokmirror.is_obstrepo(fullpath, obstdir):
         set_precious_after = True
+        # Grokmirror used to force pack.compression=9 on objstore repos. The
+        # last percent of pack size it wins over the zlib default is not worth
+        # what it costs in CPU on every repack of the largest repos we manage,
+        # so remove the old forced setting on the way past. The pattern limits
+        # this to the value we used to set; a different level someone chose on
+        # purpose stays.
+        grokmirror.set_git_config(fullpath, 'pack.compression', '^9$', operation='--unset')
         repack_flags.append('-a')
         if not prune and not always_precious:
             repack_flags.append('-k')

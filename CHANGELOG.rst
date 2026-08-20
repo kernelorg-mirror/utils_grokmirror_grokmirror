@@ -1,6 +1,13 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- Stop forcing pack.compression=9 on objstore repositories. The
+  strongest zlib level costs a lot of CPU on every repack of the
+  largest repositories on a server and only wins a percent or two of
+  pack size over the default. New objstore repositories are created
+  without the setting, and grok-fsck removes the old forced value when
+  it next repacks an existing one; a different compression level set on
+  purpose is left alone
 - Remove the grokmirror-1.x object storage migration from grok-fsck.
   Repositories whose alternates point at another regular repository are
   no longer converted into objstore repositories; they are left alone

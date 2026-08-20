@@ -819,8 +819,6 @@ def setup_objstore_repo(obstdir: StrPath, name: str | None = None) -> str:
         # All our objects are precious -- we only turn this off when repacking
         set_git_config(obstrepo, 'core.repositoryformatversion', '1')
         set_git_config(obstrepo, 'extensions.preciousObjects', 'true')
-        # Set maximum compression, though perhaps we should make this configurable
-        set_git_config(obstrepo, 'pack.compression', '9')
         # Set island configs
         set_git_config(obstrepo, 'repack.useDeltaIslands', 'true')
         set_git_config(obstrepo, 'repack.writeBitmaps', 'true')
