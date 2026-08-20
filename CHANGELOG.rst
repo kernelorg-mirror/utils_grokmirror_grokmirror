@@ -1,6 +1,13 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- grok-fsck now explains what "<ref>: invalid sha1 pointer 000...0" is
+  about. Git reports every ref it cannot resolve that way, and the usual
+  cause is a symbolic ref whose target has been deleted -- which git
+  itself considers legal, so no version of git says anything more useful.
+  The report now names the symref and the target it cannot find. Refs
+  that are not symrefs keep their original error, since
+  those really are broken ref files
 - grok-fsck now repairs a stale commit-graph itself. A graph still
   listing commits that have since been pruned makes git fsck complain
   about every one of them, which used to fill the report with hundreds

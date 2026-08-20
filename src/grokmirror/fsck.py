@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 # Object IDs as git prints them, sha1 or sha256.
 OID_RE = re.compile(r'\b[0-9a-f]{40,64}\b')
 
+# git fsck's way of saying "this ref does not resolve to an object".
+NULL_REF_RE = re.compile(r'^(?:error: )?(?P<ref>\S+): invalid sha1 pointer 0{40,64}$')
+
 
 def log_errors(fullpath: grokmirror.StrPath, cmdargs: list[str], lines: list[str]) -> None:
     logger.critical('%s reports errors:', fullpath)
@@ -643,6 +646,36 @@ def repair_commit_graph(fullpath: str, config: grokmirror.GrokConfigParser, erro
     return rest
 
 
+def explain_unresolvable_refs(fullpath: str, errors: list[str]) -> list[str]:
+    """Say what "invalid sha1 pointer 000...0" is actually about.
+
+    Git hands fsck the null object id for every ref it could not resolve, and
+    fsck reports that as a bad object pointer without saying why it did not
+    resolve. The usual reason on a server is a symbolic ref whose target has
+    been deleted, which git itself considers perfectly legal -- an unborn
+    branch looks exactly the same -- so neither newer git nor "git refs verify"
+    has anything more to say about it. Ask for the target ourselves, so the
+    report says what is actually wrong with the ref.
+
+    Refs that are not symrefs are left alone: an empty ref file, or one holding
+    the null object id, is real local damage and keeps its original error.
+    """
+    explained = []
+    for line in errors:
+        match = NULL_REF_RE.match(line)
+        if not match:
+            explained.append(line)
+            continue
+        ref = match.group('ref')
+        retcode, output, _error = grokmirror.run_git_command(fullpath, ['symbolic-ref', ref])
+        target = output.strip()
+        if retcode != 0 or not target:
+            explained.append(line)
+            continue
+        explained.append(f'error: {ref}: symbolic ref pointing at {target}, which does not exist')
+    return explained
+
+
 def run_git_fsck(
     ses: grokmirror.GrokSession, fullpath: str, config: grokmirror.GrokConfigParser, conn_only: bool = False
 ) -> None:
@@ -665,7 +698,7 @@ def run_git_fsck(
     if output:
         warn = remove_ignored_errors(output, config)
         if warn:
-            warn = repair_commit_graph(fullpath, config, warn)
+            warn = explain_unresolvable_refs(fullpath, repair_commit_graph(fullpath, config, warn))
         if warn:
             log_errors(fullpath, args, warn)
             check_reclone_error(ses, fullpath, config, warn)

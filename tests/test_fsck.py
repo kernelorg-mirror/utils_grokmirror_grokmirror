@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 import grokmirror
+import grokmirror.fsck
 from grokmirror.fsck import refresh_obst_roots
 
 from support import GrokTree, git
@@ -154,6 +155,43 @@ def test_stale_commit_graph_is_removed_when_graphs_are_disabled(tree: GrokTree) 
 
     assert 'reports errors' not in res.stdout + res.stderr
     assert not (repo / 'objects' / 'info' / 'commit-graph').exists()
+
+
+def test_dangling_symref_is_explained_in_the_report(tree: GrokTree) -> None:
+    # A symbolic ref whose target was deleted is legal as far as git is
+    # concerned (an unborn branch looks the same), but git fsck still lists it
+    # with the null object id and calls it an invalid sha1 pointer. Say what it
+    # really is, since only the repository owner can clean it up.
+    repo = tree.add_repo('test/one.git')
+    git('symbolic-ref', 'refs/heads/for-next', 'refs/heads/pending', cwd=repo)
+    tree.run_manifest()
+    tree.write_config()
+
+    res = tree.run_fsck('-f')
+
+    out = res.stdout + res.stderr
+    assert 'refs/heads/for-next: symbolic ref pointing at refs/heads/pending, which does not exist' in out
+    assert 'invalid sha1 pointer' not in out
+    # We only explain it -- removing somebody's ref is not ours to do.
+    assert (repo / 'refs' / 'heads' / 'for-next').exists()
+
+
+def test_null_oid_in_a_ref_file_keeps_its_error(tree: GrokTree) -> None:
+    # The same fsck line with no symref behind it means the ref file itself is
+    # broken, which is real local damage and has to stay in the report.
+    #
+    # run_git_fsck() is called directly here because `git show-ref` refuses to
+    # list refs at all in this state, so the repository has no fingerprint and
+    # never makes it into the manifest to be scheduled in the first place.
+    repo = tree.add_repo('test/one.git')
+    (repo / 'refs' / 'heads' / 'broken').write_text('0' * 40 + '\n')
+    config = grokmirror.load_config_file(tree.write_config())
+
+    grokmirror.fsck.run_git_fsck(grokmirror.GrokSession(), str(repo), config)
+
+    reported = (repo / 'grokmirror.fsck.err').read_text()
+    assert 'refs/heads/broken: invalid sha1 pointer' in reported
+    assert 'symbolic ref pointing at' not in reported
 
 
 def test_private_repo_contributes_no_objects(tree: GrokTree) -> None:

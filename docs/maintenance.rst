@@ -104,6 +104,13 @@ pruned -- makes ``git fsck`` complain about every one of them. That is
 not damage, so the graph is thrown away and rewritten, and nothing is
 reported.
 
+Others it can only explain. ``refs/heads/foo: invalid sha1 pointer
+000...0`` is how git reports a ref that does not resolve, and the usual
+cause is a symbolic ref whose target has since been deleted. Git
+considers that legal -- an unborn branch looks the same -- so the report
+names the symref and the target it cannot find, and leaves the ref alone:
+cleaning it up is a decision for whoever runs the repository.
+
 At the other end, ``fsck.reclone_on_errors`` lists substrings that mean
 the repository is damaged past local repair -- a missing tree, a broken
 link. When one matches, grok-fsck marks the repository for recloning and
