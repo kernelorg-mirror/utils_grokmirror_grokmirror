@@ -13,9 +13,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import annotations
+
 import argparse
 import logging
 import sys
+import time
 from collections.abc import Collection
 from pathlib import Path
 
@@ -23,6 +26,8 @@ import grokmirror
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
+
+SECONDS_IN_DAY = 86400
 
 
 def get_repo_size(fullpath: grokmirror.StrPath) -> int:
@@ -39,6 +44,63 @@ def get_repo_size(fullpath: grokmirror.StrPath) -> int:
     return reposize
 
 
+def select_refs(fullpath: grokmirror.StrPath, maxrefage: int, now: int) -> list[str]:
+    """Pick the refs to bundle, leaving out branches nobody maintains any more.
+
+    A branch counts as maintained when its tip commit is younger than maxrefage
+    days. Tags are then chosen by reachability from the surviving branches
+    rather than by their own age, and that distinction is the whole point: a
+    tag pointing into a retired branch drags that branch's entire history back
+    into the bundle, which is exactly what the age limit exists to prevent.
+
+    HEAD comes along when it points at a branch that survived, because it is
+    what "git clone" checks out: a bundle without it clones into an empty
+    working tree unless the client's init.defaultBranch happens to match.
+
+    Returns an empty list when nothing qualifies, which the caller treats the
+    same way as a repository with no refs at all.
+    """
+    cutoff = now - maxrefage * SECONDS_IN_DAY
+    ecode, out, err = grokmirror.run_git_command(
+        fullpath, ['for-each-ref', '--format=%(committerdate:unix) %(refname)', 'refs/heads']
+    )
+    if ecode > 0:
+        logger.info('  could not list branches in %s: %s', fullpath, err.strip())
+        return []
+
+    branches = []
+    for line in out.splitlines():
+        stamp, _sep, refname = line.partition(' ')
+        # A branch always points at a commit, so a line without a usable date
+        # is something we do not understand and should not be guessing about.
+        if stamp.isdigit() and int(stamp) >= cutoff and refname:
+            branches.append(refname)
+
+    if not branches:
+        return []
+
+    # One reachability walk per surviving branch. That is the entire cost of
+    # the filter: it scales with the number of branches kept, not with the
+    # number of tags the repository has.
+    tags: set[str] = set()
+    for branch in branches:
+        ecode, out, err = grokmirror.run_git_command(
+            fullpath, ['for-each-ref', f'--merged={branch}', '--format=%(refname)', 'refs/tags']
+        )
+        if ecode > 0:
+            logger.info('  could not list tags merged into %s: %s', branch, err.strip())
+            return []
+        tags.update(out.split())
+
+    # A detached HEAD has nothing to name here, and a HEAD pointing at a branch
+    # the age filter dropped has to stay out -- naming it would pull that whole
+    # branch back in through the back door.
+    ecode, out, _err = grokmirror.run_git_command(fullpath, ['symbolic-ref', '--quiet', 'HEAD'])
+    head = ['HEAD'] if ecode == 0 and out in branches else []
+
+    return [*branches, *head, *sorted(tags)]
+
+
 def generate_bundles(
     config: grokmirror.GrokConfigParser,
     outdir: str,
@@ -46,6 +108,7 @@ def generate_bundles(
     revlistargs: str,
     maxsize: int,
     include: Collection[str],
+    maxrefage: int = 0,
 ) -> int:
     # uses advisory lock, so its safe even if we die unexpectedly
     # load_config_file() guarantees both of these are set
@@ -56,6 +119,7 @@ def generate_bundles(
     # returns an empty list for it -- but only if we don't skip the split.
     git_args = gitargs.split()
     revlist_args = revlistargs.split()
+    now = int(time.time())
     # Manifest keys are absolute ('/test/one.git'), but -i is documented as
     # accepting both spellings, so match each pattern with and without its
     # leading slash.
@@ -106,10 +170,23 @@ def generate_bundles(
             logger.info('  skipped: %s (%s > %s)', bundlename, total_size, maxsize)
             continue
 
-        fullargs = [*git_args, 'bundle', 'create', str(bfile), *revlist_args]
+        # Only pay for the reachability walks once we know we are generating.
+        bundle_stdin = None
+        if maxrefage > 0:
+            bundle_refs = select_refs(fullpath, maxrefage, now)
+            if not bundle_refs:
+                logger.info('  skipped: %s (no branch newer than %s days)', bundlename, maxrefage)
+                continue
+            # Fed on stdin rather than argv: the kernel stable tree alone
+            # contributes a few thousand tag refs, and argv has a limit.
+            bundle_stdin = ('\n'.join(bundle_refs) + '\n').encode()
+            fullargs = [*git_args, 'bundle', 'create', str(bfile), '--stdin']
+        else:
+            fullargs = [*git_args, 'bundle', 'create', str(bfile), *revlist_args]
+
         logger.debug('Full git args: %s', fullargs)
         logger.info(' generate: %s', bfile)
-        ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs)
+        ecode, _out, _err = grokmirror.run_git_command(fullpath, fullargs, stdin=bundle_stdin)
 
         if ecode == 0:
             bfprfile.write_text(repofpr, encoding='utf-8')
@@ -137,6 +214,13 @@ def parse_args() -> argparse.Namespace:
     op.add_argument(
         '-i', '--include', nargs='*', default='*', help='List repositories to bundle (accepts shell globbing)'
     )
+    op.add_argument(
+        '--max-ref-age',
+        type=int,
+        default=0,
+        metavar='DAYS',
+        help='Bundle only branches whose tip is newer than this, plus the tags on them (0 disables)',
+    )
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
 
     opts = op.parse_args()
@@ -152,6 +236,7 @@ def grok_bundle(
     maxsize: int,
     include: Collection[str],
     verbose: bool = False,
+    maxrefage: int = 0,
 ) -> int:
     config = grokmirror.load_config_file(cfgfile)
 
@@ -160,7 +245,7 @@ def grok_bundle(
 
     grokmirror.init_logger('bundle', logfile, loglevel, verbose)
 
-    return generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include)
+    return generate_bundles(config, outdir, gitargs, revlistargs, maxsize, include, maxrefage)
 
 
 def command() -> None:
@@ -168,7 +253,14 @@ def command() -> None:
 
     try:
         retval = grok_bundle(
-            opts.config, opts.outdir, opts.gitargs, opts.revlistargs, opts.maxsize, opts.include, verbose=opts.verbose
+            opts.config,
+            opts.outdir,
+            opts.gitargs,
+            opts.revlistargs,
+            opts.maxsize,
+            opts.include,
+            verbose=opts.verbose,
+            maxrefage=opts.max_ref_age,
         )
     except grokmirror.GrokError as ex:
         sys.stderr.write(f'ERROR: {ex}\n')
