@@ -45,6 +45,17 @@ OPTIONS
   --max-ref-age DAYS
                         Bundle only branches whose tip is newer than this, plus
                         the tags on them (0 disables) (default: 0)
+  --incremental         Publish a bundle-uri bundle list, adding incremental
+                        bundles instead of rewriting one big one (default: False)
+  --publish-delay SECONDS
+                        How long a new bundle must exist before the list may
+                        name it (default: 7200)
+  --prune-delay SECONDS
+                        How long a bundle must stay on disk after the list
+                        stops naming it (default: 86400)
+  --max-bundles NUM     Start over with a full bundle once the list grows to
+                        this many (default: 30)
+  --no-clone-bundle     Do not maintain a clone.bundle symlink for "repo"
 
 REF AGE FILTERING
 -----------------
@@ -71,10 +82,59 @@ survived the filter, so ``git clone`` on the bundle file still checks
 something out. Because the ref set is chosen explicitly, ``--revlistargs``
 does not apply once ``--max-ref-age`` is in use.
 
+INCREMENTAL BUNDLES
+-------------------
+With ``--incremental``, grok-bundle stops rewriting one large bundle every
+run and instead maintains a git *bundle list*: a full bundle, plus a small
+bundle per run carrying only what is new since the last one. Clients that
+speak the bundle-uri protocol download the whole set; the server is told
+about the list with::
+
+    git config uploadpack.advertiseBundleURIs true
+    git config bundle.mode all
+    git config bundle.list.uri https://cdn.example.org/bundles/repo/bundle-list
+
+That is only half of it: a client acts on the advertisement only when it
+has opted in with ``transfer.bundleURI = true``, which is off by default.
+Without it ``git clone`` ignores the bundles entirely and fetches
+everything from the server as before, so do not read a normal-looking clone
+as the setup being broken. ``git clone --bundle-uri=<url>`` needs no client
+configuration at all, which also makes it the quick way to check a list by
+hand.
+
+The output directory gains three things next to the bundles: ``bundle-list``,
+which is the file clients fetch; ``clone.bundle``, a symlink to the newest
+published full bundle, so "repo" and anything else using the old name keeps
+working; and ``.bundlestate``, grok-bundle's own bookkeeping. The URIs in the
+list are relative, so git resolves them against wherever the list itself was
+fetched from and nothing in the file needs to know your CDN's hostname.
+
+Because ``bundle.mode`` is ``all``, a client needs *every* bundle the list
+names, and that shapes the timing. Bundles are usually generated on one host
+and served from several others, an rsync hop or two away, so nothing is ever
+listed by the run that created it: a new bundle waits out ``--publish-delay``
+first. The same reasoning applies at the other end. When a fresh full bundle
+is published it retires everything older, but those files stay on disk for
+``--prune-delay`` afterwards, because a client may still be working through a
+list it fetched a moment ago, and a CDN can keep handing that list out for
+longer still. Set both to comfortably more than it takes a change to reach
+every mirror.
+
+Bundles cannot be merged, so the list is kept from growing without limit by
+starting over: once it reaches ``--max-bundles`` entries, the next run cuts a
+new full bundle and lets the rest age out.
+
+``--revlistargs`` does not apply in this mode. The ref set is always explicit
+-- every branch and tag, or what ``--max-ref-age`` leaves of them -- because
+each incremental bundle has to be built against the exact branch tips the
+previous one ended at.
+
 EXAMPLES
 --------
 
     grok-bundle -c grokmirror.conf -o /var/www/bundles -i /pub/scm/linux/kernel/git/torvalds/linux.git /pub/scm/linux/kernel/git/stable/linux.git /pub/scm/linux/kernel/git/next/linux-next.git
+
+    grok-bundle -c grokmirror.conf -o /var/www/bundles -s 20 --incremental --max-ref-age 365 -i /pub/scm/linux/kernel/git/stable/linux.git
 
 SEE ALSO
 --------

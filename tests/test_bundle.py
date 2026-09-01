@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+
+from grokmirror.bundle import BundleState, promote_bundles
 
 from support import GrokTree, git
 
@@ -267,3 +271,224 @@ def test_without_max_ref_age_nothing_changes(tree: GrokTree) -> None:
     refs = _bundle_refs(tree.root / 'bundles' / 'test' / 'one' / 'clone.bundle')
     assert {'refs/heads/master', 'refs/heads/retired'} <= refs
     assert not {r for r in refs if r.startswith('refs/tags/')}
+
+
+def _entries(tree: GrokTree, gitdir: str = 'test/one') -> list[dict[str, Any]]:
+    """grok-bundle's own bookkeeping: one record per bundle it has made."""
+    state = json.loads((tree.root / 'bundles' / gitdir / '.bundlestate').read_text())
+    return list(state['bundles'])
+
+
+def _bundles(tree: GrokTree, gitdir: str = 'test/one') -> list[str]:
+    """The real bundle files, not the clone.bundle symlink pointing at one."""
+    return sorted(p.name for p in (tree.root / 'bundles' / gitdir).glob('*.bundle') if not p.is_symlink())
+
+
+def _listed(tree: GrokTree, gitdir: str = 'test/one') -> list[str]:
+    """The bundle names the published list actually points clients at."""
+    listfile = tree.root / 'bundles' / gitdir / 'bundle-list'
+    if not listfile.exists():
+        return []
+    out = git('config', '-f', str(listfile), '--get-regexp', r'^bundle\..*\.uri$')
+    return sorted(line.split()[1] for line in out.splitlines())
+
+
+def test_incremental_holds_the_first_bundle_back(tree: GrokTree) -> None:
+    # The bundle exists but nothing points at it yet: the mirrors have not had
+    # it long enough, and with bundle.mode=all a list naming a file that is not
+    # everywhere yet breaks the clone outright.
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.run_bundle('-v', '--incremental')
+
+    assert len(_bundles(tree)) == 1
+    assert _listed(tree) == []
+    assert not (tree.root / 'bundles' / 'test' / 'one' / 'bundle-list').exists()
+    assert not (tree.root / 'bundles' / 'test' / 'one' / 'clone.bundle').exists()
+
+
+def test_incremental_publishes_after_the_delay(tree: GrokTree) -> None:
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.run_bundle('-v', '--incremental', '--publish-delay', '0')
+
+    assert _listed(tree) == _bundles(tree)
+    listfile = tree.root / 'bundles' / 'test' / 'one' / 'bundle-list'
+    assert git('config', '-f', str(listfile), 'bundle.mode').strip() == 'all'
+    assert git('config', '-f', str(listfile), 'bundle.heuristic').strip() == 'creationToken'
+
+
+def test_incremental_keeps_a_clone_bundle_symlink(tree: GrokTree) -> None:
+    # "repo" and anything else hardcoding the old name keeps working, and the
+    # link only ever moves onto a bundle that is already published.
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.run_bundle('-v', '--incremental', '--publish-delay', '0')
+
+    link = tree.root / 'bundles' / 'test' / 'one' / 'clone.bundle'
+    assert link.is_symlink()
+    assert str(link.readlink()) == _bundles(tree)[0]
+
+
+def test_incremental_adds_a_second_bundle_for_new_commits(tree: GrokTree) -> None:
+    src = tree.source()
+    tree.add_repo('test/one.git', source=src)
+    tree.run_manifest()
+    tree.run_bundle('--incremental', '--publish-delay', '0')
+
+    src.commit('second')
+    src.push(tree.toplevel / 'test' / 'one.git')
+    tree.run_manifest()
+    tree.run_bundle('-v', '--incremental', '--publish-delay', '0')
+
+    assert len(_bundles(tree)) == 2
+    assert _listed(tree) == _bundles(tree)
+    kinds = [entry['full'] for entry in _entries(tree)]
+    assert kinds == [True, False]
+
+
+def test_incremental_skips_a_repo_with_no_new_commits(tree: GrokTree) -> None:
+    # A moved or deleted ref changes the fingerprint without adding a commit,
+    # and asking git for an empty bundle would just fail every run from then on.
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.run_bundle('--incremental', '--publish-delay', '0')
+    git('tag', 'v1', cwd=tree.toplevel / 'test' / 'one.git')
+    tree.run_manifest()
+    res = tree.run_bundle('-v', '--incremental', '--publish-delay', '0')
+
+    assert 'no new commits' in res.stdout + res.stderr
+    assert len(_bundles(tree)) == 1
+
+
+def test_incremental_starts_over_once_the_list_is_full(tree: GrokTree) -> None:
+    src = tree.source()
+    tree.add_repo('test/one.git', source=src)
+    tree.run_manifest()
+    tree.run_bundle('--incremental', '--publish-delay', '0', '--max-bundles', '2')
+
+    for msg in ('second', 'third'):
+        src.commit(msg)
+        src.push(tree.toplevel / 'test' / 'one.git')
+        tree.run_manifest()
+        tree.run_bundle('--incremental', '--publish-delay', '0', '--max-bundles', '2')
+
+    # The third run hit the limit and cut a fresh full bundle, which retires
+    # everything older than itself the moment it joins the list.
+    entries = _entries(tree)
+    assert entries[-1]['full'] is True
+    assert _listed(tree) == [entries[-1]['name']]
+    # Retired, but still on disk: a client may still be working through a list
+    # it fetched a moment ago, and a CDN can hand that list out for longer.
+    assert len(_bundles(tree)) == 3
+
+
+def test_incremental_prunes_retired_bundles(tree: GrokTree) -> None:
+    src = tree.source()
+    tree.add_repo('test/one.git', source=src)
+    tree.run_manifest()
+    common = ['--incremental', '--publish-delay', '0', '--max-bundles', '1', '--prune-delay', '0']
+    tree.run_bundle(*common)
+
+    src.commit('second')
+    src.push(tree.toplevel / 'test' / 'one.git')
+    tree.run_manifest()
+    tree.run_bundle(*common)
+    # Retired by the second full bundle, and past its prune delay by the third
+    # run -- pruning is never same-run, so it takes one more pass.
+    tree.run_bundle('-v', *common)
+
+    assert _bundles(tree) == _listed(tree)
+    assert len(_bundles(tree)) == 1
+
+
+def test_incremental_leaves_a_newer_state_version_alone(tree: GrokTree) -> None:
+    # Rebuilding from scratch here would unpublish bundles that clients are in
+    # the middle of using, so an unreadable state means hands off entirely.
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    bundledir = tree.root / 'bundles' / 'test' / 'one'
+    bundledir.mkdir(parents=True)
+    (bundledir / '.bundlestate').write_text('{"version": 99}')
+    res = tree.run_bundle('-v', '--incremental', '--publish-delay', '0')
+
+    assert 'unknown state version' in res.stdout + res.stderr
+    assert _bundles(tree) == []
+
+
+@pytest.mark.parametrize(
+    ('content', 'expected'),
+    [
+        pytest.param('{"version": 1, "bundles": [{"na', 'cannot read', id='truncated'),
+        pytest.param('{"version": 1}', 'malformed', id='missing-keys'),
+        pytest.param('{"version": 1, "fingerprint": "x", "tips": [], "bundles": [{}]}', 'malformed', id='bad-entry'),
+    ],
+)
+def test_incremental_leaves_a_damaged_state_alone(tree: GrokTree, content: str, expected: str) -> None:
+    """A state file we cannot make sense of must cost nothing that is published.
+
+    Treating it as "start over" is the worst of the options: the run writes a
+    list with nothing on it, which means unlinking the list clients are
+    fetching with none of the publication delay that normally protects them,
+    and every bundle already on disk is stranded because no record of it is
+    left to prune. Refusing the directory outright is the same answer the
+    version check already gives.
+    """
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.run_bundle('--incremental', '--publish-delay', '0')
+    published = _listed(tree)
+    assert published, 'nothing was published, so this proves nothing'
+
+    (tree.root / 'bundles' / 'test' / 'one' / '.bundlestate').write_text(content)
+    res = tree.run_bundle('-v', '--incremental', '--publish-delay', '0')
+
+    assert expected in res.stdout + res.stderr
+    # The list and the bundles it names are exactly as they were.
+    assert _listed(tree) == published
+    assert _bundles(tree) == published
+
+
+def test_incremental_does_not_publish_out_of_order() -> None:
+    """An increment must never reach the list before the bundle it builds on.
+
+    next_token() keeps tokens monotonic across a clock that steps backwards,
+    but 'created' is raw wall clock, so judging each bundle's age on its own
+    can publish an increment while its predecessor is still held back. With
+    bundle.mode=all that is a set no client can unbundle.
+    """
+    state: dict[str, Any] = {
+        'version': 1,
+        'fingerprint': 'x',
+        'tips': [],
+        'bundles': [
+            {'name': 'a', 'token': 1000, 'created': 1000, 'listed': True, 'unlisted': None, 'full': True},
+            {'name': 'b', 'token': 2000, 'created': 2000, 'listed': False, 'unlisted': None, 'full': True},
+            # Same run order, but the clock had stepped back when it was made.
+            {'name': 'c', 'token': 2001, 'created': 500, 'listed': False, 'unlisted': None, 'full': False},
+        ],
+    }
+    promote_bundles(cast('BundleState', state), now=2200, publishdelay=600)
+
+    assert [e['name'] for e in state['bundles'] if e['listed']] == ['a']
+
+
+def test_incremental_bundle_list_clones(tree: GrokTree, tmp_path: Path) -> None:
+    # The end-to-end check: git itself has to accept the list we write, and the
+    # bundles named in it have to be enough to build the repository from.
+    src = tree.source()
+    tree.add_repo('test/one.git', source=src)
+    tree.run_manifest()
+    tree.run_bundle('--incremental', '--publish-delay', '0')
+
+    src.commit('second')
+    src.push(tree.toplevel / 'test' / 'one.git')
+    tree.run_manifest()
+    tree.run_bundle('--incremental', '--publish-delay', '0')
+
+    listuri = (tree.root / 'bundles' / 'test' / 'one' / 'bundle-list').as_uri()
+    dest = tmp_path / 'cloned'
+    git('clone', f'--bundle-uri={listuri}', str(tree.toplevel / 'test' / 'one.git'), str(dest))
+    assert git('rev-parse', 'HEAD', cwd=dest) == git('rev-parse', 'HEAD', cwd=tree.toplevel / 'test' / 'one.git')
+    # Downloaded, not fetched: the bundles are what filled the object database.
+    assert git('for-each-ref', '--format=%(refname)', 'refs/bundles', cwd=dest).strip()
