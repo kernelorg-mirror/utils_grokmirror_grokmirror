@@ -467,7 +467,14 @@ def generate_bundles(
     maxrefage: int = 0,
     incremental: IncrementalOpts = NO_INCREMENTAL,
 ) -> int:
-    # uses advisory lock, so its safe even if we die unexpectedly
+    # Nothing here takes the repository lock, on purpose: the repositories are
+    # only ever read, and a bundle that loses a race with a concurrent repack
+    # fails and is simply made again on the next run. The bundle directory is
+    # the part that is not safe. read_state() and write_state() bracket
+    # everything one repository does, so two grok-bundle runs sharing an
+    # output directory lose each other's bookkeeping and leave bundles on disk
+    # with no record to prune them by. Run one at a time.
+
     # load_config_file() guarantees both of these are set
     manifest = grokmirror.read_manifest(config['core']['manifest'])
     toplevel = Path(config['core']['toplevel']).resolve()

@@ -129,6 +129,15 @@ new full bundle and lets the rest age out.
 each incremental bundle has to be built against the exact branch tips the
 previous one ended at.
 
+Only run one grok-bundle at a time against a given output directory. Each
+repository's state is read at the start of its turn and written back at the
+end, with no locking in between, so two runs sharing ``-o`` overwrite each
+other's bookkeeping and leave bundles on disk that nothing will ever list or
+delete. Guard the invocation with flock(1) if a run can outlast the interval
+you schedule it at. Running alongside grok-pull(1) or grok-fsck(1) is fine,
+though: the repositories themselves are only read, and a bundle that loses a
+race with a repack fails and is made again on the next run.
+
 EXAMPLES
 --------
 
