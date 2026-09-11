@@ -1415,6 +1415,27 @@ class GrokConfigParser(ConfigParser):
     # Carries the config file's mtime, so we can notice when it changes
     last_modified: int = 0
 
+    def get_bool(self, section: str, option: str, fallback: bool) -> bool:
+        """Read a yes/no option, naming the culprit when it is neither.
+
+        ConfigParser.getboolean() accepts yes/no, true/false, on/off and 1/0,
+        but some of these options used to be compared against the literal
+        string 'yes' instead, so every other spelling of true quietly meant
+        false -- and meant it in only some of the places the option was read.
+        Going through here keeps the accepted spellings identical everywhere,
+        and turns a typo into a message naming the section, the option and the
+        value, instead of a ValueError from deep inside an unattended run.
+        """
+        value = self[section].get(option)
+        if value is None:
+            return fallback
+        try:
+            return self.BOOLEAN_STATES[value.strip().lower()]
+        except KeyError:
+            raise GrokConfigError(
+                f'Option "{option}" in section [{section}] must be a boolean (e.g. yes or no), not: {value}'
+            ) from None
+
 
 def load_config_file(cfgfile: StrPath) -> GrokConfigParser:
     if not Path(cfgfile).exists():

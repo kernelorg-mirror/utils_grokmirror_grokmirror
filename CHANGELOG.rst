@@ -35,6 +35,14 @@ v3.0 (TBD)
   ``[core]logfile``, which nothing writes and the sample config has
   never documented, so running grok-manifest from a config file logged
   nowhere at all
+- ``[fsck]commitgraph`` and ``[fsck]prune`` now accept every boolean
+  spelling ConfigParser does (yes/no, true/false, on/off, 1/0). Both
+  used to be compared against the literal string "yes" in some places
+  and read as booleans in others, so "commitgraph = true" meant enabled
+  in one place and disabled in two more: no graph was written, and the
+  code that checks the graph then treated its absence as correct. A
+  value that is neither true nor false is now reported by name instead
+  of being silently taken as false
 - The reclone decision is now logged once per repository instead of once
   per matching error line
 - grok-fsck no longer requests auto-reclones for repositories that have

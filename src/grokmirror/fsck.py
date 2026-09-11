@@ -393,7 +393,7 @@ def run_git_prune(ses: grokmirror.GrokSession, fullpath: str, config: grokmirror
 
 
 def is_safe_to_prune(ses: grokmirror.GrokSession, fullpath: str, config: grokmirror.GrokConfigParser) -> bool:
-    if config['fsck'].get('prune', 'yes') != 'yes':
+    if not config.get_bool('fsck', 'prune', True):
         logger.debug('Pruning disabled in config file')
         return False
     toplevel = os.path.realpath(config['core']['toplevel'])
@@ -626,7 +626,7 @@ def run_git_repack(
             set_precious_objects(fullpath, enabled=True)
         return False
 
-    if config['fsck'].get('commitgraph', 'yes') == 'yes':
+    if config.get_bool('fsck', 'commitgraph', True):
         grokmirror.set_git_config(fullpath, 'core.commitgraph', 'true')
         run_git_commit_graph(fullpath, commitgraph_flags)
 
@@ -722,7 +722,7 @@ def repair_commit_graph(fullpath: str, config: grokmirror.GrokConfigParser, erro
         Path(fullpath, 'objects', 'info', 'commit-graph').unlink()
     shutil.rmtree(Path(fullpath, 'objects', 'info', 'commit-graphs'), ignore_errors=True)
 
-    if config['fsck'].get('commitgraph', 'yes') != 'yes':
+    if not config.get_bool('fsck', 'commitgraph', True):
         # Graphs are turned off, so a missing one is the correct end state.
         return rest
 
@@ -1030,7 +1030,7 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
         # Use randomization for the next check, again
         checkdelay = random.randint(1, frequency) if options.force else frequency
 
-        commitgraph = config['fsck'].getboolean('commitgraph', True)
+        commitgraph = config.get_bool('fsck', 'commitgraph', True)
 
         # Is our git version new enough to support it?
         if commitgraph and not grokmirror.git_newer_than('2.18.0'):
