@@ -24,10 +24,13 @@ one ref.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import shutil
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -36,6 +39,12 @@ import grokmirror
 logger = logging.getLogger(__name__)
 
 SECONDS_IN_DAY = 86400
+# Long enough to stay unambiguous in a repository the size of linux.git, short
+# enough to stay readable in a filename. This is what git itself abbreviates
+# to by default in a tree that big.
+TIP_ABBREV = 7
+# The current tarball plus the previous one. See prune_tarballs().
+KEEP_TARBALLS = 2
 
 
 class Branch(NamedTuple):
@@ -345,3 +354,175 @@ def generate_tarball(
         return True
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+class Artifact(NamedTuple):
+    """Everything one (repository, branch) pair publishes, by name.
+
+    Names are built once, here, so that the generator, the sidecar writer, the
+    symlink mover and the pruner cannot drift apart in how they spell things.
+    """
+
+    directory: Path
+    """The directory the files live in, mirroring the manifest key."""
+    stem: str
+    """Shared prefix of every file for this pair, e.g. "linux.linux-6.18.y.shallow"."""
+    dated: str
+    """The immutable tarball name, carrying the date and the tip."""
+    latest: str
+    """The fixed name, a symlink onto whichever dated tarball is current."""
+    dirname: str
+    """The single top-level directory inside the tarball."""
+
+
+def plan_artifact(outdir: Path, repo: str, branch: Branch, now: int) -> Artifact:
+    """Work out what this (repository, branch) pair publishes as.
+
+    The tarball sits beside the repository's own name rather than in a
+    directory of its own -- "stable/linux.linux-6.18.y.shallow.<date>.<tip>.tar"
+    -- because a stable tree publishes a dozen of these and one flat directory
+    of siblings reads better than a dozen directories holding one file each.
+
+    The date is UTC and the tip is abbreviated. Putting the date first means a
+    directory listing sorts by age; putting the tip in at all means the
+    filename *names the commit inside the file*, which is a tautology worth
+    having at 3am and is what lets the whole tool work without a state file.
+    """
+    # The manifest key is absolute, and Path() would throw away outdir if that
+    # leading slash were joined on.
+    relative = repo.lstrip('/').removesuffix('.git')
+    parent, _sep, name = relative.rpartition('/')
+    stem = f'{name}.{branch.slug}.shallow'
+    # time.gmtime, not localtime: the generating host's timezone is nobody
+    # else's business, and a DST shift must not rename an artifact.
+    datestamp = time.strftime('%Y%m%d', time.gmtime(now))
+    return Artifact(
+        directory=outdir / parent if parent else outdir,
+        stem=stem,
+        dated=f'{stem}.{datestamp}.{branch.tip[:TIP_ABBREV]}.tar',
+        latest=f'{stem}.latest.tar',
+        dirname=name,
+    )
+
+
+def existing_tarball(artifact: Artifact, branch: Branch) -> Path | None:
+    """Find an already-published tarball holding this exact tip, if any.
+
+    This is the whole skip check, and the reason there is no state file: a
+    depth-1 single-branch tarball is entirely determined by its tip, so a file
+    already named after that tip is already the file we were about to build.
+    An unchanged branch therefore keeps its original date, which is the honest
+    answer -- the date says how old the content is, not when cron last ran.
+
+    Globbing the stem is safe: git-check-ref-format rejects "*", "?", "[" and
+    "\\" in a refname, so nothing in the stem can be a glob metacharacter.
+    """
+    for candidate in artifact.directory.glob(f'{artifact.stem}.*.{branch.tip[:TIP_ABBREV]}.tar'):
+        if not candidate.is_symlink():
+            return candidate
+    return None
+
+
+def file_sha256(path: Path) -> str:
+    """Checksum without pulling a quarter of a gigabyte into memory."""
+    digest = hashlib.sha256()
+    with path.open('rb') as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_sidecar(artifact: Artifact, repo: str, branch: Branch, now: int, depth: int) -> None:
+    """Describe the dated tarball in a few hundred bytes of JSON.
+
+    This is what a CI node should actually fetch first. Reading it gives the
+    node an immutable filename to ask for from then on, which removes the
+    "the symlink moved while I was downloading" race outright, keeps ranged
+    and resumed downloads valid, and lets a node skip the download entirely
+    when it recognises the tip.
+    """
+    tarpath = artifact.directory / artifact.dated
+    sidecar = {
+        'tarball': artifact.dated,
+        'repo': repo,
+        'branch': branch.name,
+        'tip': branch.tip,
+        'created': now,
+        'depth': depth,
+        'size': tarpath.stat().st_size,
+        'sha256': file_sha256(tarpath),
+    }
+    target = tarpath.with_name(f'{artifact.dated}.json')
+    tmppath = target.with_name(f'.{target.name}.tmp')
+    tmppath.write_text(json.dumps(sidecar, indent=2, sort_keys=True) + '\n')
+    tmppath.replace(target)
+
+
+def point_at(link: Path, target: str) -> None:
+    """Move one symlink onto a new target without it ever being absent."""
+    if link.is_symlink() and str(link.readlink()) == target:
+        return
+    tmplink = link.with_name(f'.{link.name}.tmp')
+    tmplink.unlink(missing_ok=True)
+    tmplink.symlink_to(target)
+    tmplink.replace(link)
+
+
+def update_latest_links(artifact: Artifact) -> None:
+    """Repoint "latest" at the dated tarball and its sidecar.
+
+    Relative targets, so the tree survives being rsynced to a frontend that
+    mounts it somewhere else entirely.
+    """
+    point_at(artifact.directory / artifact.latest, artifact.dated)
+    point_at(artifact.directory / f'{artifact.latest}.json', f'{artifact.dated}.json')
+
+
+def prune_tarballs(artifact: Artifact, keep: int = KEEP_TARBALLS) -> None:
+    """Keep the current tarball and the one before it, and no more.
+
+    Deleting the old tarball in the same run that publishes the new one leaves
+    a window a CI node can fall into: it reads "latest" from a frontend that
+    has synced, then asks for that dated file from one that has not -- or the
+    deletion reaches a frontend before the addition does. Either way a 404
+    lands in the middle of somebody's build. One cycle of overlap closes it,
+    and a second cycle would just be unbounded retention with extra steps.
+
+    Age comes from the mtime rather than the name, because two tarballs cut on
+    the same day sort by tip, and a tip is not a clock.
+    """
+    published = [p for p in artifact.directory.glob(f'{artifact.stem}.*.tar') if not p.is_symlink()]
+    for stale in sorted(published, key=lambda p: p.stat().st_mtime, reverse=True)[keep:]:
+        stale.unlink(missing_ok=True)
+        stale.with_name(f'{stale.name}.json').unlink(missing_ok=True)
+        logger.info('  pruned: %s', stale.name)
+
+
+def publish_branch(
+    fullpath: Path,
+    outdir: Path,
+    repo: str,
+    branch: Branch,
+    cloneurl: str,
+    now: int,
+    depth: int = 1,
+) -> bool:
+    """Publish one branch, and tidy up after the ones published before it."""
+    artifact = plan_artifact(outdir, repo, branch, now)
+    artifact.directory.mkdir(parents=True, exist_ok=True)
+
+    already = existing_tarball(artifact, branch)
+    if already is not None:
+        # Still worth finishing the run: the links and the pruning are what
+        # keep a directory that stopped changing from drifting out of shape.
+        logger.info('  current: %s', already.name)
+        artifact = artifact._replace(dated=already.name)
+    else:
+        tarpath = artifact.directory / artifact.dated
+        if not generate_tarball(fullpath, branch, cloneurl, tarpath, artifact.dirname, now, depth=depth):
+            return False
+        write_sidecar(artifact, repo, branch, now, depth)
+
+    update_latest_links(artifact)
+    prune_tarballs(artifact)
+    return True
