@@ -25,6 +25,10 @@ one ref.
 from __future__ import annotations
 
 import logging
+import shutil
+import tarfile
+import tempfile
+from pathlib import Path
 from typing import NamedTuple
 
 import grokmirror
@@ -163,3 +167,181 @@ def select_branches(
         dated = dated[:maxbranches]
 
     return sorted(check_collisions([branch for _stamp, branch in dated]), key=lambda b: b.name)
+
+
+def clone_shallow(fullpath: Path, branch: Branch, destdir: Path, depth: int) -> bool:
+    """Make the shallow single-branch clone that goes into the tarball.
+
+    The URL is a file:// one, and that is not decoration. Given a plain path,
+    "git clone --depth" warns and *silently ignores the depth*, taking the
+    local-hardlink route instead -- so the mistake produces a working clone
+    of the entire history, which is the worst kind of bug to have here: every
+    functional test still passes and the mirror just quietly starts serving
+    gigabytes. file:// forces a real transfer, which is also what makes this
+    safe against grokmirror's objstore layout: upload-pack reads through
+    objects/info/alternates, so the clone comes out self-contained with no
+    alternates file of its own.
+
+    --no-tags has to be on the clone itself, not only in the config afterwards.
+    Tag auto-following happens during this fetch, so a tag sitting on the tip
+    of the branch comes across with it and ships inside the tarball, and by the
+    time prepare_clone() sets remote.origin.tagOpt the tag is already there.
+    """
+    ecode, _out, err = grokmirror.run_git_command(
+        None,
+        [
+            'clone',
+            '--quiet',
+            f'--depth={depth}',
+            '--single-branch',
+            '--no-tags',
+            f'--branch={branch.name}',
+            # CI checks out the sha it wants, so a working tree here would
+            # double the download for something thrown away on arrival.
+            '--no-checkout',
+            fullpath.resolve().as_uri(),
+            str(destdir),
+        ],
+    )
+    if ecode > 0:
+        logger.info('  failed: %s %s (%s)', fullpath, branch.name, err.strip())
+        return False
+    return True
+
+
+def verify_shallow(gitdir: Path, branch: Branch) -> bool:
+    """Refuse to publish a clone that is not actually shallow.
+
+    Belt to clone_shallow()'s braces, and worth the few lines: the failure it
+    guards against does not announce itself. A full clone works perfectly,
+    serves the right commit, and passes every test that asks whether the
+    tarball is usable -- it is just enormous. The only way to notice is to
+    ask directly.
+    """
+    if not (gitdir / 'shallow').exists():
+        logger.critical('  refusing %s: the clone is not shallow, so --depth did not take', branch.name)
+        return False
+    ecode, out, _err = grokmirror.run_git_command(gitdir, ['symbolic-ref', '--quiet', 'HEAD'])
+    if ecode > 0 or out.strip() != f'refs/heads/{branch.name}':
+        # Without this a bare "git checkout" in CI lands on whatever the
+        # client's init.defaultBranch happens to be, which is a confusing
+        # failure a long way from here.
+        logger.critical('  refusing %s: HEAD is not pointing at the branch', branch.name)
+        return False
+    return True
+
+
+def prepare_clone(gitdir: Path, branch: Branch, cloneurl: str, now: int) -> bool:
+    """Turn a fresh local clone into something ready to hand to a CI system."""
+    settings = [
+        # The file:// URL it was cloned from is a path on the generating
+        # host. What goes out has to be the public URL CI will fetch from.
+        ('remote.origin.url', cloneurl),
+        # Set explicitly rather than left to "git clone --no-tags", which
+        # happens to write the same key: this is the setting CI inherits, and
+        # it is what keeps the *node's* first "git remote update" from
+        # dragging in thousands of tags -- one of them pointing outside the
+        # shallow boundary pulls its history across, which is exactly the
+        # server load this tool exists to remove.
+        ('remote.origin.tagOpt', '--no-tags'),
+        # Stamped where a human can find it with one command, because a
+        # tarball kept for months is the failure mode we cannot prevent, only
+        # make diagnosable.
+        ('grokmirror.shallowCreated', str(now)),
+        ('grokmirror.shallowBranch', branch.name),
+    ]
+    for option, value in settings:
+        ecode, _out, err = grokmirror.run_git_command(gitdir, ['config', option, value])
+        if ecode > 0:
+            logger.info('  failed: could not set %s (%s)', option, err.strip())
+            return False
+
+    # Every clone gets a copy of git's sample hooks. They are inert, but they
+    # are also a couple of dozen files of noise in an artifact whose whole
+    # point is to be the smallest useful thing.
+    for sample in (gitdir / 'hooks').glob('*.sample'):
+        sample.unlink()
+    return True
+
+
+def write_tarball(clonedir: Path, tarpath: Path, dirname: str) -> None:
+    """Tar the prepared clone, reproducibly enough to be worth diffing.
+
+    Entries are added in sorted order with ownership zeroed, so two runs over
+    the same tip differ only in the mtimes git wrote. Uncompressed on
+    purpose: with no working tree the payload is a packfile that is already
+    deflated, so compressing it again is CPU spent on both ends for nothing.
+    """
+
+    def normalize(entry: tarfile.TarInfo) -> tarfile.TarInfo:
+        entry.uid = entry.gid = 0
+        entry.uname = entry.gname = 'root'
+        return entry
+
+    def add(path: Path, arcname: str) -> None:
+        info = tar.gettarinfo(str(path), arcname)
+        if path.is_dir():
+            tar.addfile(normalize(info))
+            for child in sorted(path.iterdir()):
+                add(child, f'{arcname}/{child.name}')
+        elif path.is_file():
+            with path.open('rb') as fh:
+                tar.addfile(normalize(info), fh)
+        else:
+            # Symlinks and anything else git left behind go in as-is.
+            tar.addfile(normalize(info))
+
+    tmppath = tarpath.with_name(f'.{tarpath.name}.tmp')
+    try:
+        with tarfile.open(tmppath, 'w', format=tarfile.PAX_FORMAT) as tar:
+            add(clonedir, dirname)
+    except BaseException:
+        # A half-written tarball under a dot-name is invisible litter that
+        # nothing ever comes back for, and these are hundreds of megabytes.
+        tmppath.unlink(missing_ok=True)
+        raise
+    # Same directory, so the rename is atomic and a reader either sees the
+    # whole tarball or no tarball. Publishing under the final name directly
+    # would hand CI a truncated tarball for as long as the write takes.
+    tmppath.replace(tarpath)
+
+
+def generate_tarball(
+    fullpath: Path,
+    branch: Branch,
+    cloneurl: str,
+    tarpath: Path,
+    dirname: str,
+    now: int,
+    depth: int = 1,
+) -> bool:
+    """Build one branch's tarball, leaving nothing behind if anything fails.
+
+    The scratch clone is made inside the output directory rather than in
+    /tmp, so the finished tarball can be renamed into place instead of copied
+    across a filesystem boundary -- an atomic publish is the whole reason the
+    fixed "latest" name is safe.
+    """
+    tarpath.parent.mkdir(parents=True, exist_ok=True)
+    workdir = Path(tempfile.mkdtemp(prefix='.shallowtar-', dir=tarpath.parent))
+    try:
+        clonedir = workdir / dirname
+        if not clone_shallow(fullpath, branch, clonedir, depth):
+            return False
+        gitdir = clonedir / '.git'
+        if not verify_shallow(gitdir, branch):
+            return False
+        if not prepare_clone(gitdir, branch, cloneurl, now):
+            return False
+        logger.info(' generate: %s', tarpath)
+        try:
+            write_tarball(clonedir, tarpath, dirname)
+        except OSError as ex:
+            # Usually a full disk, and these artifacts are large enough that
+            # it is the failure to expect. One branch running out of room
+            # should not take the rest of the run down with it.
+            logger.critical('  refusing %s: could not write the tarball (%s)', branch.name, ex)
+            return False
+        return True
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
