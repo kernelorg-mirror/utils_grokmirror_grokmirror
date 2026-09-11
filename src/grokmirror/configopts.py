@@ -72,12 +72,14 @@ class Option:
     default: str | None = None
     # For kind='enum', every accepted value.
     choices: tuple[str, ...] = ()
-    # For kind='path': the path itself must be an existing writable
-    # directory, or the directory it lives in must be writable. A path
-    # option sets at most one of these; neither means we only care that the
-    # value resolves.
+    # For kind='path': the path itself must be a writable directory, or the
+    # directory it lives in must be writable. A path option sets at most one
+    # of these; neither means we only care that the value resolves.
     writable: bool = False
     parent_writable: bool = False
+    # For kind='path': the path has to be there already. Most are created
+    # on demand, so their absence is not a problem by itself.
+    must_exist: bool = False
 
     def __post_init__(self) -> None:
         # Cheap invariants, checked at import time rather than left for a
@@ -90,6 +92,8 @@ class Option:
             raise ValueError(f'{self.name}: writability only means something for kind="path"')
         if self.writable and self.parent_writable:
             raise ValueError(f'{self.name}: set writable or parent_writable, not both')
+        if self.must_exist and self.kind != 'path':
+            raise ValueError(f'{self.name}: only a path can be required to exist')
 
 
 def _opts(*options: Option) -> dict[str, Option]:
@@ -101,8 +105,9 @@ def _opts(*options: Option) -> dict[str, Option]:
 KNOWN: dict[str, dict[str, Option]] = {
     'core': _opts(
         # load_config_file() insists on this one and refuses to go on
-        # without it, so it is the only option with no usable default.
-        Option('toplevel', 'path', writable=True),
+        # without it, so it is the only option with no usable default, and
+        # the only directory grokmirror will not create for itself.
+        Option('toplevel', 'path', writable=True, must_exist=True),
         Option('manifest', 'path', default='${toplevel}/manifest.js.gz', parent_writable=True),
         Option('objstore', 'path', default='${toplevel}/objstore', writable=True),
         Option('log', 'path', parent_writable=True),
