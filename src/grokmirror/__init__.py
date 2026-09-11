@@ -1440,7 +1440,7 @@ class GrokConfigParser(ConfigParser):
             return self.BOOLEAN_STATES[value.strip().lower()]
         except KeyError:
             raise GrokConfigError(
-                f'Option "{option}" in section [{section}] must be a boolean (e.g. yes or no), not: {value}'
+                f'Option "{option}" in section [{section}] must be a boolean (yes/no, true/false, on/off or 1/0), not: {value}'
             ) from None
 
     def validate_bools(self) -> None:

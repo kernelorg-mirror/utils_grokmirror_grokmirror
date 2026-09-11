@@ -10,6 +10,7 @@ every config read in the tree and comparing it against grokmirror.conf.
 
 from __future__ import annotations
 
+from configparser import ConfigParser
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,22 @@ def test_fsck_rejects_an_unparseable_boolean(tree: GrokTree) -> None:
     assert 'sometimes' in out
 
 
+def test_the_boolean_complaint_lists_every_spelling_that_would_have_worked(tree: GrokTree) -> None:
+    # get_bool() takes all eight of ConfigParser's spellings, but its message
+    # used to say "e.g. yes or no", which reads as if the other six were the
+    # problem. Somebody with "enabled = True" in their config needs to be told
+    # that True is fine and enabled is not.
+    tree.add_repo('test/one.git')
+    tree.write_config({'fsck': {'prune': 'sometimes'}})
+
+    res = tree.run_fsck('-f', expect=1)
+
+    out = res.stdout + res.stderr
+
+    for spelling in ('yes/no', 'true/false', 'on/off', '1/0'):
+        assert spelling in out
+
+
 # Every boolean option, taken from the registry rather than listed again
 # here, so that adding one covers it automatically. A typo in any of them
 # used to surface as a ValueError -- from inside a worker thread, in several
@@ -119,6 +136,39 @@ def test_unparseable_boolean_is_reported_by_name(tree: GrokTree, section: str, o
     assert option in out
     assert f'[{section}]' in out
     assert 'perhaps' in out
+
+
+def blank_out(tree: GrokTree, section: str, option: str) -> None:
+    """Set an option to nothing, in a config file that is otherwise fine.
+
+    write_config() reads '' as "drop this option", which is the opposite of
+    what these tests need: the line has to be there with nothing after the
+    equals sign, since that is what a half-finished config looks like.
+    """
+    parser = ConfigParser(interpolation=None)
+    parser.read(tree.cfgfile)
+    if not parser.has_section(section):
+        parser.add_section(section)
+    parser.set(section, option, '')
+    with tree.cfgfile.open('w', encoding='utf-8') as fh:
+        parser.write(fh)
+
+
+@pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)
+def test_a_boolean_set_to_nothing_is_refused_rather_than_guessed_at(tree: GrokTree, section: str, option: str) -> None:
+    # "option =" is the empty string, not an absent option, and git would
+    # read it as false. grokmirror does not guess: --config-check reports it
+    # as an error, so the run has to agree and refuse to start, or the check
+    # would be passing configs that do not work.
+    tree.add_repo('test/one.git')
+    tree.write_config()
+    blank_out(tree, section, option)
+
+    res = tree.run_fsck('-f', expect=1)
+
+    out = res.stdout + res.stderr
+    assert option in out
+    assert f'[{section}]' in out
 
 
 @pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)

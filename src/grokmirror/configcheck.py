@@ -66,6 +66,14 @@ GIT_SCHEMES = ('ssh', 'git', 'http', 'https', 'ftp', 'ftps', 'file', 'git+ssh', 
 # one, not an scp-style address, which is why the pattern anchors.
 SCP_LIKE = re.compile(r'^[^/:]+(:\d+)?:')
 
+# Kinds whose readers cannot make anything of a blank value: getint() raises
+# ValueError on it and get_bool() raises GrokConfigError, both at the moment
+# the option is first read. In an unattended run that is a long way from here,
+# so a blank one of these has to be reported rather than passed over as "the
+# same as not set" -- otherwise a config this check calls clean is one the
+# command refuses to start on.
+BLANK_IS_FATAL = ('int', 'bool')
+
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -402,9 +410,16 @@ def _check_strlist(report: _Report, section: str, option: str, value: str) -> No
 def _check_value(report: _Report, section: str, option: str, value: str, known: Option) -> None:
     """Run whichever check the registry says this option's kind deserves."""
     if not value.strip() and known.kind != 'email':
-        # An option set to nothing is the same as one that is not set,
-        # except that somebody meant to set it -- but every caller here
-        # falls back cleanly, so there is nothing to report.
+        if known.kind in BLANK_IS_FATAL:
+            report.error(
+                'is set to nothing, which is not a value it can have',
+                section,
+                option,
+                hint='Give it a value, or take the line out to use the default',
+            )
+        # Every other kind falls back cleanly, so an option set to nothing is
+        # the same as one that is not set, except that somebody meant to set
+        # it -- and that is not enough to report.
         return
     if known.kind == 'int':
         _check_int(report, section, option, value)

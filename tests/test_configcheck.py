@@ -12,15 +12,18 @@ which line to go and look at is barely better than no error.
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import stat
 import threading
 from collections.abc import Iterator
+from configparser import ConfigParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
+from grokmirror import configopts
 from grokmirror.configcheck import Diagnostic, check_config, command_argv
 
 ALL_SECTIONS = {'core', 'manifest', 'remote', 'pull', 'fsck'}
@@ -330,6 +333,56 @@ def test_a_preload_bundle_url_on_a_local_file_is_an_error(tmp_path: Path) -> Non
 def test_a_preload_bundle_url_over_http_is_accepted(tmp_path: Path) -> None:
     text = with_preload(tmp_path, 'https://cdn.example.com/preload/')
     assert not about(check(tmp_path, text), 'remote', 'preload_bundle_url')
+
+
+# -- options set to nothing at all -------------------------------------------
+
+
+def with_blank(tmp_path: Path, section: str, option: str) -> str:
+    """good_config() with one option present but set to nothing.
+
+    Written through ConfigParser rather than by splicing text, because the
+    option may already be in good_config() with a good value, and the same
+    option twice in one section is a different problem from the one under
+    test. Interpolation is off so that ${toplevel} is written back out as
+    it was read.
+    """
+    parser = ConfigParser(interpolation=None)
+    parser.read_string(good_config(tmp_path))
+    if not parser.has_section(section):
+        parser.add_section(section)
+    parser.set(section, option, '')
+    out = io.StringIO()
+    parser.write(out)
+    return out.getvalue()
+
+
+# Taken from the registry rather than listed here, so a new int or boolean
+# option is covered the day it is added.
+BLANK_IS_FATAL_OPTIONS = [*configopts.options_of_kind('bool'), *configopts.options_of_kind('int')]
+
+
+@pytest.mark.parametrize(('section', 'option'), BLANK_IS_FATAL_OPTIONS)
+def test_an_option_set_to_nothing_is_an_error_when_nothing_can_read_it(
+    tmp_path: Path, section: str, option: str
+) -> None:
+    # "option =" reads as the empty string, not as absent: get_bool() raises
+    # GrokConfigError on it and getint() raises ValueError, and both do so
+    # when the option is first read, which in an unattended run is a long
+    # way from the config file. Reporting the config clean and then having
+    # the command refuse to start on it would make the whole check worthless,
+    # so this is the invariant the feature rests on.
+    diagnostics = about(check(tmp_path, with_blank(tmp_path, section, option)), section, option)
+    assert [d.severity for d in diagnostics] == ['error']
+    assert 'set to nothing' in diagnostics[0].message
+
+
+def test_an_option_set_to_nothing_is_silent_when_its_reader_falls_back(tmp_path: Path) -> None:
+    # The other half of the same rule: a blank string really is the same as
+    # an absent one for everything that is read with a plain .get(), and
+    # complaining about those would be noise.
+    text = good_config(tmp_path).replace('projectslist = ${core:toplevel}/projects.list', 'projectslist =')
+    assert not about(check(tmp_path, text), 'pull', 'projectslist')
 
 
 # -- [remote] site, which is git's to interpret and not ours -----------------
