@@ -30,6 +30,11 @@ v3.0 (TBD)
   of lines (and, before the fix above, hundreds of reclone requests).
   The graph is now thrown away and rewritten, and only the errors that
   are not about the commit-graph are reported
+- grok-manifest now reads the log file location from ``[core]log``, the
+  same setting every other command uses. It used to look for
+  ``[core]logfile``, which nothing writes and the sample config has
+  never documented, so running grok-manifest from a config file logged
+  nowhere at all
 - The reclone decision is now logged once per repository instead of once
   per matching error line
 - grok-fsck no longer requests auto-reclones for repositories that have

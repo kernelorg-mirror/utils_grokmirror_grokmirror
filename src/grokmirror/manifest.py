@@ -236,7 +236,7 @@ def parse_args() -> argparse.Namespace:
             # load_config_file() guarantees [core]toplevel is set
             opts.toplevel = os.path.realpath(config['core']['toplevel'])
         if not opts.logfile:
-            opts.logfile = config['core'].get('logfile')
+            opts.logfile = config['core'].get('log')
 
         opts.objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
 
