@@ -42,6 +42,7 @@ from typing import cast
 import requests
 
 import grokmirror
+from grokmirror import configcheck
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
@@ -795,10 +796,13 @@ def fetch_remote_manifest(
     r_mani_cmd = config['remote'].get('manifest_command')
 
     if r_mani_cmd:
-        cmdargs = shlex.split(r_mani_cmd)
-        if not os.access(cmdargs[0], os.X_OK):
-            logger.critical('Remote manifest command is not executable: %s', cmdargs[0])
-            raise grokmirror.GrokManifestError(f'Remote manifest command is not executable: {cmdargs[0]}')
+        # Same splitting and the same executability rule --config-check
+        # applies, so a config it passed cannot fail here.
+        try:
+            cmdargs = configcheck.command_argv(r_mani_cmd)
+        except ValueError as ex:
+            logger.critical('Remote manifest command %s', ex)
+            raise grokmirror.GrokManifestError(f'Remote manifest command {ex}') from ex
         logger.info(' manifest: executing %s', r_mani_cmd)
         if nomtime:
             cmdargs += ['--force']
@@ -1246,17 +1250,15 @@ def validate_pull_config(config: grokmirror.GrokConfigParser) -> bool:
 
     Every worker started below assumes these are set, so check plainly here
     instead of crashing much later inside a worker with a TypeError.
+
+    The rule itself lives in configcheck, which is also what --config-check
+    reports, so the two cannot drift apart and tell an admin different
+    things about the same file.
     """
-    if 'remote' not in config:
-        logger.critical('Section [remote] must exist in the config file')
-        return False
-    if not config['remote'].get('site'):
-        logger.critical('Section [remote] must define "site"')
-        return False
-    if not (config['remote'].get('manifest') or config['remote'].get('manifest_command')):
-        logger.critical('Section [remote] must define "manifest" or "manifest_command"')
-        return False
-    return True
+    diagnostics = configcheck.check_remote_completeness(config)
+    for diag in diagnostics:
+        logger.critical('Section [%s] %s', diag.section, diag.message)
+    return not diagnostics
 
 
 def start_socket_listener(config: grokmirror.GrokConfigParser, q_mani: queue.Queue[ManiItem]) -> None:

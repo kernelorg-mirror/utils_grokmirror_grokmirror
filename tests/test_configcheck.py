@@ -11,27 +11,35 @@ which line to go and look at is barely better than no error.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import stat
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 
-from grokmirror.configcheck import Diagnostic, check_config
+from grokmirror.configcheck import Diagnostic, check_config, command_argv
 
 ALL_SECTIONS = {'core', 'manifest', 'remote', 'pull', 'fsck'}
 
 
-def check(tmp_path: Path, text: str, sections: set[str] | None = None) -> list[Diagnostic]:
+def check(tmp_path: Path, text: str, sections: set[str] | None = None, online: bool = False) -> list[Diagnostic]:
     """Write a config file and check it.
 
     The config is written as text rather than through ConfigParser, since
     several of the problems worth catching are ones ConfigParser would
     refuse to write in the first place.
+
+    Offline by default: the test suite must never depend on a name server
+    or on example.com answering. The reachability tests below opt back in
+    with a file:// URL, which goes nowhere near the network.
     """
     cfgfile = tmp_path / 'grokmirror.conf'
     cfgfile.write_text(text, encoding='utf-8')
-    return check_config(cfgfile, sections if sections is not None else ALL_SECTIONS)
+    return check_config(cfgfile, sections if sections is not None else ALL_SECTIONS, online=online)
 
 
 def messages(diagnostics: list[Diagnostic], severity: str | None = None) -> list[str]:
@@ -40,6 +48,11 @@ def messages(diagnostics: list[Diagnostic], severity: str | None = None) -> list
 
 def about(diagnostics: list[Diagnostic], section: str, option: str | None = None) -> list[Diagnostic]:
     return [d for d in diagnostics if d.section == section and (option is None or d.option == option)]
+
+
+def section_level(diagnostics: list[Diagnostic], section: str) -> list[Diagnostic]:
+    """Only the diagnostics about a section as a whole, not about an option."""
+    return [d for d in diagnostics if d.section == section and d.option is None]
 
 
 def good_config(tmp_path: Path) -> str:
@@ -225,7 +238,9 @@ def test_default_section_values_are_not_mistaken_for_typos(tmp_path: Path) -> No
     # its keys show up in every section. Warning about each one in each
     # section would make the feature unusable.
     text = f'[DEFAULT]\nbase = {tmp_path}\n\n[core]\ntoplevel = ${{base}}\n'
-    assert check(tmp_path, text) == []
+    # [core] alone, as grok-manifest reads it: a config with no [remote] is
+    # only incomplete for the commands that pull.
+    assert check(tmp_path, text, sections={'core'}) == []
 
 
 # -- values of the wrong shape -----------------------------------------------
@@ -445,7 +460,7 @@ manifest = ${{toplevel}}/manifest.js.gz
 log = ${{toplevel}}/grokmirror.log
 toplevel = {tmp_path}/nowhere
 """
-    assert [(d.section, d.option) for d in check(tmp_path, text)] == [('core', 'toplevel')]
+    assert [(d.section, d.option) for d in check(tmp_path, text, sections={'core'})] == [('core', 'toplevel')]
 
 
 def test_a_path_problem_of_its_own_is_still_reported(tmp_path: Path) -> None:
@@ -454,3 +469,223 @@ def test_a_path_problem_of_its_own_is_still_reported(tmp_path: Path) -> None:
     text = good_config(tmp_path).replace('log = ${toplevel}/grokmirror.log', f'log = {tmp_path}/nodir/grokmirror.log')
     reported = {(d.section, d.option) for d in check(tmp_path, text)}
     assert ('core', 'log') in reported
+
+
+# -- what grok-pull refuses to start without ---------------------------------
+
+
+def test_a_config_with_no_remote_section_is_incomplete_for_pulling(tmp_path: Path) -> None:
+    # The same rule validate_pull_config() enforces, which is why it lives
+    # in configcheck and not in pull.py.
+    text = f'[core]\ntoplevel = {tmp_path}\n'
+    assert 'must exist in the config file' in messages(check(tmp_path, text))[0]
+
+
+def test_a_remote_with_no_site_is_incomplete(tmp_path: Path) -> None:
+    text = good_config(tmp_path).replace('site = https://git.example.com\n', '')
+    assert 'must define "site"' in [d.message for d in section_level(check(tmp_path, text), 'remote')]
+
+
+def test_a_remote_with_neither_manifest_nor_manifest_command_is_incomplete(tmp_path: Path) -> None:
+    text = good_config(tmp_path).replace('manifest = ${site}/manifest.js.gz\n', '')
+    assert [d.message for d in section_level(check(tmp_path, text), 'remote')] == [
+        'must define "manifest" or "manifest_command"'
+    ]
+
+
+def test_both_remote_omissions_are_reported_in_one_pass(tmp_path: Path) -> None:
+    # validate_pull_config() stops at the first one, because it is about to
+    # give up anyway; the checker exists to list them all.
+    text = f'[core]\ntoplevel = {tmp_path}\n\n[remote]\n'
+    assert len(section_level(check(tmp_path, text), 'remote')) == 2
+
+
+def test_a_command_of_nothing_but_whitespace_does_not_crash_the_caller() -> None:
+    # Not reachable through a config file -- ConfigParser strips values --
+    # but fetch_remote_manifest() tests the string for truth and then goes
+    # straight for argv[0], so anything that hands it one had better get a
+    # ValueError rather than an IndexError.
+    with pytest.raises(ValueError, match='contains no command'):
+        command_argv('   ')
+
+
+def test_a_command_with_an_unbalanced_quote_is_reported_as_such() -> None:
+    with pytest.raises(ValueError, match='cannot be parsed'):
+        command_argv('/bin/echo "unbalanced')
+
+
+# -- reachability, which is the only thing that leaves the machine -----------
+
+
+def test_a_missing_file_url_manifest_is_reported_when_online(tmp_path: Path) -> None:
+    text = good_config(tmp_path).replace(
+        'manifest = ${site}/manifest.js.gz', f'manifest = file://{tmp_path}/nosuch.js.gz'
+    )
+    diagnostics = about(check(tmp_path, text, online=True), 'remote', 'manifest')
+    assert 'does not exist' in diagnostics[0].message
+
+
+def test_a_file_url_manifest_that_is_there_is_reachable(tmp_path: Path) -> None:
+    (tmp_path / 'm.js.gz').write_bytes(b'')
+    text = good_config(tmp_path).replace('manifest = ${site}/manifest.js.gz', f'manifest = file://{tmp_path}/m.js.gz')
+    assert not about(check(tmp_path, text, online=True), 'remote', 'manifest')
+
+
+def test_nothing_is_probed_when_offline(tmp_path: Path) -> None:
+    # The same config, with the same missing file, and not a word about it.
+    text = good_config(tmp_path).replace(
+        'manifest = ${site}/manifest.js.gz', f'manifest = file://{tmp_path}/nosuch.js.gz'
+    )
+    assert not about(check(tmp_path, text, online=False), 'remote', 'manifest')
+
+
+def test_a_file_url_with_a_host_in_it_is_an_error(tmp_path: Path) -> None:
+    # fetch_remote_manifest() matches "file:///" literally, so file://host/x
+    # is handed to requests, which has no adapter for it.
+    text = good_config(tmp_path).replace('manifest = ${site}/manifest.js.gz', 'manifest = file://host/manifest.js.gz')
+    assert 'three slashes' in str(about(check(tmp_path, text), 'remote', 'manifest')[0].hint)
+
+
+# -- glob lists, tried against the repositories we actually have --------------
+
+
+def write_manifest(tmp_path: Path, *gitdirs: str) -> None:
+    entries = ',\n'.join(f'"{gitdir}": {{"fingerprint": "abc"}}' for gitdir in gitdirs)
+    (tmp_path / 'manifest.js').write_text(f'{{{entries}}}', encoding='utf-8')
+
+
+def test_a_glob_that_matches_nothing_we_mirror_is_a_warning(tmp_path: Path) -> None:
+    # compile_globs() accepts any string, so the only way to find a typo in
+    # a glob is to try it against real repository names.
+    write_manifest(tmp_path, '/pub/scm/linux/kernel/git/torvalds/linux.git')
+    text = good_config(tmp_path).replace('manifest = ${toplevel}/manifest.js.gz', 'manifest = ${toplevel}/manifest.js')
+    diagnostics = about(check(tmp_path, text + 'include = /pub/scm/linus/*\n'), 'pull', 'include')
+    assert diagnostics[0].severity == 'warning'
+    assert 'matches none of the 1 repositories' in diagnostics[0].message
+
+
+def test_a_glob_that_matches_something_is_left_alone(tmp_path: Path) -> None:
+    write_manifest(tmp_path, '/pub/scm/linux/kernel/git/torvalds/linux.git')
+    text = good_config(tmp_path).replace('manifest = ${toplevel}/manifest.js.gz', 'manifest = ${toplevel}/manifest.js')
+    assert not about(check(tmp_path, text + 'include = /pub/scm/linux/*\n'), 'pull', 'include')
+
+
+def test_globs_are_not_second_guessed_before_the_first_run(tmp_path: Path) -> None:
+    # With no local manifest every pattern matches nothing, which says
+    # nothing about the patterns.
+    assert not about(check(tmp_path, good_config(tmp_path) + 'include = /pub/scm/linus/*\n'), 'pull', 'include')
+
+
+# -- lists that are read a line at a time ------------------------------------
+
+
+def test_a_comma_separated_error_list_is_a_warning(tmp_path: Path) -> None:
+    # splitlines() makes "a, b" one entry with a comma in it, which then
+    # matches nothing and silently stops ignoring anything.
+    text = good_config(tmp_path) + '\n[fsck]\nignore_errors = dangling commit, dangling blob\n'
+    diagnostics = about(check(tmp_path, text), 'fsck', 'ignore_errors')
+    assert diagnostics[0].severity == 'warning'
+    assert 'own indented line' in str(diagnostics[0].hint)
+
+
+def test_one_entry_per_line_is_what_the_warning_asks_for(tmp_path: Path) -> None:
+    text = good_config(tmp_path) + '\n[fsck]\nignore_errors = dangling commit\n    dangling blob\n'
+    assert not about(check(tmp_path, text), 'fsck', 'ignore_errors')
+
+
+def test_a_single_entry_with_no_comma_is_not_second_guessed(tmp_path: Path) -> None:
+    text = good_config(tmp_path) + '\n[fsck]\nignore_errors = dangling commit\n'
+    assert not about(check(tmp_path, text), 'fsck', 'ignore_errors')
+
+
+# -- probing something that talks HTTP ---------------------------------------
+
+
+class _Handler(BaseHTTPRequestHandler):
+    """Answers GET but refuses HEAD, like a CGI-generated manifest."""
+
+    head_status = 405
+    get_status = 200
+
+    def do_HEAD(self) -> None:
+        self.send_response(self.head_status)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        body = b'{}'
+        self.send_response(self.get_status)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@contextlib.contextmanager
+def serving(handler: type[_Handler]) -> Iterator[str]:
+    httpd = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f'http://127.0.0.1:{httpd.server_address[1]}/manifest.js.gz'
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def remote_manifest(tmp_path: Path, url: str) -> str:
+    return good_config(tmp_path).replace('manifest = ${site}/manifest.js.gz', f'manifest = {url}')
+
+
+def test_a_server_that_refuses_head_is_asked_with_get(tmp_path: Path) -> None:
+    # A 405 says nothing about whether the manifest is there, so reporting
+    # it as unreachable would fail exactly the origins that need checking.
+    with serving(_Handler) as url:
+        assert not about(check(tmp_path, remote_manifest(tmp_path, url), online=True), 'remote', 'manifest')
+
+
+def test_a_manifest_url_that_answers_is_left_alone(tmp_path: Path) -> None:
+    class Plain(_Handler):
+        head_status = 200
+
+    with serving(Plain) as url:
+        assert not about(check(tmp_path, remote_manifest(tmp_path, url), online=True), 'remote', 'manifest')
+
+
+def test_a_manifest_url_that_is_not_there_is_an_error(tmp_path: Path) -> None:
+    class Missing(_Handler):
+        head_status = 404
+        get_status = 404
+
+    with serving(Missing) as url:
+        diagnostics = about(check(tmp_path, remote_manifest(tmp_path, url), online=True), 'remote', 'manifest')
+        assert diagnostics[0].severity == 'error'
+        assert 'HTTP 404' in diagnostics[0].message
+
+
+def test_a_manifest_url_that_only_404s_on_get_is_still_an_error(tmp_path: Path) -> None:
+    # The fallback has to look at what the GET said, not at the 405.
+    class Refuses(_Handler):
+        get_status = 404
+
+    with serving(Refuses) as url:
+        diagnostics = about(check(tmp_path, remote_manifest(tmp_path, url), online=True), 'remote', 'manifest')
+    assert 'HTTP 404' in diagnostics[0].message
+
+
+def test_a_manifest_url_nothing_is_listening_on_is_an_error(tmp_path: Path) -> None:
+    with serving(_Handler) as url:
+        pass  # The server is gone by the time we check, and the port is free.
+    diagnostics = about(check(tmp_path, remote_manifest(tmp_path, url), online=True), 'remote', 'manifest')
+    assert 'could not be reached' in diagnostics[0].message
+
+
+def test_a_malformed_url_is_not_also_probed(tmp_path: Path) -> None:
+    # Saying "file://host/m.js.gz is not spelled right" and then "the file
+    # host/m.js.gz does not exist" is one error too many, and the second one
+    # sends the reader looking for the wrong thing.
+    text = remote_manifest(tmp_path, 'file://host/manifest.js.gz')
+    assert len(about(check(tmp_path, text, online=True), 'remote', 'manifest')) == 1

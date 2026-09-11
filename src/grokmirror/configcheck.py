@@ -40,7 +40,9 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from grokmirror import StrPath, configopts
+import requests
+
+from grokmirror import GrokSession, StrPath, compile_globs, configopts, read_manifest
 from grokmirror.configopts import KNOWN, Option
 
 Severity = Literal['error', 'warning']
@@ -88,6 +90,9 @@ class _Report:
 
     def already_reported(self, path: Path) -> bool:
         return bool(self.bad_paths.intersection({path, *path.parents}))
+
+    def has_errors_about(self, section: str, option: str) -> bool:
+        return any(d.severity == 'error' and d.section == section and d.option == option for d in self.diagnostics)
 
     def error(
         self, message: str, section: str | None = None, option: str | None = None, hint: str | None = None
@@ -192,41 +197,63 @@ def _check_url(report: _Report, section: str, option: str, value: str) -> None:
         return
     if parsed.scheme in ('http', 'https') and not parsed.netloc:
         report.error(f'has no host: {value}', section, option)
+    if parsed.scheme == 'file' and not value.startswith('file:///'):
+        # fetch_remote_manifest() matches the file:/// spelling literally
+        # and strips it; anything else is handed to requests, which has no
+        # file:// adapter, so it fails much later and much less clearly.
+        report.error(
+            f'is a file URL with a host in it, which grokmirror cannot fetch: {value}',
+            section,
+            option,
+            hint='A local path is written file:///absolute/path, with three slashes',
+        )
 
 
-def split_command(value: str) -> list[str]:
-    """Split a configured command line the way grokmirror runs it.
+def command_argv(value: str) -> list[str]:
+    """Split a configured command line into argv, or say why it cannot run.
 
-    Returns an empty list for a value that is only whitespace, which is
-    worth catching: the code that runs these goes straight for the first
-    word.
+    Raises ValueError with a message that reads as the continuation of the
+    option name it came from ("[remote] manifest_command does not exist:
+    ..."), so that the config check and the code that actually runs the
+    command can each put their own subject in front of the same sentence.
+
+    PATH is deliberately not consulted, because the code that runs these
+    does not consult it either: a bare "true" works in the shell the admin
+    tested it in and fails from cron. A value that is only whitespace is a
+    ValueError here rather than an IndexError at argv[0] later.
     """
-    return shlex.split(value)
+    try:
+        args = shlex.split(value)
+    except ValueError as ex:
+        # An unbalanced quote, which shlex refuses to guess about.
+        raise ValueError(f'cannot be parsed as a command: {ex}') from ex
+    if not args:
+        raise ValueError('is set but contains no command')
+    if os.access(args[0], os.X_OK):
+        return args
+    if Path(args[0]).exists():
+        raise ValueError(f'is not executable by {_as_user()}: {args[0]}')
+    raise ValueError(f'does not exist: {args[0]}')
 
 
 def _check_command(report: _Report, section: str, option: str, value: str) -> None:
     try:
-        args = split_command(value)
+        command_argv(value)
     except ValueError as ex:
-        # An unbalanced quote, which shlex refuses to guess about.
-        report.error(f'cannot be parsed as a command: {ex}', section, option)
+        problem = str(ex)
+    else:
         return
-    if not args:
-        report.error('is set but contains no command', section, option)
-        return
-    executable = args[0]
-    if os.access(executable, os.X_OK):
-        return
-    if Path(executable).exists():
-        report.error(f'is not executable by {_as_user()}: {executable}', section, option)
-        return
+
+    # The tempting mistake is a bare name that happens to be on PATH, so
+    # look there for the hint -- and only for the hint.
     hint = None
-    if shutil.which(executable):
-        # A bare name that happens to be on PATH is the tempting mistake:
-        # it works in a shell and fails in grokmirror, which checks the
-        # value with os.access() and never consults PATH.
-        hint = f'Found "{executable}" on PATH, but grokmirror needs the full path: {shutil.which(executable)}'
-    report.error(f'does not exist: {executable}', section, option, hint)
+    try:
+        args = shlex.split(value)
+    except ValueError:
+        args = []
+    if args and (found := shutil.which(args[0])) and not Path(args[0]).exists():
+        hint = f'Found "{args[0]}" on PATH, but grokmirror needs the full path: {found}'
+    report.error(problem, section, option, hint)
 
 
 def _check_path(report: _Report, section: str, option: str, value: str, known: Option) -> None:
@@ -291,6 +318,24 @@ def _check_parent(report: _Report, section: str, option: str, path: Path, creati
         report.path_is_bad(parent)
 
 
+def _check_strlist(report: _Report, section: str, option: str, value: str) -> None:
+    """Guess at a comma-separated list written where lines were wanted.
+
+    These options are read with splitlines(), so "a, b" is one item with a
+    comma in it rather than two items -- and for [fsck] ignore_errors that
+    silently stops matching anything. It is only a guess, because a git
+    error message really can contain a comma, so it says so.
+    """
+    if len(value.splitlines()) > 1 or ', ' not in value:
+        return
+    report.warning(
+        f'looks like a comma-separated list, but is read as one line: {value}',
+        section,
+        option,
+        hint='Put each entry on its own indented line, as in the example config',
+    )
+
+
 def _check_value(report: _Report, section: str, option: str, value: str, known: Option) -> None:
     """Run whichever check the registry says this option's kind deserves."""
     if not value.strip() and known.kind != 'email':
@@ -312,9 +357,11 @@ def _check_value(report: _Report, section: str, option: str, value: str, known: 
         _check_command(report, section, option, value)
     elif known.kind == 'path':
         _check_path(report, section, option, value, known)
-    # str, globlist, strlist and args have no shape to be wrong about:
-    # compile_globs() accepts any string, and the list kinds are splitlines()
-    # where a single line is a perfectly good list of one.
+    elif known.kind == 'strlist':
+        _check_strlist(report, section, option, value)
+    # str, globlist and args have no shape to be wrong about: compile_globs()
+    # accepts any string, and a globlist is splitlines() where a single line
+    # is a perfectly good list of one.
 
 
 def _read_config(report: _Report, cfgfile: StrPath) -> ConfigParser | None:
@@ -413,13 +460,148 @@ def _check_names(report: _Report, config: ConfigParser, sections: set[str]) -> N
             report.warning('unknown option, nothing will read it', section, option, hint)
 
 
-def check_config(cfgfile: StrPath, sections: set[str]) -> list[Diagnostic]:
+def check_remote_completeness(config: ConfigParser) -> list[Diagnostic]:
+    """Report what [remote] is missing before grok-pull can do anything.
+
+    grok-pull refuses to start without these, and validate_pull_config()
+    logs exactly these diagnostics to say so, which is why the rule lives
+    here: a config the checker passes and grok-pull then rejects would be
+    worse than no checker at all.
+
+    Values are read raw, because whether an option is set is a different
+    question from whether its interpolation resolves, and the latter is
+    reported against the option itself.
+    """
+    report = _Report()
+    if 'remote' not in config:
+        report.error('must exist in the config file', 'remote')
+        return report.diagnostics
+    if not config.get('remote', 'site', raw=True, fallback='').strip():
+        report.error('must define "site"', 'remote')
+    manifest = config.get('remote', 'manifest', raw=True, fallback='').strip()
+    command = config.get('remote', 'manifest_command', raw=True, fallback='').strip()
+    if not manifest and not command:
+        report.error('must define "manifest" or "manifest_command"', 'remote')
+    return report.diagnostics
+
+
+def _probe_url(report: _Report, ses: GrokSession, section: str, option: str, value: str) -> None:
+    """Ask whether a URL answers, without fetching what is behind it.
+
+    Uses the same requests session grok-pull fetches with, so the
+    User-Agent and the retry policy are the ones the origin will actually
+    see. A manifest can be tens of megabytes, so this never reads a body:
+    HEAD, and a GET abandoned at the headers for the servers that will not
+    answer HEAD.
+    """
+    parsed = urlparse(value)
+    if parsed.scheme == 'file':
+        # fetch_remote_manifest() strips the scheme and stats the path, so
+        # "reachable" here means the same thing it means there.
+        path = Path(value.removeprefix('file://'))
+        if not path.exists():
+            report.error(f'does not exist: {path}', section, option)
+        elif not os.access(path, os.R_OK):
+            report.error(f'is not readable by {_as_user()}: {path}', section, option)
+        return
+
+    session = ses.get_requests_session()
+    try:
+        # 30 seconds to connect, 60 to answer: the real fetch allows five
+        # minutes for the body, and there is no body here.
+        res = session.head(value, timeout=(30, 60), allow_redirects=True)
+        if res.status_code in (405, 501):
+            # Plenty of manifests are generated by a CGI that only knows
+            # GET, and a refused HEAD says nothing about whether the
+            # manifest is there. Ask again and hang up at the headers.
+            res = session.get(value, timeout=(30, 60), allow_redirects=True, stream=True)
+            res.close()
+    except requests.exceptions.RequestException as ex:
+        report.error(f'could not be reached: {ex}', section, option)
+        return
+    if res.status_code >= 400:
+        report.error(
+            f'returned HTTP {res.status_code} ({res.reason})',
+            section,
+            option,
+            hint='Checked with HEAD, falling back to GET' if res.request.method == 'GET' else None,
+        )
+
+
+def _check_reachable(report: _Report, config: ConfigParser, ses: GrokSession) -> None:
+    """Probe the one remote URL that names a single file.
+
+    [remote] site is a base URL for git clones and [remote]
+    preload_bundle_url is a directory of bundles; neither names anything a
+    web server has to answer for, so probing them would report a 403 on a
+    directory listing as though the mirror were broken. Only the manifest
+    URL is a file grokmirror will really ask for.
+    """
+    if 'remote' not in config:
+        return
+    value = _resolve(report, config, 'remote', 'manifest') if 'manifest' in config['remote'] else None
+    if not value or not value.strip():
+        return
+    if report.has_errors_about('remote', 'manifest'):
+        # _check_url() has already said the URL is malformed, and probing
+        # it can only say the same thing again in a less useful way.
+        return
+    _probe_url(report, ses, 'remote', 'manifest', value)
+
+
+def _check_globs(report: _Report, config: ConfigParser, sections: set[str]) -> None:
+    """Warn about glob lists that match nothing we are currently mirroring.
+
+    A glob list is not wrong in itself -- compile_globs() accepts any
+    string -- so the only way to find a typo in one is to try it against
+    real repository names. The local manifest is the list grokmirror
+    itself works from, it costs nothing to read, and a pattern matching
+    none of it is the shape a misplaced path prefix takes.
+
+    Nothing is said when there is no local manifest yet: on a first run
+    every pattern matches nothing, which is not news.
+    """
+    if 'core' not in config:
+        return
+    manifest_path = _resolve(report, config, 'core', 'manifest') if 'manifest' in config['core'] else None
+    if not manifest_path:
+        return
+    try:
+        manifest = read_manifest(manifest_path)
+    except OSError:
+        # An unreadable manifest is _check_path()'s business, not ours.
+        return
+    if not manifest:
+        return
+
+    for section, option in configopts.options_of_kind('globlist'):
+        if section not in sections or section not in config or option not in config[section]:
+            continue
+        value = _resolve(report, config, section, option)
+        if value is None or not value.strip():
+            continue
+        patterns = compile_globs(value.splitlines())
+        if any(patterns.match(gitdir) for gitdir in manifest):
+            continue
+        report.warning(
+            f'matches none of the {len(manifest)} repositories in the local manifest',
+            section,
+            option,
+            hint='Patterns are matched against the manifest path, which starts with a /',
+        )
+
+
+def check_config(cfgfile: StrPath, sections: set[str], online: bool = True) -> list[Diagnostic]:
     """Check a config file and return everything found wrong with it.
 
     `sections` is the set of sections the calling command actually reads,
     so that grok-pull does not opine on [fsck]. Sections nobody named are
     still recognised as real ones -- an unread section is not a mistake,
     an unknown one is.
+
+    With `online` false nothing leaves the machine. The rest of the checks
+    are identical, so a config that passes offline has not been told the
+    origin is unreachable -- it has been told nothing about the origin.
     """
     report = _Report()
     config = _read_config(report, cfgfile)
@@ -440,6 +622,9 @@ def check_config(cfgfile: StrPath, sections: set[str]) -> list[Diagnostic]:
 
     _check_names(report, config, sections)
 
+    if 'remote' in sections:
+        report.diagnostics.extend(check_remote_completeness(config))
+
     # [core] toplevel goes first, whatever order the file lists things in.
     # Almost every other path is interpolated from it, so knowing it is
     # broken is what lets those paths stay quiet about the same directory.
@@ -454,6 +639,15 @@ def check_config(cfgfile: StrPath, sections: set[str]) -> list[Diagnostic]:
         for option in config[section]:
             if (section, option) not in checked:
                 _check_one(report, config, section, option)
+
+    _check_globs(report, config, sections)
+
+    if online and 'remote' in sections:
+        ses = GrokSession()
+        try:
+            _check_reachable(report, config, ses)
+        finally:
+            ses.close_requests_session()
 
     return report.diagnostics
 
