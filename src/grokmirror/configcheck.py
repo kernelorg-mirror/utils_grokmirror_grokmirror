@@ -28,12 +28,15 @@ safe to do before pointing grokmirror at a directory for the first time.
 
 from __future__ import annotations
 
+import argparse
 import configparser
 import difflib
+import json
 import os
 import pwd
 import shlex
 import shutil
+import sys
 from configparser import ConfigParser, ExtendedInterpolation
 from dataclasses import dataclass
 from pathlib import Path
@@ -661,3 +664,145 @@ def _check_one(report: _Report, config: ConfigParser, section: str, option: str)
     value = _resolve(report, config, section, option)
     if value is not None:
         _check_value(report, section, option, value, known)
+
+
+# -- the command-line side ---------------------------------------------------
+#
+# One config file serves every command, but each command only reads part of
+# it, so --config-check means something slightly different in each of them.
+# The flags, the output and the exit code are shared from here so that they
+# cannot answer differently depending on which command you asked.
+
+# Sections are printed in this order rather than in the order the file
+# happens to list them, so that two runs against two configs are comparable.
+SECTION_ORDER = tuple(KNOWN)
+
+
+def add_check_arguments(op: argparse.ArgumentParser) -> None:
+    """Add --config-check and its two modifiers to a command's parser."""
+    op.add_argument(
+        '--config-check',
+        dest='config_check',
+        action='store_true',
+        default=False,
+        help='Check the configuration file and exit, reporting every problem found',
+    )
+    op.add_argument(
+        '--json',
+        dest='as_json',
+        action='store_true',
+        default=False,
+        help='With --config-check, write the report as a JSON object instead of text',
+    )
+    op.add_argument(
+        '--no-network',
+        dest='no_network',
+        action='store_true',
+        default=False,
+        help='With --config-check, skip the checks that contact the remote site',
+    )
+
+
+def check_arguments(op: argparse.ArgumentParser, opts: argparse.Namespace) -> None:
+    """Reject the modifiers when there is nothing for them to modify.
+
+    Quietly ignoring --json would be worse than refusing it: whatever was
+    going to parse the output gets a mirror run instead.
+    """
+    if opts.config_check:
+        return
+    for flag, used in (('--json', opts.as_json), ('--no-network', opts.no_network)):
+        if used:
+            op.error(f'{flag} only means something together with --config-check')
+
+
+def _by_section(diagnostics: list[Diagnostic]) -> list[tuple[str | None, list[Diagnostic]]]:
+    """Group diagnostics by section, in a stable order.
+
+    Anything about the file itself comes first, since a file that will not
+    parse makes every other line beside the point.
+    """
+    sections = {d.section for d in diagnostics}
+    known = [s for s in SECTION_ORDER if s in sections]
+    unknown = sorted(s for s in sections if s is not None and s not in KNOWN)
+    order: list[str | None] = [None] if None in sections else []
+    order += known + unknown
+    return [(section, [d for d in diagnostics if d.section == section]) for section in order]
+
+
+def _counts(diagnostics: list[Diagnostic]) -> tuple[int, int]:
+    errors = sum(1 for d in diagnostics if d.severity == 'error')
+    return errors, len(diagnostics) - errors
+
+
+def _plural(count: int, noun: str) -> str:
+    return f'{count} {noun}' if count == 1 else f'{count} {noun}s'
+
+
+def format_report(cfgfile: StrPath, diagnostics: list[Diagnostic], online: bool) -> str:
+    """Render the diagnostics as the text a person reads."""
+    errors, warnings = _counts(diagnostics)
+    lines = []
+    for section, found in _by_section(diagnostics):
+        lines.append(f'[{section}]' if section else f'{cfgfile}')
+        for diag in found:
+            where = f'{diag.option}: ' if diag.option else ''
+            lines.append(f'  {diag.severity}: {where}{diag.message}')
+            if diag.hint:
+                lines.append(f'    {diag.hint}')
+        lines.append('')
+
+    if not diagnostics:
+        lines.append(f'{cfgfile}: nothing to report')
+    else:
+        lines.append(f'{_plural(errors, "error")}, {_plural(warnings, "warning")}')
+    if not online:
+        lines.append('The remote site was not contacted (--no-network), so nothing here is about reachability.')
+    # Last, and always, because it is the one thing that makes a "writable"
+    # answer mean anything: os.access() answers for whoever is asking, and
+    # grok-pull normally runs as somebody else entirely.
+    lines.append(f'Checked as {_as_user()}; whether a path is writable was answered for that user.')
+    return '\n'.join(lines)
+
+
+def format_json(cfgfile: StrPath, diagnostics: list[Diagnostic], online: bool) -> str:
+    """Render the diagnostics as the object the maintainer UI parses.
+
+    The shape is a compatibility surface as soon as it ships, so it is
+    deliberately dull: no nesting beyond the list, every key always
+    present, and `hint` null rather than absent when there is none.
+    """
+    uid, user = checking_as()
+    errors, warnings = _counts(diagnostics)
+    return json.dumps(
+        {
+            'config': str(cfgfile),
+            'checked_as': {'uid': uid, 'user': user},
+            'online': online,
+            'ok': not errors,
+            'diagnostics': [
+                {
+                    'severity': d.severity,
+                    'section': d.section,
+                    'option': d.option,
+                    'message': d.message,
+                    'hint': d.hint,
+                }
+                for d in diagnostics
+            ],
+            'summary': {'errors': errors, 'warnings': warnings},
+        },
+        indent=2,
+    )
+
+
+def run_check(cfgfile: StrPath, sections: set[str], as_json: bool = False, online: bool = True) -> int:
+    """Check a config, print the report and return the exit code to use.
+
+    Warnings do not fail the run: they are the checks that guess, and a
+    guess is not grounds for failing somebody's cron job.
+    """
+    diagnostics = check_config(cfgfile, sections, online=online)
+    render = format_json if as_json else format_report
+    sys.stdout.write(render(cfgfile, diagnostics, online) + '\n')
+    return 1 if any(d.severity == 'error' for d in diagnostics) else 0

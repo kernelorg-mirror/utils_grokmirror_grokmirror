@@ -1624,9 +1624,12 @@ def parse_args() -> argparse.Namespace:
         help='Run continuously (no effect if refresh is not set in config)',
     )
     op.add_argument('-c', '--config', dest='config', required=True, help='Location of the configuration file')
+    configcheck.add_check_arguments(op)
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
 
-    return op.parse_args()
+    opts = op.parse_args()
+    configcheck.check_arguments(op, opts)
+    return opts
 
 
 def grok_pull(
@@ -1658,8 +1661,16 @@ def grok_pull(
     return pull_mirror(config, nomtime, forcepurge, runonce)
 
 
+# The sections grok-pull reads. [fsck] and [manifest] are real sections it
+# has no business opining about, so they are recognised but not checked.
+CHECKED_SECTIONS = {'core', 'remote', 'pull'}
+
+
 def command() -> None:
     opts = parse_args()
+
+    if opts.config_check:
+        sys.exit(configcheck.run_check(opts.config, CHECKED_SECTIONS, as_json=opts.as_json, online=not opts.no_network))
 
     try:
         retval = grok_pull(opts.config, opts.verbose, opts.nomtime, opts.purge, opts.forcepurge, opts.runonce)

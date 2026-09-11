@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 import grokmirror
+from grokmirror import configcheck
 
 logger = logging.getLogger(__name__)
 
@@ -222,12 +223,21 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help='Be verbose and tell us what you are doing',
     )
+    configcheck.add_check_arguments(op)
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
     op.add_argument('paths', nargs='*', help='Full path(s) to process')
 
     opts = op.parse_args()
+    configcheck.check_arguments(op, opts)
 
     opts.objstore_uses_plumbing = False
+    if opts.config_check:
+        # Everything below reads the config, and reading a config is the
+        # thing --config-check exists to do carefully. Hand back before any
+        # of it, so that a broken file is reported rather than raised on.
+        if not opts.cfgfile:
+            op.error('--config-check needs --cfgfile, since that is the file it would check')
+        return opts
     if opts.cfgfile:
         config = grokmirror.load_config_file(opts.cfgfile)
         if not opts.manifile:
@@ -412,9 +422,20 @@ def grok_manifest(
     return 0
 
 
+# grok-manifest reads [core] for the toplevel and the manifest path, and
+# [manifest] for everything else. It never pulls, so [remote] and [pull]
+# are not its business.
+CHECKED_SECTIONS = {'core', 'manifest'}
+
+
 def command() -> int:
     try:
         opts = parse_args()
+
+        if opts.config_check:
+            return configcheck.run_check(
+                opts.cfgfile, CHECKED_SECTIONS, as_json=opts.as_json, online=not opts.no_network
+            )
 
         return grok_manifest(
             opts.manifile,

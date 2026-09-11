@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 import grokmirror
+from grokmirror import configcheck
 
 # default basic logger. We override it later.
 logger = logging.getLogger(__name__)
@@ -1615,9 +1616,11 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help='(Assumes --force): Do a full repack of all repos',
     )
+    configcheck.add_check_arguments(op)
     op.add_argument('--version', action='version', version=grokmirror.VERSION)
 
     opts = op.parse_args()
+    configcheck.check_arguments(op, opts)
 
     if opts.repack_all_quick and opts.repack_all_full:
         op.error('Pick either --repack-all-full or --repack-all-quick')
@@ -1686,8 +1689,16 @@ def grok_fsck(cfgfile: str, verbose: bool = False, options: FsckOptions | None =
             logger.critical('Report follows:\n%s', report)
 
 
+# [fsck] plus the [core] it shares with everything else. grok-fsck never
+# reads [remote] or [pull], so it says nothing about them.
+CHECKED_SECTIONS = {'core', 'fsck'}
+
+
 def command() -> None:
     opts = parse_args()
+
+    if opts.config_check:
+        sys.exit(configcheck.run_check(opts.config, CHECKED_SECTIONS, as_json=opts.as_json, online=not opts.no_network))
 
     try:
         grok_fsck(
