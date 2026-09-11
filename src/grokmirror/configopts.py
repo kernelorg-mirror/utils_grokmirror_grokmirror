@@ -52,12 +52,14 @@ from typing import Literal
 #   enum      one of `choices`
 #   path      a filesystem path, subject to `writable`/`parent_writable`
 #   url       an http(s):// URL we may be asked to fetch
+#   giturl    a repository URL we only ever hand to git, so git decides
+#             what it means: any transport git has, or a helper on PATH
 #   command   a shell command line; its first word must be an executable
 #   globlist  one glob per line, compiled with compile_globs()
 #   strlist   one plain string per line
 #   args      whitespace-separated arguments passed to a git command
 #   email     an email address, or something sendmail will accept as one
-Kind = Literal['str', 'int', 'bool', 'enum', 'path', 'url', 'command', 'globlist', 'strlist', 'args', 'email']
+Kind = Literal['str', 'int', 'bool', 'enum', 'path', 'url', 'giturl', 'command', 'globlist', 'strlist', 'args', 'email']
 
 
 @dataclass(frozen=True)
@@ -123,7 +125,11 @@ KNOWN: dict[str, dict[str, Option]] = {
         Option('check_export_ok', 'bool', default='no'),
     ),
     'remote': _opts(
-        Option('site', 'url'),
+        # Not a 'url': grok-pull never fetches this itself, it joins the
+        # gitdir onto it and hands the result to "git remote add". So
+        # ssh://, git:// and a local path are all perfectly good here,
+        # even though none of them is something requests could fetch.
+        Option('site', 'giturl'),
         # grok-pull needs "manifest" or "manifest_command", and checks for
         # that itself, which is why neither is required here on its own.
         Option('manifest', 'url'),

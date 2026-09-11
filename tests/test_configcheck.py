@@ -308,6 +308,67 @@ def test_a_file_url_is_accepted(tmp_path: Path) -> None:
     assert not about(check(tmp_path, text), 'remote', 'manifest')
 
 
+# -- [remote] site, which is git's to interpret and not ours -----------------
+
+
+def with_site(tmp_path: Path, value: str) -> str:
+    return good_config(tmp_path).replace('site = https://git.example.com', f'site = {value}')
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        # The one that started this: kernel.org pulls over ssh, and the
+        # checker used to call its production config broken.
+        'ssh://gitolite.kernel.org',
+        'git://git.example.com',
+        'https://git.example.com',
+        'git+ssh://git.example.com',
+        # scp-style, which git reads as ssh even though it has no scheme.
+        'git@gitolite.kernel.org:',
+        'git@git.example.com:pub/scm',
+    ],
+)
+def test_a_transport_git_understands_is_not_our_business(tmp_path: Path, value: str) -> None:
+    assert not about(check(tmp_path, with_site(tmp_path, value)), 'remote', 'site')
+
+
+def test_a_local_site_directory_is_accepted(tmp_path: Path) -> None:
+    # git clones happily from a path, and so does grok-pull.
+    assert not about(check(tmp_path, with_site(tmp_path, str(tmp_path))), 'remote', 'site')
+
+
+@pytest.mark.parametrize('value', ['{tmp}/nosuch', 'file://{tmp}/nosuch'])
+def test_a_local_site_that_is_not_there_is_an_error(tmp_path: Path, value: str) -> None:
+    diagnostics = about(check(tmp_path, with_site(tmp_path, value.format(tmp=tmp_path))), 'remote', 'site')
+    assert diagnostics[0].severity == 'error'
+    assert 'does not exist' in diagnostics[0].message
+
+
+def test_a_transport_git_has_never_heard_of_is_only_a_warning(tmp_path: Path) -> None:
+    # Never an error: git learns transports from git-remote-<scheme> helpers
+    # on PATH, and the checker has no way to know what the host that runs
+    # grok-pull has installed.
+    diagnostics = about(check(tmp_path, with_site(tmp_path, 'carrierpigeon://git.example.com')), 'remote', 'site')
+    assert diagnostics[0].severity == 'warning'
+    assert 'git-remote-carrierpigeon' in (diagnostics[0].hint or '')
+
+
+def test_an_unfamiliar_transport_with_a_helper_installed_says_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('PATH', str(tmp_path / 'bin'))
+    (tmp_path / 'bin').mkdir()
+    helper = tmp_path / 'bin' / 'git-remote-carrierpigeon'
+    helper.write_text('#!/bin/sh\n')
+    helper.chmod(0o755)
+    assert not about(check(tmp_path, with_site(tmp_path, 'carrierpigeon://git.example.com')), 'remote', 'site')
+
+
+def test_a_site_url_with_no_host_is_an_error(tmp_path: Path) -> None:
+    assert about(check(tmp_path, with_site(tmp_path, 'ssh:///pub/scm')), 'remote', 'site')
+
+
 # -- commands, which grokmirror looks up more strictly than a shell does ------
 
 

@@ -34,6 +34,7 @@ import difflib
 import json
 import os
 import pwd
+import re
 import shlex
 import shutil
 import sys
@@ -53,6 +54,16 @@ Severity = Literal['error', 'warning']
 # Schemes fetch_remote_manifest() knows how to handle. Anything else is not
 # going to be fetched, whatever else it might mean.
 URL_SCHEMES = ('http', 'https', 'file')
+
+# Transports git has built in. A scheme outside this list is not wrong by
+# itself -- git will look for a git-remote-<scheme> helper on PATH -- so it
+# is only worth mentioning when no such helper is installed.
+GIT_SCHEMES = ('ssh', 'git', 'http', 'https', 'ftp', 'ftps', 'file', 'git+ssh', 'ssh+git')
+
+# "[user@]host:path", which git reads as ssh even though it has no scheme.
+# A value with a slash before the colon is a path that happens to contain
+# one, not an scp-style address, which is why the pattern anchors.
+SCP_LIKE = re.compile(r'^[^/:]+(:\d+)?:')
 
 
 @dataclass(frozen=True)
@@ -212,6 +223,60 @@ def _check_url(report: _Report, section: str, option: str, value: str) -> None:
         )
 
 
+def _check_giturl(report: _Report, section: str, option: str, value: str) -> None:
+    """Check a URL that only ever gets handed to git.
+
+    grok-pull joins the gitdir onto [remote] site and passes the result to
+    "git remote add", so the set of things that work here is git's, not
+    requests': ssh://, git:// and a plain local path are all fine, and
+    restricting this to what grokmirror can fetch would report a working
+    production config as broken.
+
+    What is left to check is thin on purpose. git can be taught new
+    transports by dropping a git-remote-<scheme> helper on PATH, so an
+    unfamiliar scheme is a warning when no helper is there and silence when
+    one is -- never an error, because the checker cannot know what the host
+    running grok-pull has installed.
+    """
+    parsed = urlparse(value)
+    if not parsed.scheme:
+        if SCP_LIKE.match(value):
+            # git@host:path. Nothing here is ours to verify: whether the
+            # host answers and whether the key is authorized are questions
+            # for ssh, and asking them is not a config check.
+            return
+        # Everything else without a scheme is a local path, which git clones
+        # from directly.
+        _check_local_path(report, section, option, Path(value).expanduser())
+        return
+
+    if parsed.scheme == 'file':
+        _check_local_path(report, section, option, Path(value.removeprefix('file://')))
+        return
+
+    if parsed.scheme not in GIT_SCHEMES:
+        if shutil.which(f'git-remote-{parsed.scheme}'):
+            return
+        report.warning(
+            f'uses a transport git does not have built in: {parsed.scheme}://',
+            section,
+            option,
+            hint=f'git would look for git-remote-{parsed.scheme} on PATH, and there is none here',
+        )
+        return
+
+    if not parsed.netloc:
+        report.error(f'has no host: {value}', section, option)
+
+
+def _check_local_path(report: _Report, section: str, option: str, path: Path) -> None:
+    """Complain about a local path we are supposed to read from but cannot."""
+    if not path.exists():
+        report.error(f'does not exist: {path}', section, option)
+    elif not os.access(path, os.R_OK):
+        report.error(f'is not readable by {_as_user()}: {path}', section, option)
+
+
 def command_argv(value: str) -> list[str]:
     """Split a configured command line into argv, or say why it cannot run.
 
@@ -356,6 +421,8 @@ def _check_value(report: _Report, section: str, option: str, value: str, known: 
         _check_email(report, section, option, value)
     elif known.kind == 'url':
         _check_url(report, section, option, value)
+    elif known.kind == 'giturl':
+        _check_giturl(report, section, option, value)
     elif known.kind == 'command':
         _check_command(report, section, option, value)
     elif known.kind == 'path':
@@ -501,11 +568,7 @@ def _probe_url(report: _Report, ses: GrokSession, section: str, option: str, val
     if parsed.scheme == 'file':
         # fetch_remote_manifest() strips the scheme and stats the path, so
         # "reachable" here means the same thing it means there.
-        path = Path(value.removeprefix('file://'))
-        if not path.exists():
-            report.error(f'does not exist: {path}', section, option)
-        elif not os.access(path, os.R_OK):
-            report.error(f'is not readable by {_as_user()}: {path}', section, option)
+        _check_local_path(report, section, option, Path(value.removeprefix('file://')))
         return
 
     session = ses.get_requests_session()

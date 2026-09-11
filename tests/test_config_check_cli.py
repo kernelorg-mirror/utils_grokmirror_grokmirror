@@ -17,9 +17,15 @@ from typing import Any
 
 from support import GrokTree
 
-# Complete enough that grok-pull has no [remote] complaints of its own; the
-# URLs are never fetched, since every check here runs --no-network.
-GOOD_REMOTE = {'site': 'file:///nonexistent', 'manifest': 'file:///nonexistent/manifest.js.gz'}
+# Complete enough that grok-pull has no [remote] complaints of its own. The
+# manifest URL is never fetched, since every check here runs --no-network,
+# but "site" is a git URL and a local one has to be a directory that is
+# really there, so it is filled in per-tree by good_remote().
+GOOD_MANIFEST = 'file:///nonexistent/manifest.js.gz'
+
+
+def good_remote(tree: GrokTree) -> dict[str, str]:
+    return {'site': f'file://{tree.toplevel}', 'manifest': GOOD_MANIFEST}
 
 
 def report(tree: GrokTree, *args: str, expect: int = 0) -> str:
@@ -35,12 +41,12 @@ def envelope(tree: GrokTree, *args: str, expect: int = 0) -> dict[str, Any]:
 
 
 def test_a_config_with_nothing_wrong_passes(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     assert 'nothing to report' in report(tree)
 
 
 def test_a_broken_config_names_the_option_and_exits_nonzero(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE, 'pull': {'pull_threads': 'many'}})
+    tree.write_config({'remote': good_remote(tree), 'pull': {'pull_threads': 'many'}})
     out = report(tree, expect=1)
     assert 'pull_threads' in out
     assert '1 error' in out
@@ -49,7 +55,7 @@ def test_a_broken_config_names_the_option_and_exits_nonzero(tree: GrokTree) -> N
 def test_a_warning_on_its_own_is_not_a_failure(tree: GrokTree) -> None:
     # Warnings are the checks that guess, and a guess is no reason to fail
     # somebody's cron job.
-    tree.write_config({'remote': GOOD_REMOTE, 'pull': {'pull_thrads': '4'}})
+    tree.write_config({'remote': good_remote(tree), 'pull': {'pull_thrads': '4'}})
     out = report(tree, expect=0)
     assert 'warning' in out
     assert '0 errors, 1 warning' in out
@@ -58,19 +64,19 @@ def test_a_warning_on_its_own_is_not_a_failure(tree: GrokTree) -> None:
 def test_the_report_says_which_user_it_answered_for(tree: GrokTree) -> None:
     # os.access() answers for whoever is asking, and grok-pull normally runs
     # as a service user. Without this line "writable" means nothing.
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     assert report(tree).rstrip().endswith('was answered for that user.')
 
 
 def test_the_report_says_when_it_did_not_go_online(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     assert '--no-network' in report(tree)
 
 
 def test_checking_does_not_mirror_anything(tree: GrokTree) -> None:
     # The whole point is that it is safe to run against a live mirror, and
     # safe to run before pointing grokmirror at a directory at all.
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     tree.manifest.unlink(missing_ok=True)
     report(tree)
     assert not tree.manifest.exists()
@@ -83,7 +89,7 @@ def test_a_config_that_will_not_parse_is_reported_not_raised(tree: GrokTree) -> 
 
 
 def test_a_config_file_that_is_not_there_is_reported(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     tree.cfgfile.unlink()
     assert 'does not exist' in report(tree, expect=1)
 
@@ -92,7 +98,7 @@ def test_a_config_file_that_is_not_there_is_reported(tree: GrokTree) -> None:
 
 
 def test_grok_pull_says_nothing_about_fsck(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE, 'fsck': {'frequency': 'often'}})
+    tree.write_config({'remote': good_remote(tree), 'fsck': {'frequency': 'often'}})
     assert 'frequency' not in report(tree)
 
 
@@ -135,7 +141,7 @@ def test_grok_manifest_reports_a_broken_config_rather_than_failing_to_load_it(tr
 
 
 def test_the_envelope_has_every_key_the_ui_expects(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     payload = envelope(tree)
     assert set(payload) == {'config', 'checked_as', 'online', 'ok', 'diagnostics', 'summary'}
     assert set(payload['checked_as']) == {'uid', 'user'}
@@ -145,7 +151,7 @@ def test_the_envelope_has_every_key_the_ui_expects(tree: GrokTree) -> None:
 
 
 def test_a_diagnostic_carries_its_own_five_fields(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE, 'pull': {'purge': 'maybe'}})
+    tree.write_config({'remote': good_remote(tree), 'pull': {'purge': 'maybe'}})
     diagnostics = envelope(tree, expect=1)['diagnostics']
     assert diagnostics[0]['severity'] == 'error'
     assert diagnostics[0]['section'] == 'pull'
@@ -156,12 +162,12 @@ def test_a_diagnostic_carries_its_own_five_fields(tree: GrokTree) -> None:
 
 
 def test_a_hintless_diagnostic_says_null_rather_than_leaving_it_out(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE, 'pull': {'pull_threads': 'many'}})
+    tree.write_config({'remote': good_remote(tree), 'pull': {'pull_threads': 'many'}})
     assert envelope(tree, expect=1)['diagnostics'][0]['hint'] is None
 
 
 def test_warnings_are_counted_but_leave_ok_true(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE, 'pull': {'pull_thrads': '4'}})
+    tree.write_config({'remote': good_remote(tree), 'pull': {'pull_thrads': '4'}})
     payload = envelope(tree)
     assert payload['ok'] is True
     assert payload['summary'] == {'errors': 0, 'warnings': 1}
@@ -171,13 +177,13 @@ def test_warnings_are_counted_but_leave_ok_true(tree: GrokTree) -> None:
 
 
 def test_json_without_config_check_is_refused(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     res = tree.run_pull('--json', expect=2)
     assert '--json only means something together with --config-check' in res.stderr
 
 
 def test_no_network_without_config_check_is_refused(tree: GrokTree) -> None:
-    tree.write_config({'remote': GOOD_REMOTE})
+    tree.write_config({'remote': good_remote(tree)})
     res = tree.run_pull('--no-network', expect=2)
     assert '--no-network only means something together with --config-check' in res.stderr
 
