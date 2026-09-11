@@ -1073,7 +1073,7 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
                 logger.info('%s:', fullpath)
                 logger.info('    added: next check on %s', nextcheckiso)
 
-        pretty = config['manifest'].getboolean('pretty', False) if 'manifest' in config else False
+        pretty = config.get_bool('manifest', 'pretty', False)
 
         if changed:
             grokmirror.write_manifest(manifile, manifest, pretty=pretty)
@@ -1090,8 +1090,8 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
     total_elapsed = 0
     space_saved = 0
 
-    cfg_repack = config['fsck'].getboolean('repack', True)
-    # Can be "always", which is why we don't getboolean
+    cfg_repack = config.get_bool('fsck', 'repack', True)
+    # Can be "always", which is why we do not read it as a boolean
     cfg_precious = config['fsck'].get('precious', 'yes')
 
     obstdir = os.path.realpath(config['core']['objstore'])
@@ -1272,7 +1272,7 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
     analyzed = 0
     queued = 0
     logger.info('Analyzing %s (%s repos)', obstdir, len(obstrepos))
-    objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+    objstore_uses_plumbing = config.get_bool('core', 'objstore_uses_plumbing', False)
     islandcorematch = grokmirror.compile_globs(config['fsck'].get('islandcores', '').splitlines())
     baselinematch = grokmirror.compile_globs(baselines)
     stattime = time.time()

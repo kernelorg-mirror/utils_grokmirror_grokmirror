@@ -1411,6 +1411,25 @@ def write_manifest(manifile: StrPath, manifest: Manifest, mtime: int | None = No
             tmpfile.unlink()
 
 
+# Every boolean option grokmirror reads, as (section, option). Checked once
+# by load_config_file(), so a value that is neither true nor false is reported
+# before the command does any work -- several of these are read from inside a
+# worker thread, where an exception is a traceback in a cron mailbox and not
+# an answer. [fsck]precious is deliberately absent: it has three values
+# (always/yes/no), not two.
+BOOL_OPTIONS = (
+    ('core', 'objstore_uses_plumbing'),
+    ('manifest', 'pretty'),
+    ('manifest', 'check_export_ok'),
+    ('manifest', 'fetch_objstore'),
+    ('pull', 'purge'),
+    ('pull', 'projectslist_symlinks'),
+    ('fsck', 'repack'),
+    ('fsck', 'commitgraph'),
+    ('fsck', 'prune'),
+)
+
+
 class GrokConfigParser(ConfigParser):
     # Carries the config file's mtime, so we can notice when it changes
     last_modified: int = 0
@@ -1425,7 +1444,12 @@ class GrokConfigParser(ConfigParser):
         Going through here keeps the accepted spellings identical everywhere,
         and turns a typo into a message naming the section, the option and the
         value, instead of a ValueError from deep inside an unattended run.
+
+        A section that isn't there at all gives the fallback, the same as an
+        option that isn't there, so callers don't need to test for it first.
         """
+        if section not in self:
+            return fallback
         value = self[section].get(option)
         if value is None:
             return fallback
@@ -1435,6 +1459,17 @@ class GrokConfigParser(ConfigParser):
             raise GrokConfigError(
                 f'Option "{option}" in section [{section}] must be a boolean (e.g. yes or no), not: {value}'
             ) from None
+
+    def validate_bools(self) -> None:
+        """Read every known boolean option, to fail on a typo in any of them.
+
+        The config file is shared by all the commands, so this checks the lot
+        regardless of which one is running: a mirror admin fixing a typo wants
+        to hear about it the first time any command reads the file, not on
+        whichever future day they happen to run grok-fsck.
+        """
+        for section, option in BOOL_OPTIONS:
+            self.get_bool(section, option, fallback=False)
 
 
 def load_config_file(cfgfile: StrPath) -> GrokConfigParser:
@@ -1467,6 +1502,8 @@ def load_config_file(cfgfile: StrPath) -> GrokConfigParser:
     manifile = config['core'].get('manifest')
     if not manifile:
         config['core']['manifest'] = str(Path(toplevel, 'manifest.js.gz'))
+
+    config.validate_bools()
 
     fstat = Path(cfgfile).stat()
     # stick last config file modification date into the config object,

@@ -10,6 +10,8 @@ every config read in the tree and comparing it against grokmirror.conf.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from support import GrokTree
@@ -95,3 +97,61 @@ def test_fsck_rejects_an_unparseable_boolean(tree: GrokTree) -> None:
     out = res.stdout + res.stderr
     assert 'prune' in out
     assert 'sometimes' in out
+
+
+# Every boolean option, and the command that would act on it. A typo in any of
+# them used to surface as a ValueError -- from inside a worker thread, in
+# several cases -- which is a traceback in a cron mailbox rather than an
+# answer.
+BOOL_OPTIONS = [
+    ('core', 'objstore_uses_plumbing'),
+    ('manifest', 'pretty'),
+    ('manifest', 'check_export_ok'),
+    ('manifest', 'fetch_objstore'),
+    ('pull', 'purge'),
+    ('pull', 'projectslist_symlinks'),
+    ('fsck', 'repack'),
+    ('fsck', 'commitgraph'),
+    ('fsck', 'prune'),
+]
+
+
+@pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)
+def test_unparseable_boolean_is_reported_by_name(tree: GrokTree, section: str, option: str) -> None:
+    tree.add_repo('test/one.git')
+    tree.write_config({section: {option: 'perhaps'}})
+
+    res = tree.run_fsck('-f', expect=1)
+
+    out = res.stdout + res.stderr
+    assert option in out
+    assert f'[{section}]' in out
+    assert 'perhaps' in out
+
+
+@pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)
+def test_unparseable_boolean_stops_a_pull_before_it_starts(
+    origin: GrokTree, tree: GrokTree, section: str, option: str
+) -> None:
+    # The config file is shared by every command, so a value no command can
+    # make sense of is refused on load -- before any repository is touched,
+    # and whichever section it is in.
+    origin.add_repo('test/one.git')
+    origin.run_manifest()
+    tree.write_mirror_config(origin, {section: {option: 'perhaps'}})
+
+    res = tree.run_pull(expect=1)
+
+    assert option in res.stdout + res.stderr
+    assert not (tree.toplevel / 'test' / 'one.git').exists()
+
+
+def test_pi_piper_reports_an_unparseable_shallow(tree: GrokTree, tmp_path: Path) -> None:
+    # grok-pi-piper has its own config file, but the same reasoning applies:
+    # it runs from a public-inbox hook, where a traceback goes nowhere useful.
+    cfgfile = tmp_path / 'pi-piper.conf'
+    cfgfile.write_text('[DEFAULT]\npipe = /bin/cat\nshallow = perhaps\n', encoding='utf-8')
+
+    res = tree.run('grok-pi-piper', '-c', str(cfgfile), str(tmp_path), expect=1)
+
+    assert 'shallow' in res.stdout + res.stderr

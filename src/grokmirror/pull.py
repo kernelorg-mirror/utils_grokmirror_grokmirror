@@ -262,7 +262,7 @@ def _spa_repo(
                         logger.debug('%s: no alternates, skipping objstore fetch', gitdir)
                         continue
                     # Should we use plumbing for this?
-                    use_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+                    use_plumbing = config.get_bool('core', 'objstore_uses_plumbing', False)
                     grokmirror.fetch_objstore_repo(altrepo, fullpath, use_plumbing=use_plumbing)
 
                 elif action == 'repack':
@@ -361,7 +361,7 @@ def run_pull_action(
     site = config['remote']['site']
     remotename = config['pull'].get('remotename', '_grokmirror')
     maxretries = config['pull'].getint('retries', 3)
-    objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+    objstore_uses_plumbing = config.get_bool('core', 'objstore_uses_plumbing', False)
 
     success = True
     altrepo = grokmirror.get_altrepo(fullpath)
@@ -741,7 +741,7 @@ def write_projects_list(config: grokmirror.GrokConfigParser, manifest: grokmirro
         return
 
     trimtop = config['pull'].get('projectslist_trimtop', '')
-    add_symlinks = config['pull'].getboolean('projectslist_symlinks', False)
+    add_symlinks = config.get_bool('pull', 'projectslist_symlinks', False)
 
     plfile = Path(plpath)
     (fd, tmpname) = tempfile.mkstemp(prefix=plfile.name, dir=plfile.parent)
@@ -949,7 +949,7 @@ def purge_stale_repos(
     forcepurge) when the deletions are a large enough fraction of the tree to
     look like a mistake rather than a deliberate cleanup.
     """
-    if not config['pull'].getboolean('purge', False):
+    if not config.get_bool('pull', 'purge', False):
         return
 
     nopurgematch = grokmirror.compile_globs(config['pull'].get('nopurge', '').splitlines())
@@ -1189,7 +1189,7 @@ def update_manifest(config: grokmirror.GrokConfigParser, entries: list[DoneItem]
             manifest[gitdir] = repoinfo
             changed = True
         if changed:
-            pretty = config['manifest'].getboolean('pretty', False) if 'manifest' in config else False
+            pretty = config.get_bool('manifest', 'pretty', False)
             grokmirror.write_manifest(manifile, manifest, pretty=pretty)
             logger.info(' manifest: wrote %s (%d entries)', manifile, len(manifest))
             # write out projects.list, if asked to

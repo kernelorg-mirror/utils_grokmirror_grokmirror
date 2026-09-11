@@ -238,7 +238,7 @@ def parse_args() -> argparse.Namespace:
         if not opts.logfile:
             opts.logfile = config['core'].get('log')
 
-        opts.objstore_uses_plumbing = config['core'].getboolean('objstore_uses_plumbing', False)
+        opts.objstore_uses_plumbing = config.get_bool('core', 'objstore_uses_plumbing', False)
 
         if 'manifest' in config:
             if not opts.ignore:
@@ -246,11 +246,11 @@ def parse_args() -> argparse.Namespace:
             if not opts.ignore_refs:
                 opts.ignore_refs = grokmirror.get_ignorerefs(config)
             if not opts.check_export_ok:
-                opts.check_export_ok = config['manifest'].getboolean('check_export_ok', False)
+                opts.check_export_ok = config.get_bool('manifest', 'check_export_ok', False)
             if not opts.pretty:
-                opts.pretty = config['manifest'].getboolean('pretty', False)
+                opts.pretty = config.get_bool('manifest', 'pretty', False)
             if not opts.fetchobst:
-                opts.fetchobst = config['manifest'].getboolean('fetch_objstore', False)
+                opts.fetchobst = config.get_bool('manifest', 'fetch_objstore', False)
 
     if not opts.manifile:
         op.error('You must provide the path to the manifest file')

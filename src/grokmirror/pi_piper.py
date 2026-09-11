@@ -13,7 +13,7 @@ import logging
 import os
 import shlex
 import sys
-from configparser import ConfigParser, ExtendedInterpolation
+from configparser import ExtendedInterpolation
 from pathlib import Path
 
 import grokmirror
@@ -199,7 +199,7 @@ def command() -> None:
     if not cfgfile.exists():
         sys.stderr.write(f'ERROR: File does not exist: {cfgfile}\n')
         sys.exit(1)
-    config = ConfigParser(interpolation=ExtendedInterpolation())
+    config = grokmirror.GrokConfigParser(interpolation=ExtendedInterpolation())
     config.read(cfgfile, encoding='utf-8')
 
     # Find out the section that we want from the config file
@@ -217,13 +217,15 @@ def command() -> None:
     logfile = config[section].get('log')
     loglevel = logging.DEBUG if config[section].get('loglevel') == 'debug' else logging.INFO
 
-    shallow = config[section].getboolean('shallow', False)
-
     # This used to say 'pull', so grok-pi-piper's log entries were labeled
     # as coming from grok-pull.
     grokmirror.init_logger('pi-piper', logfile, loglevel, opts.verbose)
 
     try:
+        # Inside the try because a value that is neither true nor false is
+        # reported here too: this runs from a public-inbox hook, where a
+        # traceback goes nowhere anyone reads.
+        shallow = config.get_bool(section, 'shallow', False)
         run_pi_repo(opts.repo, pipe, dryrun=opts.dryrun, shallow=shallow, pipelast=opts.pipelast)
     except grokmirror.GrokError as ex:
         sys.stderr.write(f'ERROR: {ex}\n')
