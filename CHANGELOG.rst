@@ -51,6 +51,10 @@ v3.0 (TBD)
   thread: a traceback in a cron mailbox rather than an answer. The
   whole file is checked whichever command is running, since all of them
   share it. grok-pi-piper checks its own ``shallow`` the same way
+- The sample config now documents ``[fsck]obstrepo_merge_strategy``,
+  which grok-fsck has always read but nothing has ever mentioned. It
+  chooses how eagerly objstore repos holding the same history are merged
+  into one: "exact" (the default), "loose" or "blobs"
 - The reclone decision is now logged once per repository instead of once
   per matching error line
 - grok-fsck no longer requests auto-reclones for repositories that have
