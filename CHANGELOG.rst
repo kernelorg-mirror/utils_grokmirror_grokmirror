@@ -54,14 +54,15 @@ v3.0 (TBD)
   code that checks the graph then treated its absence as correct. A
   value that is neither true nor false is now reported by name instead
   of being silently taken as false
-- Every boolean option in the config file is now checked when the file
-  is loaded, so a value that is neither true nor false is reported by
-  name -- with its section and the value itself -- before the command
-  does any work. These used to raise ValueError wherever the option
-  happened to be read, which for several of them is inside a worker
-  thread: a traceback in a cron mailbox rather than an answer. The
-  whole file is checked whichever command is running, since all of them
-  share it. grok-pi-piper checks its own ``shallow`` the same way
+- Every boolean and whole-number option in the config file is now
+  checked when the file is loaded, so a value that is neither true nor
+  false, or that is not a number, is reported by name -- with its
+  section and the value itself -- before the command does any work.
+  These used to raise ValueError wherever the option happened to be
+  read, which for several of them is inside a worker thread: a
+  traceback in a cron mailbox rather than an answer. The whole file is
+  checked whichever command is running, since all of them share it.
+  grok-pi-piper checks its own ``shallow`` the same way
 - The sample config now documents ``[fsck]obstrepo_merge_strategy``,
   which grok-fsck has always read but nothing has ever mentioned. It
   chooses how eagerly objstore repos holding the same history are merged

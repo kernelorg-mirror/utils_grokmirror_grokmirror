@@ -66,12 +66,12 @@ GIT_SCHEMES = ('ssh', 'git', 'http', 'https', 'ftp', 'ftps', 'file', 'git+ssh', 
 # one, not an scp-style address, which is why the pattern anchors.
 SCP_LIKE = re.compile(r'^[^/:]+(:\d+)?:')
 
-# Kinds whose readers cannot make anything of a blank value: getint() raises
-# ValueError on it and get_bool() raises GrokConfigError, both at the moment
-# the option is first read. In an unattended run that is a long way from here,
-# so a blank one of these has to be reported rather than passed over as "the
-# same as not set" -- otherwise a config this check calls clean is one the
-# command refuses to start on.
+# Kinds whose readers cannot make anything of a blank value: get_bool() and
+# get_int() both raise GrokConfigError on one, at the moment the option is
+# first read. In an unattended run that is a long way from here, so a blank
+# one of these has to be reported rather than passed over as "the same as not
+# set" -- otherwise a config this check calls clean is one the command refuses
+# to start on.
 BLANK_IS_FATAL = ('int', 'bool')
 
 

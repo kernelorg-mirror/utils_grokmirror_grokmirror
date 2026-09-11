@@ -25,8 +25,8 @@ place to live -- until this one.
 The registry below is data only. It answers what an option is called, what
 kind of value it holds and what happens when it is absent; it does not read
 a config, touch the filesystem or reach the network. `configcheck` uses it
-to validate a config file, `GrokConfigParser.validate_bools()` uses it to
-find a mistyped yes/no before a command does any work, and
+to validate a config file, `GrokConfigParser.validate_values()` uses it to
+find a mistyped yes/no or thread count before a command does any work, and
 `tests/test_configopts.py` compares it against both the source tree and
 `grokmirror.conf` so that an option added to one but not the others is a
 test failure rather than a surprise in somebody's cron mailbox.
@@ -47,7 +47,7 @@ from typing import Literal
 # checking whether the value makes sense.
 #
 #   str       free-form text, anything goes
-#   int       parsed with getint()
+#   int       parsed with get_int()
 #   bool      parsed with get_bool(): yes/no, true/false, on/off, 1/0
 #   enum      one of `choices`
 #   path      a filesystem path, subject to `writable`/`parent_writable`
@@ -191,8 +191,8 @@ KNOWN: dict[str, dict[str, Option]] = {
 }
 
 # Every (section, option) pair of a given kind, in a stable order. Built once
-# here rather than re-walked on every call: validate_bools() asks for the
-# booleans on every single config load.
+# here rather than re-walked on every call: validate_values() asks for the
+# booleans and the ints on every single config load.
 _BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {}
 for _section, _options in KNOWN.items():
     for _option in _options.values():

@@ -1443,8 +1443,30 @@ class GrokConfigParser(ConfigParser):
                 f'Option "{option}" in section [{section}] must be a boolean (yes/no, true/false, on/off or 1/0), not: {value}'
             ) from None
 
-    def validate_bools(self) -> None:
-        """Read every known boolean option, to fail on a typo in any of them.
+    def get_int(self, section: str, option: str, fallback: int) -> int:
+        """Read a whole-number option, naming the culprit when it is not one.
+
+        ConfigParser.getint() raises a bare ValueError naming neither the
+        section, nor the option, nor the file it came from -- and several of
+        these are read from inside a worker thread, so the first anybody hears
+        of "pull_threads = four" is a traceback in a cron mailbox. The rules
+        are otherwise the same as get_bool()'s: an absent section or option
+        gives the fallback, so callers don't need to test for either first.
+        """
+        if section not in self:
+            return fallback
+        value = self[section].get(option)
+        if value is None:
+            return fallback
+        try:
+            return int(value.strip())
+        except ValueError:
+            raise GrokConfigError(
+                f'Option "{option}" in section [{section}] must be a whole number, not: {value}'
+            ) from None
+
+    def validate_values(self) -> None:
+        """Read every option with a declared shape, to fail on a typo in any.
 
         The config file is shared by all the commands, so this checks the lot
         regardless of which one is running: a mirror admin fixing a typo wants
@@ -1453,9 +1475,14 @@ class GrokConfigParser(ConfigParser):
         happen here, before any work starts, because several of these options
         are read from inside a worker thread, where an exception is a
         traceback in a cron mailbox rather than an answer.
+
+        The fallbacks passed in are thrown away: what is being read is the
+        value in the file, and only whether it parses matters here.
         """
         for section, option in configopts.options_of_kind('bool'):
             self.get_bool(section, option, fallback=False)
+        for section, option in configopts.options_of_kind('int'):
+            self.get_int(section, option, fallback=0)
 
 
 def load_config_file(cfgfile: StrPath) -> GrokConfigParser:
@@ -1489,7 +1516,7 @@ def load_config_file(cfgfile: StrPath) -> GrokConfigParser:
     if not manifile:
         config['core']['manifest'] = str(Path(toplevel, 'manifest.js.gz'))
 
-    config.validate_bools()
+    config.validate_values()
 
     fstat = Path(cfgfile).stat()
     # stick last config file modification date into the config object,

@@ -36,8 +36,9 @@ SKIP_SOURCES = {'pi_piper.py'}
 # listed with the source it unparses to, so that a *new* dynamic read fails
 # this test instead of quietly joining the exemption.
 DYNAMIC_READS = {
-    # validate_bools() walking the registry itself.
+    # validate_values() walking the registry itself.
     ('__init__.py', 'self.get_bool(section, option, fallback=False)'),
+    ('__init__.py', 'self.get_int(section, option, fallback=0)'),
     # get_hookscripts(config, hookname), called with 'post_update_hook',
     # 'post_clone_complete_hook' and 'post_work_complete_hook'.
     ('pull.py', "config['pull'].get(hookname, '')"),
@@ -48,15 +49,22 @@ DYNAMIC_READS = {
 # plain .get() and ['option'] return a string whatever the value means.
 READER_KINDS = {
     'get_bool': {'bool'},
-    'getint': {'int'},
+    'get_int': {'int'},
 }
 
-# Readers nothing should be using any more. getboolean() accepts the same
-# spellings as get_bool() but reports a typo as a ValueError naming neither
-# the section nor the option, which is no use from a cron job.
-BANNED_READERS = {'getboolean', 'getfloat'}
+# Readers nothing should be using any more. getboolean() and getint() accept
+# the same values as get_bool() and get_int(), but report a typo as a
+# ValueError naming neither the section nor the option nor the file, which is
+# no use from a cron job.
+BANNED_READERS = {'getboolean', 'getint', 'getfloat'}
 
 _STRING_READERS = {'get', 'getint', 'getboolean', 'getfloat'}
+
+# The readers that take the section and the option as two arguments, rather
+# than being called on a section proxy, and the kinds they are the right way
+# to read.
+TYPED_KINDS = {'bool': 'get_bool', 'int': 'get_int'}
+TYPED_READERS = set(TYPED_KINDS.values())
 
 
 def _literal_str(node: ast.expr | None) -> str | None:
@@ -100,12 +108,12 @@ def _collect_reads() -> tuple[list[ConfigRead], list[tuple[str, str]]]:
         tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                # config.get_bool('section', 'option', fallback)
-                if node.func.attr == 'get_bool':
+                # config.get_bool('section', 'option', fallback), and get_int
+                if node.func.attr in TYPED_READERS:
                     section = _literal_str(node.args[0]) if node.args else None
                     option = _literal_str(node.args[1]) if len(node.args) > 1 else None
                     if section is not None and option is not None:
-                        reads.append(ConfigRead(path.name, node.lineno, section, option, 'get_bool'))
+                        reads.append(ConfigRead(path.name, node.lineno, section, option, node.func.attr))
                     else:
                         dynamic.append((path.name, ast.unparse(node)))
                     continue
@@ -218,15 +226,18 @@ def test_each_read_matches_the_kind_the_registry_gives_the_option(read: ConfigRe
     option = configopts.lookup(read.section, read.option)
     assert option is not None
     assert read.reader not in BANNED_READERS, (
-        f'{read} -- use config.get_bool(), which names the option when its value will not parse'
+        f'{read} -- use config.get_bool() or config.get_int(), which name the option when its value will not parse'
     )
     allowed = READER_KINDS.get(read.reader)
     if allowed is None:
-        # A plain string read tells us nothing, except in one case: a
-        # boolean read as a string is the bug that made 'commitgraph =
-        # true' mean enabled in one place and disabled in two others.
-        assert option.kind != 'bool', (
-            f'{read} -- [{read.section}] {read.option} is a boolean, so read it with config.get_bool()'
+        # A plain string read tells us nothing, except for the two kinds
+        # that have a reader of their own: a boolean read as a string is the
+        # bug that made 'commitgraph = true' mean enabled in one place and
+        # disabled in two others, and an int read as a string is one int()
+        # call away from the same traceback get_int() exists to prevent.
+        assert option.kind not in TYPED_KINDS, (
+            f'{read} -- [{read.section}] {read.option} is a{"n" if option.kind == "int" else ""} '
+            f'{option.kind}, so read it with config.{TYPED_KINDS[option.kind]}()'
         )
         return
     assert option.kind in allowed, (

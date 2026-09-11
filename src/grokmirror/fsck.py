@@ -1020,7 +1020,7 @@ def fsck_mirror(config: grokmirror.GrokConfigParser, options: FsckOptions) -> in
         else:
             status = {}
 
-        frequency = config['fsck'].getint('frequency', 30)
+        frequency = config.get_int('fsck', 'frequency', 30)
 
         # Naive local dates throughout: fsck scheduling is in whole calendar
         # days in the admin's own timezone, and the dates in the status file

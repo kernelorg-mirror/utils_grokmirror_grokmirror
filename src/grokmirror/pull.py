@@ -361,7 +361,7 @@ def run_pull_action(
     obstdir = os.path.realpath(config['core']['objstore'])
     site = config['remote']['site']
     remotename = config['pull'].get('remotename', '_grokmirror')
-    maxretries = config['pull'].getint('retries', 3)
+    maxretries = config.get_int('pull', 'retries', 3)
     objstore_uses_plumbing = config.get_bool('core', 'objstore_uses_plumbing', False)
 
     success = True
@@ -978,7 +978,7 @@ def purge_stale_repos(
         return
 
     # Purge-protection engage
-    purge_limit = int(config['pull'].getint('purgeprotect', 5))
+    purge_limit = config.get_int('pull', 'purgeprotect', 5)
     if purge_limit < 1 or purge_limit > 99:
         logger.critical('Warning: "%s" is not valid for purgeprotect.', purge_limit)
         logger.critical('Please set to a number between 1 and 99.')
@@ -1239,7 +1239,7 @@ def manifest_worker(
         # so just say so and fall through to the usual pacing below: a broken
         # origin must not turn this into a hot retry loop.
         logger.critical('Could not get the remote manifest: %s', ex)
-    refresh = config['pull'].getint('refresh', 300)
+    refresh = config.get_int('pull', 'refresh', 300)
     left = refresh - int(time.time() - starttime)
     if left > 0:
         logger.info(' manifest: sleeping %ss', left)
@@ -1302,7 +1302,7 @@ def pull_mirror(
 
     toplevel = os.path.realpath(config['core']['toplevel'])
     obstdir = os.path.realpath(config['core']['objstore'])
-    refresh = config['pull'].getint('refresh', 300)
+    refresh = config.get_int('pull', 'refresh', 300)
 
     # The worker threads all share this, so the alternates map only gets
     # walked once for everybody.
@@ -1330,7 +1330,7 @@ def pull_mirror(
         nomtime = True
     lastrun = 0
 
-    pull_threads = config['pull'].getint('pull_threads', 0)
+    pull_threads = config.get_int('pull', 'pull_threads', 0)
     if pull_threads < 1:
         # take half of available CPUs by default
         pull_threads = max(1, (os.cpu_count() or 1) // 2)
@@ -1646,7 +1646,9 @@ def grok_pull(
         # section is perfectly fine -- but it has to exist for the lookups
         # here and in the workers, which otherwise raise KeyError.
         config['pull'] = {}
-    if config['pull'].get('refresh', None) is None:
+    if 'refresh' not in config['pull']:
+        # Asking whether it is set, not what it is set to -- the value itself
+        # is read with get_int() where it is actually used.
         runonce = True
 
     logfile = config['core'].get('log', None)

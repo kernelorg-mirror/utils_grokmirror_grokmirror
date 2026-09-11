@@ -118,15 +118,17 @@ def test_the_boolean_complaint_lists_every_spelling_that_would_have_worked(tree:
         assert spelling in out
 
 
-# Every boolean option, taken from the registry rather than listed again
-# here, so that adding one covers it automatically. A typo in any of them
-# used to surface as a ValueError -- from inside a worker thread, in several
-# cases -- which is a traceback in a cron mailbox rather than an answer.
-BOOL_OPTIONS = list(configopts.options_of_kind('bool'))
+# Every option the registry gives a shape to, taken from the registry
+# rather than listed again here, so that adding one covers it automatically.
+# A typo in any of them used to surface as a ValueError -- from inside a
+# worker thread, in several cases -- which is a traceback in a cron mailbox
+# rather than an answer. "perhaps" is neither a boolean nor a number, so the
+# one value spoils either kind.
+TYPED_OPTIONS = [*configopts.options_of_kind('bool'), *configopts.options_of_kind('int')]
 
 
-@pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)
-def test_unparseable_boolean_is_reported_by_name(tree: GrokTree, section: str, option: str) -> None:
+@pytest.mark.parametrize(('section', 'option'), TYPED_OPTIONS)
+def test_a_value_that_will_not_parse_is_reported_by_name(tree: GrokTree, section: str, option: str) -> None:
     tree.add_repo('test/one.git')
     tree.write_config({section: {option: 'perhaps'}})
 
@@ -154,8 +156,8 @@ def blank_out(tree: GrokTree, section: str, option: str) -> None:
         parser.write(fh)
 
 
-@pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)
-def test_a_boolean_set_to_nothing_is_refused_rather_than_guessed_at(tree: GrokTree, section: str, option: str) -> None:
+@pytest.mark.parametrize(('section', 'option'), TYPED_OPTIONS)
+def test_an_option_set_to_nothing_is_refused_rather_than_guessed_at(tree: GrokTree, section: str, option: str) -> None:
     # "option =" is the empty string, not an absent option, and git would
     # read it as false. grokmirror does not guess: --config-check reports it
     # as an error, so the run has to agree and refuse to start, or the check
@@ -171,8 +173,8 @@ def test_a_boolean_set_to_nothing_is_refused_rather_than_guessed_at(tree: GrokTr
     assert f'[{section}]' in out
 
 
-@pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)
-def test_unparseable_boolean_stops_a_pull_before_it_starts(
+@pytest.mark.parametrize(('section', 'option'), TYPED_OPTIONS)
+def test_a_value_that_will_not_parse_stops_a_pull_before_it_starts(
     origin: GrokTree, tree: GrokTree, section: str, option: str
 ) -> None:
     # The config file is shared by every command, so a value no command can
