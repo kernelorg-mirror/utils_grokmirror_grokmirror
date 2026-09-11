@@ -308,6 +308,30 @@ def test_a_file_url_is_accepted(tmp_path: Path) -> None:
     assert not about(check(tmp_path, text), 'remote', 'manifest')
 
 
+def with_preload(tmp_path: Path, value: str) -> str:
+    """good_config() with a preload URL added to [remote], not to the end."""
+    return good_config(tmp_path).replace(
+        'manifest = ${site}/manifest.js.gz',
+        f'manifest = ${{site}}/manifest.js.gz\npreload_bundle_url = {value}',
+    )
+
+
+def test_a_preload_bundle_url_on_a_local_file_is_an_error(tmp_path: Path) -> None:
+    # Bundles are fetched with a plain requests get(), and requests has no
+    # file:// adapter -- so this would fail into the fallback clone without
+    # anybody being told why. The manifest URL does accept file://, which is
+    # what makes this worth checking separately.
+    text = with_preload(tmp_path, f'file://{tmp_path}/preload/')
+    diagnostics = about(check(tmp_path, text), 'remote', 'preload_bundle_url')
+    assert diagnostics[0].severity == 'error'
+    assert diagnostics[0].hint == 'Expected one of http://, https://'
+
+
+def test_a_preload_bundle_url_over_http_is_accepted(tmp_path: Path) -> None:
+    text = with_preload(tmp_path, 'https://cdn.example.com/preload/')
+    assert not about(check(tmp_path, text), 'remote', 'preload_bundle_url')
+
+
 # -- [remote] site, which is git's to interpret and not ours -----------------
 
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -249,3 +250,51 @@ def test_every_registered_default_is_the_right_shape() -> None:
                 assert option.default.lower() in {'yes', 'no', 'true', 'false', 'on', 'off', '1', '0'}, (
                     f'{where}: default {option.default!r} is not a boolean'
                 )
+
+
+# The Option invariants run at import time, so a registry entry that
+# contradicts itself is an ImportError rather than a confusing diagnostic
+# much later. That only helps if the invariants themselves work, and
+# nothing else in this file would notice if one stopped raising.
+#
+# Each case is a callable rather than a dict of keyword arguments, so that
+# the type checkers see a real constructor call and nothing here needs a
+# suppression to say what it means.
+CONTRADICTIONS: list[tuple[str, Callable[[], configopts.Option], str]] = [
+    ('enum without choices', lambda: configopts.Option('x', 'enum'), 'choices and kind="enum" go together'),
+    ('choices without enum', lambda: configopts.Option('x', 'str', choices=('a',)), 'choices and kind="enum"'),
+    (
+        'default outside choices',
+        lambda: configopts.Option('x', 'enum', default='b', choices=('a',)),
+        'is not one of',
+    ),
+    ('writable non-path', lambda: configopts.Option('x', 'str', writable=True), 'writability only means something'),
+    (
+        'parent_writable non-path',
+        lambda: configopts.Option('x', 'str', parent_writable=True),
+        'writability only means something',
+    ),
+    (
+        'both kinds of writable',
+        lambda: configopts.Option('x', 'path', writable=True, parent_writable=True),
+        'not both',
+    ),
+    (
+        'must_exist non-path',
+        lambda: configopts.Option('x', 'str', must_exist=True),
+        'only a path can be required to exist',
+    ),
+    ('schemes on a non-url', lambda: configopts.Option('x', 'str', schemes=('http',)), 'schemes only means something'),
+]
+
+
+@pytest.mark.parametrize(
+    ('build', 'complaint'),
+    [(build, complaint) for _, build, complaint in CONTRADICTIONS],
+    ids=[name for name, _, _ in CONTRADICTIONS],
+)
+def test_a_registry_entry_that_contradicts_itself_is_refused(
+    build: Callable[[], configopts.Option], complaint: str
+) -> None:
+    with pytest.raises(ValueError, match=re.escape(complaint)):
+        build()

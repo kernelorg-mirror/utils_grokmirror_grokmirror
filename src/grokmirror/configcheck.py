@@ -52,7 +52,8 @@ from grokmirror.configopts import KNOWN, Option
 Severity = Literal['error', 'warning']
 
 # Schemes fetch_remote_manifest() knows how to handle. Anything else is not
-# going to be fetched, whatever else it might mean.
+# going to be fetched, whatever else it might mean. An individual option can
+# accept fewer than these -- see Option.schemes -- but never more.
 URL_SCHEMES = ('http', 'https', 'file')
 
 # Transports git has built in. A scheme outside this list is not wrong by
@@ -191,23 +192,17 @@ def _check_email(report: _Report, section: str, option: str, value: str) -> None
                 report.error(f'does not look like an address: {address}', section, option)
 
 
-def _check_url(report: _Report, section: str, option: str, value: str) -> None:
+def _check_url(report: _Report, section: str, option: str, value: str, known: Option) -> None:
+    schemes = known.schemes or URL_SCHEMES
+    expected = f'Expected one of {", ".join(f"{scheme}://" for scheme in schemes)}'
     parsed = urlparse(value)
     if not parsed.scheme:
-        report.error(
-            f'has no scheme, so it cannot be fetched: {value}',
-            section,
-            option,
-            hint=f'Expected one of {", ".join(f"{scheme}://" for scheme in URL_SCHEMES)}',
-        )
+        report.error(f'has no scheme, so it cannot be fetched: {value}', section, option, hint=expected)
         return
-    if parsed.scheme not in URL_SCHEMES:
-        report.error(
-            f'has a scheme grokmirror cannot fetch: {parsed.scheme}://',
-            section,
-            option,
-            hint=f'Expected one of {", ".join(f"{scheme}://" for scheme in URL_SCHEMES)}',
-        )
+    if parsed.scheme not in schemes:
+        # Naming the general set here would be a lie for an option that
+        # accepts fewer, so the hint is built from this option's own.
+        report.error(f'has a scheme grokmirror cannot fetch: {parsed.scheme}://', section, option, hint=expected)
         return
     if parsed.scheme in ('http', 'https') and not parsed.netloc:
         report.error(f'has no host: {value}', section, option)
@@ -420,7 +415,7 @@ def _check_value(report: _Report, section: str, option: str, value: str, known: 
     elif known.kind == 'email':
         _check_email(report, section, option, value)
     elif known.kind == 'url':
-        _check_url(report, section, option, value)
+        _check_url(report, section, option, value, known)
     elif known.kind == 'giturl':
         _check_giturl(report, section, option, value)
     elif known.kind == 'command':

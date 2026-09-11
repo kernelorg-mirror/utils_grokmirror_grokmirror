@@ -51,7 +51,7 @@ from typing import Literal
 #   bool      parsed with get_bool(): yes/no, true/false, on/off, 1/0
 #   enum      one of `choices`
 #   path      a filesystem path, subject to `writable`/`parent_writable`
-#   url       an http(s):// URL we may be asked to fetch
+#   url       a URL grokmirror fetches itself, subject to `schemes`
 #   giturl    a repository URL we only ever hand to git, so git decides
 #             what it means: any transport git has, or a helper on PATH
 #   command   a shell command line; its first word must be an executable
@@ -74,6 +74,10 @@ class Option:
     default: str | None = None
     # For kind='enum', every accepted value.
     choices: tuple[str, ...] = ()
+    # For kind='url': the schemes this particular option accepts, when they
+    # are narrower than what grokmirror can fetch in general. Empty means
+    # the general set.
+    schemes: tuple[str, ...] = ()
     # For kind='path': the path itself must be a writable directory, or the
     # directory it lives in must be writable. A path option sets at most one
     # of these; neither means we only care that the value resolves.
@@ -90,6 +94,8 @@ class Option:
             raise ValueError(f'{self.name}: choices and kind="enum" go together')
         if self.choices and self.default is not None and self.default not in self.choices:
             raise ValueError(f'{self.name}: default {self.default!r} is not one of {self.choices}')
+        if self.schemes and self.kind != 'url':
+            raise ValueError(f'{self.name}: schemes only means something for kind="url"')
         if (self.writable or self.parent_writable) and self.kind != 'path':
             raise ValueError(f'{self.name}: writability only means something for kind="path"')
         if self.writable and self.parent_writable:
@@ -134,7 +140,9 @@ KNOWN: dict[str, dict[str, Option]] = {
         # that itself, which is why neither is required here on its own.
         Option('manifest', 'url'),
         Option('manifest_command', 'command'),
-        Option('preload_bundle_url', 'url'),
+        # No file:// here, unlike the manifest: bundles are fetched with
+        # a plain requests get(), and requests has no file:// adapter.
+        Option('preload_bundle_url', 'url', schemes=('http', 'https')),
     ),
     'pull': _opts(
         Option('projectslist', 'path', default='', parent_writable=True),
