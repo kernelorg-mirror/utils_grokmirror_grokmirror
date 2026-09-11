@@ -44,6 +44,8 @@ from packaging import version
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from grokmirror import configopts
+
 # Anything that names a path: a str, or a Path, or anything else with a
 # __fspath__. Parameters that take a path accept all of them and normalize
 # internally, so callers never have to str() a Path on the way in.
@@ -1411,25 +1413,6 @@ def write_manifest(manifile: StrPath, manifest: Manifest, mtime: int | None = No
             tmpfile.unlink()
 
 
-# Every boolean option grokmirror reads, as (section, option). Checked once
-# by load_config_file(), so a value that is neither true nor false is reported
-# before the command does any work -- several of these are read from inside a
-# worker thread, where an exception is a traceback in a cron mailbox and not
-# an answer. [fsck]precious is deliberately absent: it has three values
-# (always/yes/no), not two.
-BOOL_OPTIONS = (
-    ('core', 'objstore_uses_plumbing'),
-    ('manifest', 'pretty'),
-    ('manifest', 'check_export_ok'),
-    ('manifest', 'fetch_objstore'),
-    ('pull', 'purge'),
-    ('pull', 'projectslist_symlinks'),
-    ('fsck', 'repack'),
-    ('fsck', 'commitgraph'),
-    ('fsck', 'prune'),
-)
-
-
 class GrokConfigParser(ConfigParser):
     # Carries the config file's mtime, so we can notice when it changes
     last_modified: int = 0
@@ -1466,9 +1449,12 @@ class GrokConfigParser(ConfigParser):
         The config file is shared by all the commands, so this checks the lot
         regardless of which one is running: a mirror admin fixing a typo wants
         to hear about it the first time any command reads the file, not on
-        whichever future day they happen to run grok-fsck.
+        whichever future day they happen to run grok-fsck. It also has to
+        happen here, before any work starts, because several of these options
+        are read from inside a worker thread, where an exception is a
+        traceback in a cron mailbox rather than an answer.
         """
-        for section, option in BOOL_OPTIONS:
+        for section, option in configopts.options_of_kind('bool'):
             self.get_bool(section, option, fallback=False)
 
 

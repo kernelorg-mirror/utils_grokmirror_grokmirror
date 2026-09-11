@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from grokmirror import configopts
+
 from support import GrokTree
 
 
@@ -99,21 +101,11 @@ def test_fsck_rejects_an_unparseable_boolean(tree: GrokTree) -> None:
     assert 'sometimes' in out
 
 
-# Every boolean option, and the command that would act on it. A typo in any of
-# them used to surface as a ValueError -- from inside a worker thread, in
-# several cases -- which is a traceback in a cron mailbox rather than an
-# answer.
-BOOL_OPTIONS = [
-    ('core', 'objstore_uses_plumbing'),
-    ('manifest', 'pretty'),
-    ('manifest', 'check_export_ok'),
-    ('manifest', 'fetch_objstore'),
-    ('pull', 'purge'),
-    ('pull', 'projectslist_symlinks'),
-    ('fsck', 'repack'),
-    ('fsck', 'commitgraph'),
-    ('fsck', 'prune'),
-]
+# Every boolean option, taken from the registry rather than listed again
+# here, so that adding one covers it automatically. A typo in any of them
+# used to surface as a ValueError -- from inside a worker thread, in several
+# cases -- which is a traceback in a cron mailbox rather than an answer.
+BOOL_OPTIONS = list(configopts.options_of_kind('bool'))
 
 
 @pytest.mark.parametrize(('section', 'option'), BOOL_OPTIONS)
