@@ -11,6 +11,8 @@ but the object -- because something upstream is going to parse it.
 from __future__ import annotations
 
 import json
+import subprocess
+from pathlib import Path
 from typing import Any
 
 from support import GrokTree
@@ -185,3 +187,69 @@ def test_the_same_refusal_applies_to_the_other_commands(tree: GrokTree) -> None:
     assert '--config-check' in tree.run_fsck('--json', expect=2).stderr
     res = tree.run('grok-manifest', '-m', str(tree.manifest), '-t', str(tree.toplevel), '--json', expect=2)
     assert '--config-check' in res.stderr
+
+
+# -- the sample config, and the promise that nothing is written --------------
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SAMPLE_CONF = REPO_ROOT / 'grokmirror.conf'
+
+
+def sample_config(tree: GrokTree) -> Path:
+    """The shipped grokmirror.conf, pointed at a toplevel that exists.
+
+    Everything else in the file interpolates from ${toplevel}, so moving
+    that one line is enough to make the sample checkable here.
+    """
+    text = SAMPLE_CONF.read_text(encoding='utf-8')
+    moved = text.replace('toplevel = /var/lib/git/mirror', f'toplevel = {tree.toplevel}', 1)
+    assert moved != text, 'grokmirror.conf no longer sets toplevel the way this test expects'
+    cfgfile = tree.root / 'sample.conf'
+    cfgfile.write_text(moved, encoding='utf-8')
+    return cfgfile
+
+
+def check_all(tree: GrokTree, cfgfile: Path) -> list[subprocess.CompletedProcess[str]]:
+    """Check one config file with all three commands that can check one.
+
+    The run_* helpers write this tree's own config file when it is missing,
+    which is one write too many for a test about writing nothing, so these
+    go through run() directly.
+    """
+    return [
+        tree.run('grok-pull', '--config-check', '--no-network', '-c', str(cfgfile)),
+        tree.run('grok-fsck', '--config-check', '--no-network', '-c', str(cfgfile)),
+        tree.run('grok-manifest', '--config-check', '--no-network', '--cfgfile', str(cfgfile)),
+    ]
+
+
+def test_the_shipped_sample_config_passes_its_own_check(tree: GrokTree) -> None:
+    # The sample config is what everybody starts from, so a check that
+    # complains about it is either wrong or the sample is. Either way it is
+    # our bug and not the reader's.
+    cfgfile = sample_config(tree)
+    for res in check_all(tree, cfgfile):
+        assert 'nothing to report' in res.stdout
+
+
+def snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    """Every path under root, with its size and mtime in nanoseconds."""
+    found = {}
+    for path in sorted(root.rglob('*')):
+        st = path.lstat()
+        found[str(path.relative_to(root))] = (st.st_size, st.st_mtime_ns)
+    return found
+
+
+def test_checking_writes_nothing_at_all(tree: GrokTree) -> None:
+    # "It only reads" is the promise that makes it safe to run this against
+    # a live mirror, so pin it by comparing the whole tree rather than by
+    # trusting that no writing code got called.
+    tree.add_repo('test/repo.git', 'one')
+    tree.run_manifest('-m', str(tree.manifest), '-t', str(tree.toplevel))
+    cfgfile = sample_config(tree)
+
+    before = snapshot(tree.root)
+    check_all(tree, cfgfile)
+    assert snapshot(tree.root) == before

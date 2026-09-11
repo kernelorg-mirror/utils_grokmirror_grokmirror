@@ -1,6 +1,17 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- New ``--config-check`` flag for grok-pull, grok-fsck and grok-manifest.
+  It reads the config file, reports every problem it can find and exits
+  without doing anything else: a misspelled option name, a value that is
+  not the shape the option wants, a directory that is not writable by
+  the user running the check, a hook that does not exist or is not
+  executable, a glob list that matches nothing in the local manifest,
+  and -- for grok-pull -- a manifest URL the remote site will not answer
+  for. Each command answers only for the sections it reads, errors exit
+  1 and warnings exit 0, ``--no-network`` skips the checks that contact
+  the remote site, and ``--json`` writes the same report as a JSON
+  object
 - grok-fsck now fingerprints every repository on every run and compares
   the result with the manifest, reporting the ones that disagree. A
   repository git cannot fingerprint at all -- a damaged ref file makes

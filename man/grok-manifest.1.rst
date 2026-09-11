@@ -54,11 +54,55 @@ OPTIONS
                         multiple times, accepts shell-style globbing)
   -o, --fetch-objstore  Fetch updates into objstore repo (if used)
   -v, --verbose         Be verbose and tell us what you are doing
+  --config-check        Check the configuration file and exit, reporting
+                        every problem found
+  --json                With --config-check, write the report as a JSON
+                        object instead of text
+  --no-network          With --config-check, skip the checks that contact
+                        the remote site
 
 You can set some of these options in a config file that you can pass via
 ``--cfgfile`` option. See example grokmirror.conf file for
 documentation. Values passed via cmdline flags will override the
 corresponding config file values.
+
+CHECKING THE CONFIGURATION
+--------------------------
+Running with ``--config-check`` reads the configuration file, reports
+every problem it can find, and exits without doing anything else. The
+check writes nothing at all: no repository is touched, no manifest is
+written, not even a log file is opened.
+
+Grok-manifest answers for the ``[core]`` and ``[manifest]`` sections,
+and needs ``--cfgfile`` to say which file to check, since every other
+option it takes comes from the command line. Options that belong to
+another command are left alone, so if the same file also configures
+grok-pull or grok-fsck, run their checks against it too.
+
+None of the options grok-manifest checks name a remote site, so
+``--no-network`` is accepted here but has nothing to skip. It is
+grok-pull that has remote URLs to probe.
+
+Problems are reported as either errors or warnings. An error is
+something that will stop the command from working, such as a missing
+``[core] toplevel``, an option name that is not spelled the way
+grokmirror spells it, or a directory that cannot be written to. A
+warning is something that looks wrong but may well be deliberate, such
+as a glob that matches none of the repositories you are currently
+mirroring. The command exits with 1 when there was at least one error
+and with 0 otherwise, so warnings never fail the check.
+
+Whether a path is writable is a question about a user, and it is
+answered for the user running the check. If the command runs from
+cron or from a systemd unit as some other user, run the check as that
+user as well, or it will cheerfully tell you a directory is writable
+when it is not. Every report about a path names the user it was
+checked as, and the summary ends with a line saying who that was.
+
+With ``--json``, the same report is written as a single JSON object
+instead of as text, with a ``diagnostics`` list and a ``summary``
+giving the number of errors and warnings. The exit code is the same
+either way, so scripts can use whichever is easier to read.
 
 EXAMPLES
 --------

@@ -51,6 +51,50 @@ OPTIONS
                         Location of the configuration file
   -p, --purge           Remove any git trees that are no longer in manifest.
   --force-purge         Force purge operation despite significant repo deletions
+  --config-check        Check the configuration file and exit, reporting
+                        every problem found
+  --json                With --config-check, write the report as a JSON
+                        object instead of text
+  --no-network          With --config-check, skip the checks that contact
+                        the remote site
+
+CHECKING THE CONFIGURATION
+--------------------------
+Running with ``--config-check`` reads the configuration file, reports
+every problem it can find, and exits without doing anything else. The
+check writes nothing at all: no repository is touched, no manifest is
+written, not even a log file is opened.
+
+Grok-pull answers for the ``[core]``, ``[remote]`` and ``[pull]``
+sections. Options that belong to another command are left alone, so if
+the same file also configures grok-fsck, run ``grok-fsck
+--config-check`` against it too.
+
+Some of the checks contact the remote site, to see whether the manifest
+URL answers at all. Pass ``--no-network`` to skip those, which is what
+you want when checking a configuration on a host that cannot reach the
+primary yet.
+
+Problems are reported as either errors or warnings. An error is
+something that will stop the command from working, such as a missing
+``[core] toplevel``, an option name that is not spelled the way
+grokmirror spells it, or a directory that cannot be written to. A
+warning is something that looks wrong but may well be deliberate, such
+as a glob that matches none of the repositories you are currently
+mirroring. The command exits with 1 when there was at least one error
+and with 0 otherwise, so warnings never fail the check.
+
+Whether a path is writable is a question about a user, and it is
+answered for the user running the check. If the command runs from
+cron or from a systemd unit as some other user, run the check as that
+user as well, or it will cheerfully tell you a directory is writable
+when it is not. Every report about a path names the user it was
+checked as, and the summary ends with a line saying who that was.
+
+With ``--json``, the same report is written as a single JSON object
+instead of as text, with a ``diagnostics`` list and a ``summary``
+giving the number of errors and warnings. The exit code is the same
+either way, so scripts can use whichever is easier to read.
 
 EXAMPLES
 --------
