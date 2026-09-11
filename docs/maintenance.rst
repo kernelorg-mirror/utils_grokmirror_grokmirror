@@ -199,6 +199,11 @@ Other Tools
     Generates ``clone.bundle`` files in the layout Android's ``repo`` tool
     expects, so that clones can be offloaded to a CDN.
 
+``grok-shallow-tar``
+    Publishes shallow, single-branch clones as tarballs, so a CI system
+    can fetch one off a CDN instead of making the server build the same
+    ``--depth=1`` pack for every job it runs.
+
 ``grok-pi-piper``
     Pipes new messages from mirrored public-inbox archives into a command,
     such as procmail. It can also configure the archives as shallow and

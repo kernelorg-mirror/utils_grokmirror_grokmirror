@@ -1,6 +1,19 @@
 v3.0 (TBD)
 ----------
 - Require Python 3.9 or newer
+- New ``grok-shallow-tar`` command, which publishes shallow single-branch
+  repositories as tarballs so a CI swarm can pull them off a CDN instead
+  of making the server build an identical ``--depth=1`` pack for every
+  job. Each ``--branches REPOGLOB:BRANCHGLOB`` switch names repositories
+  and the branches of them to publish; nothing is published unless a
+  pattern asks for it. The tarball goes out under a dated name carrying
+  the abbreviated branch tip, beside a JSON sidecar with the size and
+  SHA-256 and a ``latest`` symlink, and the previous tarball is kept for
+  one cycle so a node that read ``latest`` from one frontend can still
+  fetch it from another. The clone inside is single-branch and tagless,
+  and its origin is the public URL built from ``--clone-url-base``, so
+  the node's first ``git remote update`` asks about exactly one ref. See
+  grok-shallow-tar(1)
 - New ``--config-check`` flag for grok-pull, grok-fsck and grok-manifest.
   It reads the config file, reports every problem it can find and exits
   without doing anything else: a misspelled option name, a value that is

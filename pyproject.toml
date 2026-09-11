@@ -42,6 +42,7 @@ grok-manifest = "grokmirror.manifest:command"
 grok-pi-indexer = "grokmirror.pi_indexer:command"
 grok-pi-piper = "grokmirror.pi_piper:command"
 grok-pull = "grokmirror.pull:command"
+grok-shallow-tar = "grokmirror.shallowtar:command"
 
 [dependency-groups]
 dev = [

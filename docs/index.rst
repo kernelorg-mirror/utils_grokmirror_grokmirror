@@ -106,6 +106,7 @@ The tools
 ``grok-pull``                 Clone and update repositories (replica side)
 ``grok-fsck``                 Repack, fsck, and manage object storage
 ``grok-bundle``               Generate ``clone.bundle`` files for Android's ``repo``
+``grok-shallow-tar``          Publish shallow single-branch repositories as tarballs
 ``grok-dumb-pull``            Update repositories that grokmirror does not manage
 ``grok-pi-piper``             Pipe new public-inbox messages into a command
 ``grok-pi-indexer``           Index mirrored public-inbox repositories

@@ -495,6 +495,13 @@ class GrokTree:
         outdir = self.root / 'bundles'
         return self.run('grok-bundle', '-c', str(self.cfgfile), '-o', str(outdir), *args, **kwargs)
 
+    def run_shallow_tar(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """grok-shallow-tar with this tree's config file, writing into shallow/."""
+        if not self.cfgfile.exists():
+            self.write_config()
+        outdir = self.root / 'shallow'
+        return self.run('grok-shallow-tar', '-c', str(self.cfgfile), '-o', str(outdir), *args, **kwargs)
+
     def run_fsck(self, *args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         """grok-fsck with this tree's config file."""
         if not self.cfgfile.exists():

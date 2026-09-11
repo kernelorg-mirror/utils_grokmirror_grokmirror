@@ -25,6 +25,7 @@ MODULES = [
     'grokmirror.pi_indexer',
     'grokmirror.pi_piper',
     'grokmirror.pull',
+    'grokmirror.shallowtar',
 ]
 
 SCRIPTS = [
@@ -35,6 +36,7 @@ SCRIPTS = [
     'grok-pi-indexer',
     'grok-pi-piper',
     'grok-pull',
+    'grok-shallow-tar',
 ]
 
 

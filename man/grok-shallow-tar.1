@@ -1,0 +1,255 @@
+.\" Man page generated from reStructuredText
+.\" by the Docutils 0.23 manpage writer.
+.
+.
+.nr rst2man-indent-level 0
+.
+.de1 rstReportMargin
+\\$1 \\n[an-margin]
+level \\n[rst2man-indent-level]
+level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
+-
+\\n[rst2man-indent0]
+\\n[rst2man-indent1]
+\\n[rst2man-indent2]
+..
+.de1 INDENT
+.\" .rstReportMargin pre:
+. RS \\$1
+. nr rst2man-indent\\n[rst2man-indent-level] \\n[an-margin]
+. nr rst2man-indent-level +1
+.\" .rstReportMargin post:
+..
+.de UNINDENT
+. RE
+.\" indent \\n[an-margin]
+.\" old: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.nr rst2man-indent-level -1
+.\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
+.in \\n[rst2man-indent\\n[rst2man-indent-level]]u
+..
+.TH "GROK-SHALLOW-TAR" "1" "2026-09-11" "2.0.0"
+.SH Name
+GROK-SHALLOW-TAR \- Publish shallow single-branch repos as tarballs
+.SH SYNOPSIS
+.INDENT 0.0
+.INDENT 3.5
+grok\-shallow\-tar [options] \-c grokmirror.conf \-o path \-\-clone\-url\-base url \-\-branches repoglob:branchglob
+.UNINDENT
+.UNINDENT
+.SH DESCRIPTION
+.sp
+A CI system that starts every job with \fBgit clone \-\-depth=1\fP makes the
+server do real work for each one: \fBgit\-upload\-pack\fP has to walk the
+history and build a pack, and it does that again for every job in the
+swarm. The result is identical every time, so it may as well be made once.
+.sp
+grok\-shallow\-tar makes it once. For each branch you name, it produces a
+shallow, single\-branch clone and writes it out as a tarball next to a small
+JSON file describing it. The tarballs are ordinary files, so you can put
+them behind a CDN and let CI nodes fetch them over HTTP instead of asking
+git for a pack.
+.sp
+The clone inside the tarball is not just history\-trimmed, it is also
+single\-branch and tagless: the clone is made with \fB\-\-no\-tags\fP, so no tag
+ships inside the archive even when one sits on the branch tip, and
+\fBremote.origin.tagOpt = \-\-no\-tags\fP is set so it stays that way. When a node
+untars it and runs \fBgit remote update\fP, it asks the origin about exactly
+one ref and does not drag in thousands of tags.
+.sp
+Publication is opt\-in. A repository that no \fB\-\-branches\fP pattern names
+produces nothing at all \-\- these artifacts are hundreds of megabytes each,
+and a default of \(dqeverything in the manifest\(dq would be a surprising way to
+fill a disk.
+.SH OPTIONS
+.INDENT 0.0
+.INDENT 3.5
+.INDENT 0.0
+.TP
+.B  \-h\fP,\fB  \-\-help
+show this help message and exit
+.TP
+.B  \-v\fP,\fB  \-\-verbose
+Be verbose and tell us what you are doing (default: False)
+.TP
+.BI \-c \ CONFIG\fR,\fB \ \-\-config \ CONFIG
+Location of the configuration file
+.TP
+.BI \-o \ OUTDIR\fR,\fB \ \-\-outdir \ OUTDIR
+Location where to publish the tarballs
+.TP
+.BI \-\-branches \ <REPOGLOB:BRANCHGLOB>
+Publish these branches of these repositories (repeat
+for more)
+.TP
+.BI \-\-clone\-url\-base \ URL
+Public site the tarballs should fetch from, e.g.
+\%<https://\:git\:.kernel\:.org>
+.TP
+.BI \-\-depth \ DEPTH
+How many commits of history to put in the tarball
+(default: 1)
+.TP
+.BI \-\-max\-ref\-age \ DAYS
+Publish only branches whose tip is newer than this
+(0 disables) (default: 0)
+.TP
+.BI \-\-max\-branches \ NUM
+Publish at most this many branches per repository,
+newest first (0 disables) (default: 0)
+.TP
+.B  \-\-version
+show program\(aqs version number and exit
+.UNINDENT
+.UNINDENT
+.UNINDENT
+.SH CHOOSING WHAT TO PUBLISH
+.sp
+\fB\-\-branches\fP takes two shell globs joined by a colon: which repositories,
+and which of their branches. It may be given more than once, and every
+pattern that names a repository contributes its branches, so one repository
+can be published from two switches. The repository glob is matched against
+the manifest key with or without its leading slash, whichever you find
+easier to type.
+.sp
+The colon that separates the halves is the \fIlast\fP one in the argument.
+That is not arbitrary: git refuses to create a branch whose name contains a
+colon, so the branch glob can never have one, while a repository path
+perfectly well can.
+.sp
+Branch names are globbed rather than listed because on a tree like the
+kernel\(aqs stable repository, branches are born and retired constantly and a
+hand\-maintained list would rot within a release. \fB\-\-max\-ref\-age\fP then
+takes care of the retirement end: a stable branch that has reached
+end\-of\-life simply stops receiving commits, so an age limit drops it without
+anybody having to notice. \fB\-\-max\-branches\fP is the belt to that suspenders,
+capping how many branches a single repository may publish, keeping the ones
+whose tips are newest.
+.sp
+A branch name may contain a slash, which a filename may not, so \fB/\fP becomes
+\fB\-\fP in the published name. That is not injective: \fBfor\-next/core\fP and a
+branch literally named \fBfor\-next\-core\fP want the same filename. When that
+happens, \fIneither\fP is published and the collision is logged at CRITICAL.
+Letting one of them win would publish a tarball whose contents depend on the
+order git happened to list refs in, which looks exactly like success.
+.SH WHAT GETS PUBLISHED
+.sp
+Under \fB\-\-outdir\fP, in a directory tree mirroring the manifest path, each
+branch produces four names. For \fB/pub/scm/linux/kernel/git/stable/linux.git\fP
+branch \fBlinux\-6.18.y\fP:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.EX
+pub/scm/linux/kernel/git/stable/
+    linux.linux\-6.18.y.shallow.20260911.a1b2c3d.tar
+    linux.linux\-6.18.y.shallow.20260911.a1b2c3d.tar.json
+    linux.linux\-6.18.y.shallow.latest.tar      \-> the dated tarball
+    linux.linux\-6.18.y.shallow.latest.tar.json \-> the dated sidecar
+.EE
+.UNINDENT
+.UNINDENT
+.sp
+The date is UTC, and the seven hex digits are the abbreviated branch tip.
+That last part is doing real work: a depth\-1 single\-branch tarball is
+entirely determined by its tip, so the name does not merely identify the
+file, it names the commit inside it. It is also how the tool knows whether
+there is anything to do \-\- if a tarball for the current tip is already on
+disk, the run generates nothing. There is no state file to lose or corrupt;
+the directory listing \fIis\fP the state.
+.sp
+The \fB\&.json\fP sidecar carries the repository, the branch, the full tip, the
+creation time, the depth, the size and the SHA\-256 of the tarball beside it.
+.sp
+Two dated tarballs are kept per branch, the current one and the one before
+it. Deleting the old one in the same run that publishes the new one would
+leave a window that CI falls into: a node reads \fBlatest\fP from a frontend
+that has synced and then asks for that dated file from one that has not, and
+a 404 lands in the middle of somebody\(aqs build. One cycle of overlap closes
+it.
+.sp
+Every file reaches its final name by \fBrename(2)\fP from a temporary name in
+the same directory, tarballs and symlinks alike, so a reader arriving
+mid\-write sees either the whole thing or the previous one, never a truncated
+tarball.
+.SH USING A TARBALL FROM CI
+.sp
+The tarball unpacks into a directory named after the repository, containing
+a normal (non\-bare) working tree with its \fB\&.git\fP\&. Nothing is checked out
+yet, which is deliberate: the checkout is the part your job wants to control.
+.sp
+A job that wants a specific commit does:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.EX
+curl \-sSfL https://cdn.example.org/shallow/pub/scm/linux/kernel/git/stable/linux.linux\-6.18.y.shallow.latest.tar | tar \-x
+cd linux
+git remote update
+git checkout \(dq$WANTED_SHA\(dq
+.EE
+.UNINDENT
+.UNINDENT
+.sp
+\fBgit remote update\fP talks to \fB\-\-clone\-url\-base\fP plus the repository path,
+which is a public URL and not the path on the host that built the tarball.
+Because the clone is single\-branch and tagless, that fetch asks about one
+ref and transfers only the commits made since the tarball was cut \-\- which is
+the whole point, and the reason a slightly stale tarball costs almost
+nothing.
+.sp
+If your job needs the tarball to be exactly reproducible, or wants to pin
+what it is running against, fetch the dated name rather than \fBlatest\fP and
+verify it against the \fBsha256\fP in the sidecar.
+.SH DEPLOYMENT NOTES
+.sp
+Publish to a directory on a single filesystem. The atomic\-rename guarantee
+above is a same\-filesystem property; if \fB\-\-outdir\fP straddles a mount point
+the rename becomes a copy and the guarantee goes with it.
+.sp
+When syncing the output to frontends, do \fBnot\fP use \fBrsync \-\-inplace\fP\&.
+Inplace transfer rewrites the file readers are currently downloading, which
+undoes the whole scheme. Plain rsync writes a temporary and renames, which is
+what you want. \fB\-\-delete\fP is fine and is how pruning reaches the frontends.
+.sp
+Run one grok\-shallow\-tar at a time against a given output directory. It takes
+no locks \-\- two runs sharing \fB\-o\fP will prune each other\(aqs work. Running
+alongside grok\-pull(1) or grok\-fsck(1) is fine: the repositories are only
+read, and a clone that loses a race with a repack fails, logs, and is simply
+made again on the next run.
+.sp
+Expect the run to need temporary space: each branch is cloned into a
+temporary directory under \fB\-\-outdir\fP before being packed, and that
+directory is removed afterwards whether or not the branch succeeded. One
+branch failing \-\- running out of disk, say \-\- skips that branch and lets the
+rest of the run continue, but the exit code is still non\-zero, so cron will
+tell you.
+.SH EXAMPLES
+.INDENT 0.0
+.INDENT 3.5
+grok\-shallow\-tar \-c grokmirror.conf \-o /var/www/shallow \-\-clone\-url\-base \%<https://\:git\:.kernel\:.org> \-\-branches \(aq/pub/scm/linux/kernel/git/stable/linux.git:linux\-*.y\(aq \-\-max\-ref\-age 365 \-\-max\-branches 12
+.sp
+grok\-shallow\-tar \-c grokmirror.conf \-o /var/www/shallow \-\-clone\-url\-base \%<https://\:git\:.kernel\:.org> \-\-branches \(aq/pub/scm/linux/kernel/git/torvalds/linux.git:master\(aq \-\-branches \(aq/pub/scm/linux/kernel/git/next/linux\-next.git:master\(aq \-\-depth 50
+.UNINDENT
+.UNINDENT
+.SH SEE ALSO
+.INDENT 0.0
+.IP \(bu 2
+grok\-pull(1)
+.IP \(bu 2
+grok\-manifest(1)
+.IP \(bu 2
+grok\-bundle(1)
+.IP \(bu 2
+git(1)
+.UNINDENT
+.SH SUPPORT
+.sp
+Email \%<tools@\:linux\:.kernel\:.org>\&.
+.SH Author
+mricon@kernel.org
+
+License: GPLv3+
+.SH Copyright
+The Linux Foundation and contributors
+.\" End of generated man page.

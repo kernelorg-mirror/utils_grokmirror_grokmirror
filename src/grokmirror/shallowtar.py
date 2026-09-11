@@ -24,15 +24,20 @@ one ref.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import logging
 import shutil
+import sys
 import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 import grokmirror
 
@@ -121,7 +126,7 @@ def check_collisions(branches: list[Branch]) -> list[Branch]:
 
 def select_branches(
     fullpath: grokmirror.StrPath,
-    pattern: str,
+    pattern: str | Sequence[str],
     now: int,
     maxrefage: int = 0,
     maxbranches: int = 0,
@@ -135,6 +140,11 @@ def select_branches(
     nobody maintains any more, since an end-of-life stable branch simply
     stops receiving commits. A maxrefage of 0 keeps every branch, and a
     maxbranches of 0 publishes as many as match.
+
+    Several patterns may be passed, for a repository that more than one
+    --branches switch names. They are matched as one set rather than one at a
+    time, so the cap and the collision check both see every branch the
+    repository is going to publish.
 
     The cap is applied before the collision check on purpose: a branch that
     did not make the cut is not being published, so it cannot collide with
@@ -151,7 +161,7 @@ def select_branches(
         logger.info('  could not list branches in %s: %s', fullpath, err.strip())
         return []
 
-    matches = grokmirror.compile_globs([pattern])
+    matches = grokmirror.compile_globs([pattern] if isinstance(pattern, str) else pattern)
     dated: list[tuple[int, Branch]] = []
     for line in out.splitlines():
         stamp, _sep, rest = line.partition(' ')
@@ -526,3 +536,195 @@ def publish_branch(
     update_latest_links(artifact)
     prune_tarballs(artifact)
     return True
+
+
+class Pattern(NamedTuple):
+    """One --branches switch: which repositories, and which of their branches."""
+
+    repoglob: str
+    branchglob: str
+
+
+def parse_pattern(value: str) -> Pattern:
+    """Split a REPOGLOB:BRANCHGLOB argument.
+
+    The separator is the *last* colon, because the two halves are not equally
+    restricted: git-check-ref-format rejects a colon in a refname, so the
+    branch glob can never contain one, while a repository path perfectly well
+    can. Splitting on the first colon instead would cut such a path in half.
+    """
+    # rpartition puts the whole string in the tail when there is no colon at
+    # all, so an argument missing the separator arrives here as an empty
+    # repository glob and is caught by the same check as an empty half.
+    repoglob, _sep, branchglob = value.rpartition(':')
+    if not repoglob or not branchglob:
+        raise argparse.ArgumentTypeError(f'expected REPOGLOB:BRANCHGLOB, got "{value}"')
+    return Pattern(repoglob=repoglob, branchglob=branchglob)
+
+
+def match_patterns(repo: str, patterns: Sequence[Pattern]) -> list[str]:
+    """The branch globs that apply to one repository, in the order given.
+
+    Manifest keys are absolute ("/pub/scm/linux.git"), and a repository glob
+    is documented as accepting either spelling, so the leading slash comes off
+    both sides before matching rather than being required to agree.
+    """
+    globs = []
+    for pattern in patterns:
+        matcher = grokmirror.compile_globs([pattern.repoglob.lstrip('/')])
+        if matcher.match(repo.lstrip('/')):
+            globs.append(pattern.branchglob)
+    return globs
+
+
+def generate_tarballs(
+    config: grokmirror.GrokConfigParser,
+    outdir: str,
+    patterns: Sequence[Pattern],
+    cloneurlbase: str,
+    depth: int = 1,
+    maxrefage: int = 0,
+    maxbranches: int = 0,
+) -> int:
+    """Publish a tarball for every branch every --branches switch asked for.
+
+    Repositories are opt-in: one that no pattern names publishes nothing.
+    These artifacts are hundreds of megabytes each, so a default of "all of
+    them" would be a surprising way to fill a disk.
+    """
+    # Nothing here takes the repository lock, the same way grok-bundle does
+    # not: the repositories are only read, and a clone that loses a race with
+    # a repack fails and is simply made again on the next run.
+
+    # load_config_file() guarantees both of these are set
+    manifest = grokmirror.read_manifest(config['core']['manifest'])
+    toplevel = Path(config['core']['toplevel']).resolve()
+    outpath = Path(outdir)
+    now = int(time.time())
+    retval = 0
+
+    for repo in manifest:
+        globs = match_patterns(repo, patterns)
+        if not globs:
+            # Skipping here is an optimisation rather than the opt-in itself:
+            # an empty glob list already matches no branch. It saves a git
+            # invocation per repository, and on a full kernel.org manifest
+            # that is over a thousand of them.
+            logger.debug('%s matches no --branches pattern, skipping', repo)
+            continue
+
+        fullpath = grokmirror.gitdir_to_fullpath(toplevel, repo)
+        branches = select_branches(fullpath, globs, now, maxrefage=maxrefage, maxbranches=maxbranches)
+        if not branches:
+            logger.info('  skipped: %s (no branch matches)', repo)
+            continue
+
+        # The manifest key is a path under the site, so it appends cleanly.
+        cloneurl = cloneurlbase.rstrip('/') + repo
+        for branch in branches:
+            if not publish_branch(fullpath, outpath, repo, branch, cloneurl, now, depth=depth):
+                # Keep going: one repository out of room or mid-repack should
+                # not cost the rest of the run, but the exit code should still
+                # say the run was not clean, because cron reads that.
+                retval = 1
+
+    return retval
+
+
+def parse_args() -> argparse.Namespace:
+    # noinspection PyTypeChecker
+    op = argparse.ArgumentParser(
+        prog='grok-shallow-tar',
+        description='Publish shallow single-branch repositories as tarballs, for CI systems',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    op.add_argument(
+        '-v', '--verbose', action='store_true', default=False, help='Be verbose and tell us what you are doing'
+    )
+    op.add_argument('-c', '--config', required=True, help='Location of the configuration file')
+    op.add_argument('-o', '--outdir', required=True, help='Location where to publish the tarballs')
+    op.add_argument(
+        '--branches',
+        action='append',
+        type=parse_pattern,
+        required=True,
+        metavar='REPOGLOB:BRANCHGLOB',
+        help='Publish these branches of these repositories (repeat for more)',
+    )
+    op.add_argument(
+        '--clone-url-base',
+        required=True,
+        metavar='URL',
+        help='Public site the tarballs should fetch from, e.g. https://git.kernel.org',
+    )
+    op.add_argument('--depth', type=int, default=1, help='How many commits of history to put in the tarball')
+    op.add_argument(
+        '--max-ref-age',
+        type=int,
+        default=0,
+        metavar='DAYS',
+        help='Publish only branches whose tip is newer than this (0 disables)',
+    )
+    op.add_argument(
+        '--max-branches',
+        type=int,
+        default=0,
+        metavar='NUM',
+        help='Publish at most this many branches per repository, newest first (0 disables)',
+    )
+    op.add_argument('--version', action='version', version=grokmirror.VERSION)
+
+    return op.parse_args()
+
+
+def grok_shallow_tar(
+    cfgfile: str,
+    outdir: str,
+    patterns: Sequence[Pattern],
+    cloneurlbase: str,
+    verbose: bool = False,
+    depth: int = 1,
+    maxrefage: int = 0,
+    maxbranches: int = 0,
+) -> int:
+    config = grokmirror.load_config_file(cfgfile)
+
+    logfile = config['core'].get('log', None)
+    loglevel = logging.DEBUG if config['core'].get('loglevel', 'info') == 'debug' else logging.INFO
+
+    grokmirror.init_logger('shallow-tar', logfile, loglevel, verbose)
+
+    return generate_tarballs(
+        config,
+        outdir,
+        patterns,
+        cloneurlbase,
+        depth=depth,
+        maxrefage=maxrefage,
+        maxbranches=maxbranches,
+    )
+
+
+def command() -> None:
+    opts = parse_args()
+
+    try:
+        retval = grok_shallow_tar(
+            opts.config,
+            opts.outdir,
+            opts.branches,
+            opts.clone_url_base,
+            verbose=opts.verbose,
+            depth=opts.depth,
+            maxrefage=opts.max_ref_age,
+            maxbranches=opts.max_branches,
+        )
+    except grokmirror.GrokError as ex:
+        sys.stderr.write(f'ERROR: {ex}\n')
+        retval = 1
+
+    sys.exit(retval)
+
+
+if __name__ == '__main__':
+    command()
