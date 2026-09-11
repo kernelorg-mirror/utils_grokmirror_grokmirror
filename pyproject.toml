@@ -46,6 +46,10 @@ grok-pull = "grokmirror.pull:command"
 [dependency-groups]
 dev = [
     "build",
+    # rst2man, for man.sh. Pinned through uv.lock rather than by hand: which
+    # version renders the pages matters, because docutils changes its troff
+    # output between releases and an unpinned render would churn every page.
+    "docutils",
     # Only needed so the type checkers can see contrib/pubsubv1.py, which is an
     # optional listener frontend and not a grokmirror runtime dependency.
     "falcon",
