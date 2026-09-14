@@ -59,6 +59,11 @@ WORKDIR_PREFIX = '.shallowtar-'
 # How long a scratch directory has to have been sitting there before a later
 # run will clear it away.
 STALE_WORKDIR_AGE = SECONDS_IN_DAY
+# Inside .git/ of the published clone, beside git's own description. It goes
+# there rather than at the top of the tree because the top of the tree is the
+# repository's own content, and a file we invented appearing in "git status"
+# as untracked would be our noise in somebody else's working tree.
+README_NAME = 'shallow-tar.readme'
 
 
 class Branch(NamedTuple):
@@ -259,7 +264,115 @@ def verify_shallow(gitdir: Path, branch: Branch) -> bool:
     return True
 
 
-def prepare_clone(gitdir: Path, branch: Branch, cloneurl: str, now: int) -> bool:
+def describe_clone(branch: Branch, cloneurl: str, now: int, depth: int) -> str:
+    """The .git/description git would otherwise fill with a placeholder.
+
+    Generation data only, and a pointer at the longer file. A description is
+    a description -- gitweb shows its first line as a one-liner, and a reader
+    who opens it wants to know what the tree is, not to be taught how to use
+    it. The advice lives in README_NAME, which is free to be as long as it
+    needs to be because nothing else has designs on it.
+    """
+    created = time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(now))
+    name = cloneurl.rstrip('/').rpartition('/')[2]
+    commits = 'one commit' if depth == 1 else f'{depth} commits'
+    # A URL and a full object name are both long enough to wrap on their own,
+    # so they get their own lines rather than being written into prose.
+    return f"""Shallow single-branch clone of {name}, branch {branch.name}, {commits} deep.
+Origin: {cloneurl}
+Tip:    {branch.tip}
+Generated {created} by grok-shallow-tar {grokmirror.VERSION}.
+
+Read .git/{README_NAME} before running git commands in this tree.
+"""
+
+
+def clone_readme() -> str:
+    """The long-form file, for somebody who has found this tree and forgotten it.
+
+    The reader to picture is not a CI runner -- that one never reads anything.
+    It is a person who downloaded a tarball weeks ago, unpacked it, poked at
+    it, forgot, and has just found the directory again. Their questions are
+    "what is this", "is it safe", and "how do I use it", and every one of
+    those has an answer we know at generation time and they cannot easily work
+    out later.
+
+    The safety section is the part that earns the file. This tree came off the
+    network as a tarball, and a tarball can carry anything. grok-shallow-tar
+    ships nothing dangerous, but the reader cannot tell our tarball from one
+    tampered with in transit or on a mirror.
+
+    The advice is to discard .git/config rather than to clear .git/hooks,
+    because clearing the hooks is not sufficient and reads as though it were.
+    git treats that file as instructions: core.hooksPath relocates the hooks
+    the reader just deleted, core.fsmonitor names a program run during
+    ordinary commands -- including during the "git fsck" meant to check the
+    tree -- and core.sshCommand and remote.*.uploadpack run one on a fetch.
+    All three were confirmed to fire on an unpacked tarball under the earlier
+    "rm -f .git/hooks/*" advice. Deleting the whole file and letting git
+    rebuild a default one closes the entire class, and keeps the objects, the
+    refs and the shallow boundary.
+
+    What none of it establishes is that the history is genuine, so the last
+    paragraph is the one that matters: a full object ID verifies itself, and a
+    ref that came in the tarball does not.
+
+    Nothing here is interpolated. Everything specific to this particular
+    tarball -- origin, branch, tip, depth, when it was made -- lives in
+    describe_clone(), which is why this file can point at "description"
+    instead of repeating it.
+    """
+    return """What this is
+------------
+A shallow, single-branch clone, published as a tarball so that CI jobs can
+untar it directly and fetch any new commits. See "description" for details
+about how it was generated.
+
+Before you run any git commands
+-------------------------------
+This tree arrived over the network as a tarball. None of the usual git safety
+checks ran on it, so you should not blindly trust it to be safe.
+
+Most of the risk is in .git/config, which git reads as instructions rather
+than as data: core.hooksPath, core.fsmonitor, core.sshCommand and others name
+programs that ordinary commands will run. Clearing .git/hooks does not cover
+it. Throw the config away instead and let git write a clean one:
+
+  rm -rf .git/hooks .git/config .git/objects/info/alternates
+  git init
+  git remote add -t [branch] --no-tags origin [the URL you trust]
+  git fsck
+
+"git init" keeps the objects, the refs and the shallow boundary. Use a URL
+your own setup knows rather than the one that arrived in the tarball. The
+fsck then checks that every object is intact and is what its name says it is,
+which on a kernel-sized tree takes about ten seconds.
+
+Using it
+--------
+You should fetch any new commits:
+
+  git remote update
+
+Then, check out the commit you want:
+
+  git checkout [commit-id]
+
+Name that commit by its full object ID, from somewhere you trust. An object
+ID is checked against the object it names, so it is the one thing here a
+tampered tarball cannot answer wrongly; a branch or tag in the tarball is
+only whatever the tarball says it is.
+
+Do NOT run --deepen or --unshallow
+----------------------------------
+If you need the full history, clone a fresh copy from the origin in
+"description". Do not run "git fetch --unshallow" in this repository: it asks
+the server to build the whole history as a single pack, which is very heavy on
+the server side. A clean clone gets you a better repository anyway.
+"""
+
+
+def prepare_clone(gitdir: Path, branch: Branch, cloneurl: str, now: int, depth: int = 1) -> bool:
     """Turn a fresh local clone into something ready to hand to a CI system."""
     settings = [
         # The file:// URL it was cloned from is a path on the generating
@@ -289,6 +402,16 @@ def prepare_clone(gitdir: Path, branch: Branch, cloneurl: str, now: int) -> bool
     # point is to be the smallest useful thing.
     for sample in (gitdir / 'hooks').glob('*.sample'):
         sample.unlink()
+
+    # Two files rather than one: git's own description, which stays short
+    # because other things display it, and a readme beside it that can take
+    # the space the explanation needs. See describe_clone() and clone_readme().
+    try:
+        (gitdir / 'description').write_text(describe_clone(branch, cloneurl, now, depth))
+        (gitdir / README_NAME).write_text(clone_readme())
+    except OSError as ex:
+        logger.info('  failed: could not write the description (%s)', ex)
+        return False
     return True
 
 
@@ -359,7 +482,7 @@ def generate_tarball(
         gitdir = clonedir / '.git'
         if not verify_shallow(gitdir, branch):
             return False
-        if not prepare_clone(gitdir, branch, cloneurl, now):
+        if not prepare_clone(gitdir, branch, cloneurl, now, depth=depth):
             return False
         logger.info(' generate: %s', tarpath)
         try:

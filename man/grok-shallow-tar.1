@@ -185,11 +185,39 @@ A job that wants a specific commit does:
 .EX
 curl \-sSfL https://cdn.example.org/shallow/pub/scm/linux/kernel/git/stable/linux.linux\-6.18.y.shallow.latest.tar | tar \-x
 cd linux
+rm \-rf .git/hooks .git/config .git/objects/info/alternates
+git init \-q
+git remote add \-t linux\-6.18.y \-\-no\-tags origin https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+git fsck
 git remote update
 git checkout \(dq$WANTED_SHA\(dq
 .EE
 .UNINDENT
 .UNINDENT
+.sp
+The three lines after \fBcd\fP are there because the tree arrived over the
+network as an archive with none of the usual git checks applied to it, and
+\fB\&.git/config\fP is a file git reads as instructions rather than as data.
+\fBcore.hooksPath\fP relocates the hooks a job just deleted, \fBcore.fsmonitor\fP
+names a program run during ordinary commands \-\- including during the \fBgit
+fsck\fP meant to check the tree \-\- and \fBcore.sshCommand\fP and
+\fBremote.*.uploadpack\fP run one on a fetch. Deleting \fB\&.git/hooks\fP alone
+does not cover any of that. Deleting the config does, and \fBgit init\fP
+rebuilds a default one while keeping the objects, the refs and the shallow
+boundary; re\-add the remote with the branch and \fB\-\-no\-tags\fP so the narrow,
+tagless fetch this tool exists for survives the reset.
+.sp
+Give \fBgit remote add\fP the URL your own configuration knows. The origin
+baked into the tarball is a convenience for the reader, not a thing to trust:
+it is in the archive along with everything else.
+.sp
+The fsck verifies that every object is intact and is what its name says it
+is, which takes around ten seconds on a kernel\-sized tree. What it does not
+do is tell you the history is genuine \-\- a fabricated commit is a valid
+object. That assurance comes from naming the commit you want by its full
+object ID, from a source you trust, which is what \fB$WANTED_SHA\fP above is:
+an object ID is checked against the object it names, while a branch or tag
+inside the tarball is only whatever the tarball says it is.
 .sp
 \fBgit remote update\fP talks to \fB\-\-clone\-url\-base\fP plus the repository path,
 which is a public URL and not the path on the host that built the tarball.
@@ -201,6 +229,25 @@ nothing.
 If your job needs the tarball to be exactly reproducible, or wants to pin
 what it is running against, fetch the dated name rather than \fBlatest\fP and
 verify it against the \fBsha256\fP in the sidecar.
+.sp
+Do not run \fBgit fetch \-\-unshallow\fP on an unpacked tarball, and tell your
+users the same. It asks the server to build the entire history as a single
+pack, which is heavier than the shallow clones these tarballs were made to
+replace \-\- one job doing it undoes the saving of many. A job that genuinely
+needs full history should clone the repository normally instead.
+.sp
+Every unpacked tree carries two files saying so, for whoever finds the
+directory later with no memory of having downloaded it:
+.INDENT 0.0
+.TP
+.B \fB\&.git/description\fP
+Where the tree came from, which branch and commit it holds, and when it
+was generated, in four lines, plus a pointer at the file below.
+.TP
+.B \fB\&.git/shallow\-tar.readme\fP
+What the tree is, the same reset\-and\-fsck steps as above, how to bring it
+up to date, and why not to unshallow or deepen it.
+.UNINDENT
 .SH DEPLOYMENT NOTES
 .sp
 Publish to a directory on a single filesystem. The atomic\-rename guarantee

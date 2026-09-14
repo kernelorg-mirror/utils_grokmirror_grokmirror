@@ -13,7 +13,10 @@ v3.0 (TBD)
   fetch it from another. The clone inside is single-branch and tagless,
   and its origin is the public URL built from ``--clone-url-base``, so
   the node's first ``git remote update`` asks about exactly one ref. Each
-  run also sweeps up the scratch directories a killed run left behind. See
+  run also sweeps up the scratch directories a killed run left behind. An
+  unpacked tarball says what it is, in a ``.git/description`` recording
+  where it came from and a ``.git/shallow-tar.readme`` covering what to run
+  before trusting a tree that arrived over the network. See
   grok-shallow-tar(1)
 - New ``--config-check`` flag for grok-pull, grok-fsck and grok-manifest.
   It reads the config file, reports every problem it can find and exits

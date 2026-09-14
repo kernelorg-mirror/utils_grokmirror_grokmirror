@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from grokmirror import shallowtar
-from grokmirror.shallowtar import Branch, generate_tarball, select_branches, sweep_stale_workdirs
+from grokmirror.shallowtar import README_NAME, Branch, generate_tarball, select_branches, sweep_stale_workdirs
 
 from support import Source, git
 
@@ -115,6 +115,195 @@ def test_the_creation_time_is_stamped_where_a_human_can_find_it(origin_repo: Pat
     clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
     assert git('config', '--get', 'grokmirror.shallowCreated', cwd=clone).strip() == str(NOW)
     assert git('config', '--get', 'grokmirror.shallowBranch', cwd=clone).strip() == 'master'
+
+
+def prose(clone: Path) -> str:
+    """The readme with its line breaks collapsed away.
+
+    The file is hard-wrapped for the person reading it, and where the breaks
+    happen to fall is not something an assertion about its wording should be
+    hostage to -- rewrapping a paragraph must not fail a test about what it
+    says. Tests that care about structure read the file directly instead.
+    """
+    return ' '.join((clone / '.git' / README_NAME).read_text().split())
+
+
+def test_the_description_carries_the_generation_data(origin_repo: Path, tmp_path: Path) -> None:
+    """Where this tree came from, in the file whose job that is.
+
+    All of this is also in the config keys and the sidecar, but those need
+    tooling and the knowledge that they exist. This one needs cat(1).
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    description = (clone / '.git' / 'description').read_text()
+    assert PUBLIC_URL in description
+    assert 'master' in description
+    assert branch_of(origin_repo).tip in description
+    # The date a person reads, not the epoch seconds the config stamps.
+    assert '2025-09-11' in description
+    assert 'grok-shallow-tar' in description
+
+
+def test_the_description_stays_short_and_points_at_the_readme(origin_repo: Path, tmp_path: Path) -> None:
+    """A description is a description; the explaining happens next door.
+
+    The length is pinned rather than left to taste because the pressure is
+    all one way: every future "while we are here, we should also mention..."
+    lands in this file unless something objects.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    lines = (clone / '.git' / 'description').read_text().splitlines()
+    assert len(lines) <= 6
+    assert lines[0] == 'Shallow single-branch clone of linux.git, branch master, one commit deep.'
+    assert f'.git/{README_NAME}' in '\n'.join(lines)
+
+
+def test_the_description_records_the_depth_that_was_asked_for(origin_repo: Path, tmp_path: Path) -> None:
+    """Otherwise "why is this tree missing history" needs git to answer."""
+    clone = extract(build(origin_repo, tmp_path / 'out', depth=5), tmp_path / 'x')
+    assert '5 commits deep' in (clone / '.git' / 'description').read_text()
+
+
+def test_a_depth_of_one_reads_as_a_sentence_not_as_a_number(origin_repo: Path, tmp_path: Path) -> None:
+    """A stray "1 commits" in an artifact this many people unpack would grate."""
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    assert 'one commit deep' in (clone / '.git' / 'description').read_text()
+
+
+def test_the_description_replaces_the_one_git_wrote(origin_repo: Path, tmp_path: Path) -> None:
+    """git's placeholder tells that reader nothing, and shipping it is noise."""
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    assert 'Unnamed repository' not in (clone / '.git' / 'description').read_text()
+
+
+def test_both_files_stay_inside_eighty_columns(origin_repo: Path, tmp_path: Path) -> None:
+    """These are read in a terminal, and interpolation is what breaks wrapping.
+
+    Hand-wrapped prose stays wrapped; a URL or an object name dropped into the
+    middle of a sentence does not, and the paragraph only goes ragged for the
+    repositories whose names are long -- which on kernel.org is most of them.
+
+    So a long value does not exempt its line, it only excuses its own length:
+    with the value taken out, what is left has to be a label rather than a
+    sentence. Exempting the whole line would have made this test blind to the
+    one arrangement it exists to forbid.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    tip = branch_of(origin_repo).tip
+    for name in ('description', README_NAME):
+        for line in (clone / '.git' / name).read_text().splitlines():
+            rest = line.replace(PUBLIC_URL, '').replace(tip, '')
+            if rest == line:
+                assert len(line) <= 80, f'{name}: {line}'
+            else:
+                # A line carrying a long value may be as long as the value
+                # makes it, but what surrounds the value must be a label.
+                assert len(rest) <= 20, f'{name}: {line}'
+
+
+def test_the_readme_sends_the_reader_next_door_for_the_details(origin_repo: Path, tmp_path: Path) -> None:
+    """The two files point at each other, so either one is a way in.
+
+    Nothing about this particular tarball is repeated here -- origin, branch,
+    tip and depth are the description's job. That only works as long as the
+    readme says so; without the pointer, a reader who opens this file first
+    has no way of knowing the other one exists.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    readme = prose(clone)
+    assert '"description"' in readme
+    # And the facts really are only next door, not quietly duplicated here,
+    # where a future edit could leave them disagreeing with each other.
+    assert PUBLIC_URL not in readme
+    assert branch_of(origin_repo).tip not in readme
+
+
+def test_the_readme_says_to_discard_the_config_and_fsck_first(origin_repo: Path, tmp_path: Path) -> None:
+    """This tree came off the network, and .git/config is a list of programs.
+
+    We ship nothing dangerous, but the reader cannot tell our tarball from one
+    tampered with on a mirror or in transit. Clearing .git/hooks is the obvious
+    advice and it is not enough: core.hooksPath puts the hooks back. So the
+    config has to be named in the file, and so does the reason -- advice a
+    reader does not understand is advice they skip.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    readme = prose(clone)
+    assert 'rm -rf .git/hooks .git/config .git/objects/info/alternates' in readme
+    assert 'git init' in readme
+    assert 'git fsck' in readme
+    assert 'core.hooksPath' in readme
+    assert 'instructions rather than as data' in readme
+
+
+def test_the_readme_says_to_name_the_commit_by_object_id(origin_repo: Path, tmp_path: Path) -> None:
+    """An fsck proves the objects are intact, not that the history is genuine.
+
+    A fabricated commit is a perfectly valid object, and a branch that came in
+    the tarball points wherever the tarball says. The one check a tampered
+    tarball cannot answer wrongly is a full object ID from somewhere else, so
+    the file has to say to use one.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    readme = prose(clone)
+    assert 'full object ID' in readme
+
+
+def test_the_safety_advice_comes_before_the_usage_advice(origin_repo: Path, tmp_path: Path) -> None:
+    """Advice arriving after the command that needed it is decoration.
+
+    A reader skims until they find something to type. If "git remote update"
+    is above the config warning, that is what they run, and the warning may as
+    well not be in the file.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    readme = (clone / '.git' / README_NAME).read_text()
+    assert readme.index('rm -rf .git/hooks') < readme.index('git remote update')
+
+
+def test_the_readme_steers_away_from_unshallowing(origin_repo: Path, tmp_path: Path) -> None:
+    """The obvious next command is the one thing this tool exists to prevent.
+
+    "git fetch --unshallow" makes the server build the whole history as a
+    single pack -- worse than the depth-1 clones these tarballs replace, and
+    an artifact that suggested it would undo its own purpose at scale. So it
+    appears only as an instruction not to run it, and this test pins that the
+    two never drift apart into a bare recommendation again.
+
+    Read on the collapsed text rather than line by line, because "Do not" and
+    the command it forbids can perfectly well fall on either side of a line
+    break -- and did, the first time this file was hand-wrapped.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    readme = prose(clone)
+    assert 'clone a fresh copy' in readme
+    for flag in ('--unshallow', '--deepen'):
+        at = readme.find(flag)
+        # Not mentioning it at all would be fine as well. What must never
+        # happen is a mention that reads as advice, which is what this
+        # asserts: every one of them has a "not run" close in front of it.
+        while at >= 0:
+            assert 'not run' in readme[max(0, at - 40) : at].lower(), readme[max(0, at - 40) : at + 40]
+            at = readme.find(flag, at + 1)
+
+
+def test_the_readme_travels_inside_the_tarball(origin_repo: Path, tmp_path: Path) -> None:
+    """It is only useful if it is in the artifact, not just in the scratch clone."""
+    tarpath = build(origin_repo, tmp_path / 'out')
+    with tarfile.open(tarpath) as tar:
+        assert f'linux/.git/{README_NAME}' in tar.getnames()
+
+
+def test_the_readme_is_not_untracked_noise_in_the_working_tree(origin_repo: Path, tmp_path: Path) -> None:
+    """It lives in .git/, so checking the branch out leaves git status clean.
+
+    At the top of the tree it would be a file we invented showing up as
+    untracked in somebody else's repository, which is our mess in their
+    workspace.
+    """
+    clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
+    git('checkout', '-q', 'master', cwd=clone)
+    assert git('status', '--porcelain', cwd=clone).strip() == ''
 
 
 def test_no_sample_hooks_are_shipped(origin_repo: Path, tmp_path: Path) -> None:

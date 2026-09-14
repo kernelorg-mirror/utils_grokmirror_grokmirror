@@ -215,3 +215,48 @@ Other Tools
     to be called from the ``[pull]`` hooks, as shown earlier.
 
 Each has a man page with the full set of options.
+
+Consuming a shallow tarball
+===========================
+
+The consuming side is worth spelling out, because a tarball arrives over
+the network with none of the checks git normally applies to a clone. A job
+that wants a specific commit does:
+
+.. code-block:: bash
+
+   curl -sSfL https://cdn.example.org/shallow/pub/scm/linux/kernel/git/stable/linux.linux-6.18.y.shallow.latest.tar | tar -x
+   cd linux
+   rm -rf .git/hooks .git/config .git/objects/info/alternates
+   git init -q
+   git remote add -t linux-6.18.y --no-tags origin \
+       https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+   git fsck
+   git remote update
+   git checkout "$WANTED_SHA"
+
+Throwing away ``.git/config`` is the load-bearing step, and it is not the
+same as clearing the hooks. git reads that file as instructions rather than
+as data: ``core.hooksPath`` relocates the hooks the job just deleted,
+``core.fsmonitor`` names a program run during ordinary commands -- including
+during the ``git fsck`` meant to check the tree -- and ``core.sshCommand``
+and ``remote.*.uploadpack`` run one on a fetch. ``git init`` writes a clean
+config back while keeping the objects, the refs and the shallow boundary,
+so re-adding the remote with the branch and ``--no-tags`` is all it costs.
+
+Give ``git remote add`` a URL your own configuration knows. The origin
+baked into the tarball is a convenience, not a thing to trust -- it came in
+the archive along with everything else.
+
+The fsck proves every object is intact and is what its name says it is,
+which takes about ten seconds on a kernel-sized tree. It does not prove the
+history is genuine; a fabricated commit is a perfectly valid object. That
+part comes from naming the commit by its full object ID from a source you
+trust, which is what ``$WANTED_SHA`` is above. An object ID is checked
+against the object it names, while a branch or tag inside the tarball is
+only whatever the tarball says it is.
+
+Do not run ``git fetch --unshallow`` on an unpacked tarball. It asks the
+server to build the entire history as a single pack, which is heavier than
+the shallow clones these tarballs exist to replace. A job that genuinely
+needs full history should clone the repository normally.

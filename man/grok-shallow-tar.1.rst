@@ -137,8 +137,36 @@ A job that wants a specific commit does::
 
     curl -sSfL https://cdn.example.org/shallow/pub/scm/linux/kernel/git/stable/linux.linux-6.18.y.shallow.latest.tar | tar -x
     cd linux
+    rm -rf .git/hooks .git/config .git/objects/info/alternates
+    git init -q
+    git remote add -t linux-6.18.y --no-tags origin https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+    git fsck
     git remote update
     git checkout "$WANTED_SHA"
+
+The three lines after ``cd`` are there because the tree arrived over the
+network as an archive with none of the usual git checks applied to it, and
+``.git/config`` is a file git reads as instructions rather than as data.
+``core.hooksPath`` relocates the hooks a job just deleted, ``core.fsmonitor``
+names a program run during ordinary commands -- including during the ``git
+fsck`` meant to check the tree -- and ``core.sshCommand`` and
+``remote.*.uploadpack`` run one on a fetch. Deleting ``.git/hooks`` alone
+does not cover any of that. Deleting the config does, and ``git init``
+rebuilds a default one while keeping the objects, the refs and the shallow
+boundary; re-add the remote with the branch and ``--no-tags`` so the narrow,
+tagless fetch this tool exists for survives the reset.
+
+Give ``git remote add`` the URL your own configuration knows. The origin
+baked into the tarball is a convenience for the reader, not a thing to trust:
+it is in the archive along with everything else.
+
+The fsck verifies that every object is intact and is what its name says it
+is, which takes around ten seconds on a kernel-sized tree. What it does not
+do is tell you the history is genuine -- a fabricated commit is a valid
+object. That assurance comes from naming the commit you want by its full
+object ID, from a source you trust, which is what ``$WANTED_SHA`` above is:
+an object ID is checked against the object it names, while a branch or tag
+inside the tarball is only whatever the tarball says it is.
 
 ``git remote update`` talks to ``--clone-url-base`` plus the repository path,
 which is a public URL and not the path on the host that built the tarball.
@@ -150,6 +178,23 @@ nothing.
 If your job needs the tarball to be exactly reproducible, or wants to pin
 what it is running against, fetch the dated name rather than ``latest`` and
 verify it against the ``sha256`` in the sidecar.
+
+Do not run ``git fetch --unshallow`` on an unpacked tarball, and tell your
+users the same. It asks the server to build the entire history as a single
+pack, which is heavier than the shallow clones these tarballs were made to
+replace -- one job doing it undoes the saving of many. A job that genuinely
+needs full history should clone the repository normally instead.
+
+Every unpacked tree carries two files saying so, for whoever finds the
+directory later with no memory of having downloaded it:
+
+``.git/description``
+  Where the tree came from, which branch and commit it holds, and when it
+  was generated, in four lines, plus a pointer at the file below.
+
+``.git/shallow-tar.readme``
+  What the tree is, the same reset-and-fsck steps as above, how to bring it
+  up to date, and why not to unshallow or deepen it.
 
 DEPLOYMENT NOTES
 ----------------
