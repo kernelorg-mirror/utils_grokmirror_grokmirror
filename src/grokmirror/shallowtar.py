@@ -28,6 +28,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import shutil
 import sys
 import tarfile
@@ -50,6 +51,14 @@ SECONDS_IN_DAY = 86400
 TIP_ABBREV = 7
 # The current tarball plus the previous one. See prune_tarballs().
 KEEP_TARBALLS = 2
+# Scratch clones are made under this prefix, inside the output directory. The
+# leading dot keeps them out of a directory listing and out of an rsync that
+# excludes dotfiles, which is also why they need sweeping up -- see
+# sweep_stale_workdirs().
+WORKDIR_PREFIX = '.shallowtar-'
+# How long a scratch directory has to have been sitting there before a later
+# run will clear it away.
+STALE_WORKDIR_AGE = SECONDS_IN_DAY
 
 
 class Branch(NamedTuple):
@@ -342,7 +351,7 @@ def generate_tarball(
     fixed "latest" name is safe.
     """
     tarpath.parent.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix='.shallowtar-', dir=tarpath.parent))
+    workdir = Path(tempfile.mkdtemp(prefix=WORKDIR_PREFIX, dir=tarpath.parent))
     try:
         clonedir = workdir / dirname
         if not clone_shallow(fullpath, branch, clonedir, depth):
@@ -364,6 +373,49 @@ def generate_tarball(
         return True
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def sweep_stale_workdirs(outdir: Path, now: int, maxage: int = STALE_WORKDIR_AGE) -> None:
+    """Remove scratch directories an earlier run was killed before cleaning up.
+
+    generate_tarball() removes its own scratch directory in a "finally", which
+    covers every way the code itself can fail -- but not a signal. A SIGTERM
+    from an impatient init script, or the OOM killer arriving mid-clone, ends
+    the process without ever running it, and what is left behind is most of a
+    clone of linux.git under a dot-name nothing ever looks at. A signal handler
+    would not close this either, since SIGKILL cannot be caught at all, so the
+    only complete answer is for the next run to clear up after the last one.
+
+    The age check is what makes doing that unconditionally safe: a scratch
+    directory is only litter once nothing can still be writing to it. Two runs
+    overlapping is a deployment mistake rather than something supported, but
+    deleting a live clone out from under the other one would turn a slow cron
+    job into a mysterious one.
+    """
+    if not outdir.is_dir():
+        return
+    for dirpath, dirnames, _filenames in os.walk(outdir):
+        stale = [name for name in dirnames if name.startswith(WORKDIR_PREFIX)]
+        # In place, because that is how os.walk is told not to descend: a
+        # scratch directory holds an entire clone, and walking into one would
+        # cost more than everything else this sweep does put together. This
+        # matters most for the ones being *kept* -- a directory that gets
+        # removed below has already gone by the time walk would open it.
+        dirnames[:] = [name for name in dirnames if not name.startswith(WORKDIR_PREFIX)]
+        for name in stale:
+            path = Path(dirpath, name)
+            try:
+                age = now - int(path.stat().st_mtime)
+            except OSError as ex:
+                # Another run finishing normally will have just removed it,
+                # which is the outcome we wanted anyway.
+                logger.debug('could not stat %s: %s', path, ex)
+                continue
+            if age < maxage:
+                logger.debug('%s is only %s seconds old, leaving it alone', path, age)
+                continue
+            logger.info('  cleanup: %s, left behind by an earlier run', path)
+            shutil.rmtree(path, ignore_errors=True)
 
 
 class Artifact(NamedTuple):
@@ -602,6 +654,10 @@ def generate_tarballs(
     outpath = Path(outdir)
     now = int(time.time())
     retval = 0
+
+    # Before anything else, so a run that goes on to fill the disk has already
+    # given back whatever a killed run was holding.
+    sweep_stale_workdirs(outpath, now)
 
     for repo in manifest:
         globs = match_patterns(repo, patterns)

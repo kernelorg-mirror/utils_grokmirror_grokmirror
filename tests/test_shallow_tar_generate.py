@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import errno
+import os
 import subprocess
 import tarfile
 from collections import defaultdict
@@ -13,11 +14,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from grokmirror import shallowtar
-from grokmirror.shallowtar import Branch, generate_tarball, select_branches
+from grokmirror.shallowtar import Branch, generate_tarball, select_branches, sweep_stale_workdirs
 
 from support import Source, git
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     # The type TarFile.addfile() actually takes; overriding it with anything
     # narrower (IO[bytes], say) is a Liskov violation the checkers will catch.
     from _typeshed import SupportsRead
@@ -25,6 +28,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.slow
 
 NOW = 1757577600
+DAY = 86400
 PUBLIC_URL = 'https://git.example.com/pub/scm/linux.git'
 
 
@@ -280,6 +284,96 @@ def test_a_failed_run_leaves_no_scratch_directory_behind(tmp_path: Path) -> None
     outdir = tmp_path / 'out'
     generate_tarball(missing, Branch('master', 'master', 'a' * 40), PUBLIC_URL, outdir / 'x.tar', 'linux', NOW)
     assert list(outdir.iterdir()) == []
+
+
+def stale_workdir(outdir: Path, age: int, name: str = '.shallowtar-abcd1234') -> Path:
+    """A scratch directory of the shape a killed run leaves behind."""
+    workdir = outdir / name
+    (workdir / 'linux' / '.git').mkdir(parents=True)
+    (workdir / 'linux' / '.git' / 'HEAD').write_text('ref: refs/heads/master\n')
+    os.utime(workdir, (NOW - age, NOW - age))
+    return workdir
+
+
+def test_a_scratch_directory_a_killed_run_left_behind_is_swept_up(tmp_path: Path) -> None:
+    """A signal skips the "finally", so the next run is what cleans up.
+
+    The whole directory goes, not just its name: in a real kill this is most
+    of a clone of linux.git, which is the only reason any of this matters.
+    """
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    workdir = stale_workdir(outdir, age=2 * DAY)
+    sweep_stale_workdirs(outdir, NOW)
+    assert not workdir.exists()
+
+
+def test_a_scratch_directory_something_may_still_be_writing_to_is_left_alone(tmp_path: Path) -> None:
+    """Overlapping runs are a deployment mistake, not a reason to eat a clone."""
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    workdir = stale_workdir(outdir, age=60)
+    sweep_stale_workdirs(outdir, NOW)
+    assert workdir.exists()
+
+
+def test_the_sweep_reaches_the_directory_the_scratch_clone_is_actually_made_in(tmp_path: Path) -> None:
+    """Scratch dirs appear beside the tarball, which is nested under outdir.
+
+    Sweeping only the top of the output directory would find nothing at all on
+    a real tree, where every artifact lives under its repository's path.
+    """
+    outdir = tmp_path / 'out'
+    nested = outdir / 'pub' / 'scm' / 'stable'
+    nested.mkdir(parents=True)
+    workdir = stale_workdir(nested, age=2 * DAY)
+    sweep_stale_workdirs(outdir, NOW)
+    assert not workdir.exists()
+
+
+def test_the_sweep_leaves_the_published_tarballs_where_they_are(tmp_path: Path) -> None:
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    tarball = outdir / 'linux.master.shallow.20250911.abc1234.tar'
+    tarball.write_text('not really a tarball\n')
+    os.utime(tarball, (NOW - 400 * DAY, NOW - 400 * DAY))
+    sweep_stale_workdirs(outdir, NOW)
+    assert tarball.exists()
+
+
+def test_the_sweep_does_not_walk_into_a_scratch_directory_it_is_keeping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Descending would cost more than the rest of the sweep put together.
+
+    The young directory is the case that can show this. For one being deleted,
+    the rmtree happens before os.walk gets around to descending -- walk opens
+    each subdirectory lazily, and a directory that has gone just yields
+    nothing -- so the pruning looks unnecessary there and is not. A live clone
+    that the sweep is deliberately leaving alone is still sitting on disk when
+    walk reaches it, and that is a whole linux.git of directory entries.
+    """
+    outdir = tmp_path / 'out'
+    outdir.mkdir()
+    workdir = stale_workdir(outdir, age=60)
+    # A file per object, the way a real clone's scratch directory holds one.
+    for num in range(5):
+        (workdir / 'linux' / '.git' / f'object{num}').write_text('x')
+
+    visited = []
+    real = os.walk
+
+    # No **kwargs: the sweep passes only the directory, and spelling that out
+    # keeps os.walk's overloads from having to be reasoned about here.
+    def spy(top: Path) -> Iterator[tuple[str, list[str], list[str]]]:
+        for dirpath, dirnames, filenames in real(top):
+            visited.append(dirpath)
+            yield dirpath, dirnames, filenames
+
+    monkeypatch.setattr(shallowtar.os, 'walk', spy)
+    sweep_stale_workdirs(outdir, NOW)
+    assert visited == [str(outdir)]
+    assert workdir.exists()
 
 
 def test_a_clone_that_is_not_shallow_is_refused(

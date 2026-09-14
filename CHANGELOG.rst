@@ -12,7 +12,8 @@ v3.0 (TBD)
   one cycle so a node that read ``latest`` from one frontend can still
   fetch it from another. The clone inside is single-branch and tagless,
   and its origin is the public URL built from ``--clone-url-base``, so
-  the node's first ``git remote update`` asks about exactly one ref. See
+  the node's first ``git remote update`` asks about exactly one ref. Each
+  run also sweeps up the scratch directories a killed run left behind. See
   grok-shallow-tar(1)
 - New ``--config-check`` flag for grok-pull, grok-fsck and grok-manifest.
   It reads the config file, reports every problem it can find and exits

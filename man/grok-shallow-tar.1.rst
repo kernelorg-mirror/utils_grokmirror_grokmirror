@@ -175,6 +175,13 @@ branch failing -- running out of disk, say -- skips that branch and lets the
 rest of the run continue, but the exit code is still non-zero, so cron will
 tell you.
 
+Those temporary directories are named ``.shallowtar-*``. Killing a run leaves
+one behind, since a signal does not give the process a chance to tidy up, and
+what it holds can be most of a clone. Each run sweeps up any it finds under
+``--outdir`` that are more than a day old, so an interrupted run costs you the
+space only until the next one -- but if you need it back sooner, they are safe
+to delete by hand once no run is in progress.
+
 EXAMPLES
 --------
 

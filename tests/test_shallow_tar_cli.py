@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -103,6 +105,24 @@ def test_a_pattern_with_no_colon_stops_the_run(tree: GrokTree) -> None:
     res = tree.run_shallow_tar('--clone-url-base', BASE, '--branches', '/test/one.git', expect=2)
     assert 'REPOGLOB:BRANCHGLOB' in res.stderr
     assert published(tree) == []
+
+
+@pytest.mark.slow
+def test_a_run_sweeps_up_after_a_run_that_was_killed(tree: GrokTree) -> None:
+    """End to end, because the sweep is only useful if the run actually calls it."""
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    workdir = tree.root / 'shallow' / 'test' / '.shallowtar-deadbeef'
+    workdir.mkdir(parents=True)
+    (workdir / 'one').mkdir()
+    stale = time.time() - 2 * 86400
+    os.utime(workdir, (stale, stale))
+
+    tree.run_shallow_tar('-v', '--clone-url-base', BASE, '--branches', '/test/one.git:master')
+    assert not workdir.exists()
+    # The sweep runs before the publishing, so this run's own output is proof
+    # it did not take the live scratch directory with it.
+    assert len(published(tree)) == 1
 
 
 @pytest.mark.slow
