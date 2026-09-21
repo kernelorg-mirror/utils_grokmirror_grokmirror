@@ -560,7 +560,64 @@ class Artifact(NamedTuple):
     """The single top-level directory inside the tarball."""
 
 
-def plan_artifact(outdir: Path, repo: str, branch: Branch, now: int) -> Artifact:
+def strip_leading_path(relative: str, prefix: str) -> str:
+    """Take a shared leading directory off a manifest path, if it is there.
+
+    The published tree mirrors the manifest, which on a site like kernel.org
+    buries every tarball five directories deep under a "pub/scm/linux/kernel/
+    git" that says nothing the output directory has not already said. Naming
+    that head as --strip-prefix turns the layout into "stable/linux.linux-6.
+    18.y.shallow.<date>.<tip>.tar", which is what somebody reading the URL
+    wanted in the first place.
+
+    A path that does not start with the prefix is published at its full path
+    rather than skipped. Dropping it would silently unpublish a repository
+    the --branches patterns explicitly asked for, and nothing here can tell a
+    typo in the prefix from a repository that genuinely lives elsewhere. The
+    price is that stripping stops being injective across the run, which is
+    what check_path_collisions() is for.
+    """
+    prefix = prefix.strip('/')
+    if not prefix:
+        return relative
+    head = f'{prefix}/'
+    if not relative.startswith(head):
+        logger.debug('%s does not start with %s, publishing at its full path', relative, prefix)
+        return relative
+    return relative[len(head) :]
+
+
+def check_path_collisions(repos: Sequence[str], strip_prefix: str) -> list[str]:
+    """Drop repositories that --strip-prefix would publish under one path.
+
+    Stripping is injective over the repositories that carry the prefix, but
+    one that does not keeps its full path, and a full path can equal another
+    repository's stripped one: "/pub/scm/a/linux.git" with "pub/scm" stripped
+    and a literal "/a/linux.git" both want "a/linux". Two repositories
+    writing tarballs into the same directory under the same stem is the
+    silently-wrong-content failure the rest of this tool works to avoid, so
+    as in check_collisions() every side is dropped instead of letting the
+    last one written win.
+
+    Checked across the whole run rather than per repository, because that is
+    the only place the two halves of such a pair are ever visible at once.
+    """
+    by_path: dict[str, list[str]] = {}
+    for repo in repos:
+        stripped = strip_leading_path(repo.lstrip('/').removesuffix('.git'), strip_prefix)
+        by_path.setdefault(stripped, []).append(repo)
+
+    keep = []
+    for path, found in by_path.items():
+        if len(found) > 1:
+            names = ', '.join(sorted(found))
+            logger.critical('  collision: %s all publish as "%s", skipping all of them', names, path)
+            continue
+        keep.extend(found)
+    return keep
+
+
+def plan_artifact(outdir: Path, repo: str, branch: Branch, now: int, strip_prefix: str = '') -> Artifact:
     """Work out what this (repository, branch) pair publishes as.
 
     The tarball sits beside the repository's own name rather than in a
@@ -575,7 +632,7 @@ def plan_artifact(outdir: Path, repo: str, branch: Branch, now: int) -> Artifact
     """
     # The manifest key is absolute, and Path() would throw away outdir if that
     # leading slash were joined on.
-    relative = repo.lstrip('/').removesuffix('.git')
+    relative = strip_leading_path(repo.lstrip('/').removesuffix('.git'), strip_prefix)
     parent, _sep, name = relative.rpartition('/')
     stem = f'{name}.{branch.slug}.shallow'
     # time.gmtime, not localtime: the generating host's timezone is nobody
@@ -691,9 +748,10 @@ def publish_branch(
     cloneurl: str,
     now: int,
     depth: int = 1,
+    strip_prefix: str = '',
 ) -> bool:
     """Publish one branch, and tidy up after the ones published before it."""
-    artifact = plan_artifact(outdir, repo, branch, now)
+    artifact = plan_artifact(outdir, repo, branch, now, strip_prefix=strip_prefix)
     artifact.directory.mkdir(parents=True, exist_ok=True)
 
     already = existing_tarball(artifact, branch)
@@ -760,6 +818,7 @@ def generate_tarballs(
     depth: int = 1,
     maxrefage: int = 0,
     maxbranches: int = 0,
+    strip_prefix: str = '',
 ) -> int:
     """Publish a tarball for every branch every --branches switch asked for.
 
@@ -782,6 +841,7 @@ def generate_tarballs(
     # given back whatever a killed run was holding.
     sweep_stale_workdirs(outpath, now)
 
+    selected: dict[str, list[str]] = {}
     for repo in manifest:
         globs = match_patterns(repo, patterns)
         if not globs:
@@ -791,6 +851,13 @@ def generate_tarballs(
             # that is over a thousand of them.
             logger.debug('%s matches no --branches pattern, skipping', repo)
             continue
+        selected[repo] = globs
+
+    # Settled before anything is written, because two repositories stripping
+    # onto one path only show up as a pair, and the second one published would
+    # otherwise quietly take over the first one's directory.
+    for repo in check_path_collisions(list(selected), strip_prefix):
+        globs = selected[repo]
 
         fullpath = grokmirror.gitdir_to_fullpath(toplevel, repo)
         branches = select_branches(fullpath, globs, now, maxrefage=maxrefage, maxbranches=maxbranches)
@@ -801,7 +868,9 @@ def generate_tarballs(
         # The manifest key is a path under the site, so it appends cleanly.
         cloneurl = cloneurlbase.rstrip('/') + repo
         for branch in branches:
-            if not publish_branch(fullpath, outpath, repo, branch, cloneurl, now, depth=depth):
+            if not publish_branch(
+                fullpath, outpath, repo, branch, cloneurl, now, depth=depth, strip_prefix=strip_prefix
+            ):
                 # Keep going: one repository out of room or mid-repack should
                 # not cost the rest of the run, but the exit code should still
                 # say the run was not clean, because cron reads that.
@@ -836,6 +905,12 @@ def parse_args() -> argparse.Namespace:
         metavar='URL',
         help='Public site the tarballs should fetch from, e.g. https://git.kernel.org',
     )
+    op.add_argument(
+        '--strip-prefix',
+        default='',
+        metavar='PATH',
+        help='Drop this leading path from the published layout, e.g. /pub/scm/linux/kernel/git',
+    )
     op.add_argument('--depth', type=int, default=1, help='How many commits of history to put in the tarball')
     op.add_argument(
         '--max-ref-age',
@@ -865,6 +940,7 @@ def grok_shallow_tar(
     depth: int = 1,
     maxrefage: int = 0,
     maxbranches: int = 0,
+    strip_prefix: str = '',
 ) -> int:
     config = grokmirror.load_config_file(cfgfile)
 
@@ -881,6 +957,7 @@ def grok_shallow_tar(
         depth=depth,
         maxrefage=maxrefage,
         maxbranches=maxbranches,
+        strip_prefix=strip_prefix,
     )
 
 
@@ -897,6 +974,7 @@ def command() -> None:
             depth=opts.depth,
             maxrefage=opts.max_ref_age,
             maxbranches=opts.max_branches,
+            strip_prefix=opts.strip_prefix,
         )
     except grokmirror.GrokError as ex:
         sys.stderr.write(f'ERROR: {ex}\n')

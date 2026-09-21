@@ -86,6 +86,10 @@ for more)
 Public site the tarballs should fetch from, e.g.
 \%<https://\:git\:.kernel\:.org>
 .TP
+.BI \-\-strip\-prefix \ PATH
+Drop this leading path from the published layout, e.g.
+/pub/scm/linux/kernel/git
+.TP
 .BI \-\-depth \ DEPTH
 How many commits of history to put in the tarball
 (default: 1)
@@ -157,6 +161,35 @@ file, it names the commit inside it. It is also how the tool knows whether
 there is anything to do \-\- if a tarball for the current tip is already on
 disk, the run generates nothing. There is no state file to lose or corrupt;
 the directory listing \fIis\fP the state.
+.sp
+\fB\-\-strip\-prefix\fP takes a shared leading directory off that layout. Every
+kernel.org repository worth publishing this way lives under
+\fB/pub/scm/linux/kernel/git\fP, and repeating those five levels inside an output
+directory that already says what it holds only makes the URL longer. With
+\fB\-\-strip\-prefix /pub/scm/linux/kernel/git\fP the example above becomes:
+.INDENT 0.0
+.INDENT 3.5
+.sp
+.EX
+stable/
+    linux.linux\-6.18.y.shallow.20260911.a1b2c3d.tar
+    ...
+.EE
+.UNINDENT
+.UNINDENT
+.sp
+Only the directory moves; the filename still names the repository, the branch
+and the commit, and the sidecar still records the full manifest key, because
+that is what answers \(dqwhich repository is this\(dq.
+.sp
+A repository that does not start with the prefix is published at its full path
+rather than skipped \-\- \fB\-\-branches\fP named it explicitly, and nothing here can
+tell a mistyped prefix from a repository that genuinely lives elsewhere. That
+does mean a stripped path can land on a literal one: \fB/pub/scm/a/linux.git\fP
+stripped of \fB/pub/scm\fP and a plain \fB/a/linux.git\fP both want \fBa/linux\fP\&.
+As with the branch\-name clash above, \fIneither\fP is published and the collision
+is logged at CRITICAL. It is settled before the first clone, so a run that hits
+one wastes no work.
 .sp
 The \fB\&.json\fP sidecar carries the repository, the branch, the full tip, the
 creation time, the depth, the size and the SHA\-256 of the tarball beside it.
@@ -282,6 +315,8 @@ to delete by hand once no run is in progress.
 .INDENT 0.0
 .INDENT 3.5
 grok\-shallow\-tar \-c grokmirror.conf \-o /var/www/shallow \-\-clone\-url\-base \%<https://\:git\:.kernel\:.org> \-\-branches \(aq/pub/scm/linux/kernel/git/stable/linux.git:linux\-*.y\(aq \-\-max\-ref\-age 365 \-\-max\-branches 12
+.sp
+grok\-shallow\-tar \-c grokmirror.conf \-o /var/www/shallow \-\-clone\-url\-base \%<https://\:git\:.kernel\:.org> \-\-strip\-prefix /pub/scm/linux/kernel/git \-\-branches \(aq/pub/scm/linux/kernel/git/*/*.git:master\(aq
 .sp
 grok\-shallow\-tar \-c grokmirror.conf \-o /var/www/shallow \-\-clone\-url\-base \%<https://\:git\:.kernel\:.org> \-\-branches \(aq/pub/scm/linux/kernel/git/torvalds/linux.git:master\(aq \-\-branches \(aq/pub/scm/linux/kernel/git/next/linux\-next.git:master\(aq \-\-depth 50
 .UNINDENT

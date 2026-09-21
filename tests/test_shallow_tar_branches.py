@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from grokmirror.shallowtar import Branch, check_collisions, select_branches, slug_branch
+from grokmirror.shallowtar import Branch, check_collisions, check_path_collisions, select_branches, slug_branch
 
 # A fixed "now" so a test can say "this branch is 100 days stale" and mean it.
 NOW = 1757577600
@@ -179,3 +179,41 @@ def test_a_branch_max_ref_age_retired_cannot_cause_a_collision(tmp_path: Path) -
 def test_check_collisions_keeps_everything_when_there_is_no_clash() -> None:
     branches = [Branch('a', 'a', 'aaa'), Branch('b', 'b', 'bbb')]
     assert check_collisions(branches) == branches
+
+
+# --strip-prefix can make two manifest keys land on one published path, which
+# is the same failure as the branch-slug clash above, one level up.
+
+
+def test_check_path_collisions_keeps_everything_when_there_is_no_clash() -> None:
+    repos = ['/pub/scm/linux/kernel/git/stable/linux.git', '/pub/scm/linux/kernel/git/torvalds/linux.git']
+    assert check_path_collisions(repos, 'pub/scm/linux/kernel/git') == repos
+
+
+def test_a_repository_the_prefix_does_not_match_can_still_clash_with_one_it_does() -> None:
+    """The stripped path and a literal path can meet, and then neither wins.
+
+    "/pub/scm/a/linux.git" with "pub/scm" taken off wants "a/linux", and so
+    does "/a/linux.git" published at its full path. Dropping both matches what
+    a branch-slug collision does: whichever one rsync copied last would
+    otherwise decide what a CI node downloads.
+    """
+    assert check_path_collisions(['/pub/scm/a/linux.git', '/a/linux.git'], 'pub/scm') == []
+
+
+def test_the_path_collision_is_reported_loudly(caplog: pytest.LogCaptureFixture) -> None:
+    check_path_collisions(['/pub/scm/a/linux.git', '/a/linux.git'], 'pub/scm')
+    # Both manifest keys, because the operator has to see which pair of
+    # repositories to go and fix -- the shared path alone does not say.
+    assert '/a/linux.git, /pub/scm/a/linux.git' in caplog.text
+    assert 'publish as "a/linux"' in caplog.text
+    levels = {rec.levelname for rec in caplog.records if rec.getMessage().startswith('  collision:')}
+    assert levels == {'CRITICAL'}
+
+
+def test_an_empty_prefix_cannot_create_a_collision() -> None:
+    """Without --strip-prefix the manifest keys are already unique, so this
+    pass has to be a no-op rather than a new way for a run to lose an artifact.
+    """
+    repos = ['/pub/scm/a/linux.git', '/a/linux.git']
+    assert check_path_collisions(repos, '') == repos

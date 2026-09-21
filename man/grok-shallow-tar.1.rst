@@ -54,6 +54,8 @@ OPTIONS
                         for more)
   --clone-url-base URL  Public site the tarballs should fetch from, e.g.
                         https://git.kernel.org
+  --strip-prefix PATH   Drop this leading path from the published layout, e.g.
+                        /pub/scm/linux/kernel/git
   --depth DEPTH         How many commits of history to put in the tarball
                         (default: 1)
   --max-ref-age DAYS    Publish only branches whose tip is newer than this
@@ -111,6 +113,29 @@ file, it names the commit inside it. It is also how the tool knows whether
 there is anything to do -- if a tarball for the current tip is already on
 disk, the run generates nothing. There is no state file to lose or corrupt;
 the directory listing *is* the state.
+
+``--strip-prefix`` takes a shared leading directory off that layout. Every
+kernel.org repository worth publishing this way lives under
+``/pub/scm/linux/kernel/git``, and repeating those five levels inside an output
+directory that already says what it holds only makes the URL longer. With
+``--strip-prefix /pub/scm/linux/kernel/git`` the example above becomes::
+
+    stable/
+        linux.linux-6.18.y.shallow.20260911.a1b2c3d.tar
+        ...
+
+Only the directory moves; the filename still names the repository, the branch
+and the commit, and the sidecar still records the full manifest key, because
+that is what answers "which repository is this".
+
+A repository that does not start with the prefix is published at its full path
+rather than skipped -- ``--branches`` named it explicitly, and nothing here can
+tell a mistyped prefix from a repository that genuinely lives elsewhere. That
+does mean a stripped path can land on a literal one: ``/pub/scm/a/linux.git``
+stripped of ``/pub/scm`` and a plain ``/a/linux.git`` both want ``a/linux``.
+As with the branch-name clash above, *neither* is published and the collision
+is logged at CRITICAL. It is settled before the first clone, so a run that hits
+one wastes no work.
 
 The ``.json`` sidecar carries the repository, the branch, the full tip, the
 creation time, the depth, the size and the SHA-256 of the tarball beside it.
@@ -231,6 +256,8 @@ EXAMPLES
 --------
 
     grok-shallow-tar -c grokmirror.conf -o /var/www/shallow --clone-url-base https://git.kernel.org --branches '/pub/scm/linux/kernel/git/stable/linux.git:linux-\*.y' --max-ref-age 365 --max-branches 12
+
+    grok-shallow-tar -c grokmirror.conf -o /var/www/shallow --clone-url-base https://git.kernel.org --strip-prefix /pub/scm/linux/kernel/git --branches '/pub/scm/linux/kernel/git/\*/\*.git:master'
 
     grok-shallow-tar -c grokmirror.conf -o /var/www/shallow --clone-url-base https://git.kernel.org --branches '/pub/scm/linux/kernel/git/torvalds/linux.git:master' --branches '/pub/scm/linux/kernel/git/next/linux-next.git:master' --depth 50
 

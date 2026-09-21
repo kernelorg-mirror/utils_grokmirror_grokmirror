@@ -147,6 +147,47 @@ def test_the_origin_in_the_tarball_is_the_public_site(tree: GrokTree, tmp_path: 
 
 
 @pytest.mark.slow
+def test_strip_prefix_publishes_without_the_shared_leading_directories(tree: GrokTree) -> None:
+    """End to end, because the switch is only useful if files land where it says.
+
+    The sidecar still records the manifest key: the layout on disk is a
+    publishing choice, while the sidecar answers "which repository is this",
+    and stripping the prefix there would make that unanswerable.
+    """
+    tree.add_repo('test/one.git')
+    tree.run_manifest()
+    tree.run_shallow_tar(
+        '-v', '--clone-url-base', BASE, '--strip-prefix', '/test', '--branches', '/test/one.git:master'
+    )
+
+    names = published(tree)
+    assert len(names) == 1
+    assert names[0].startswith('one.master.shallow.')
+    sidecar = tree.root / 'shallow' / 'one.master.shallow.latest.tar.json'
+    assert json.loads(sidecar.read_text())['repo'] == '/test/one.git'
+
+
+@pytest.mark.slow
+def test_two_repositories_stripping_onto_one_path_publish_neither(tree: GrokTree) -> None:
+    """The collision is settled before anything is written, not as it happens.
+
+    "/test/one.git" stripped of "/test" and a literal "/one.git" both want
+    "one". Publishing them in manifest order would let the second quietly take
+    over the first one's tarball, so both are dropped -- and dropped before the
+    first clone, which is why no tarball at all exists afterwards.
+    """
+    tree.add_repo('test/one.git')
+    tree.add_repo('one.git')
+    tree.run_manifest()
+    res = tree.run_shallow_tar(
+        '-v', '--clone-url-base', BASE, '--strip-prefix', '/test', '--branches', '*one.git:master'
+    )
+
+    assert published(tree) == []
+    assert 'collision' in res.stderr + res.stdout
+
+
+@pytest.mark.slow
 def test_the_sidecar_names_the_repository_it_came_from(tree: GrokTree) -> None:
     tree.add_repo('test/one.git')
     tree.run_manifest()

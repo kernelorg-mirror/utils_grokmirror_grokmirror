@@ -16,8 +16,11 @@ v3.0 (TBD)
   run also sweeps up the scratch directories a killed run left behind. An
   unpacked tarball says what it is, in a ``.git/description`` recording
   where it came from and a ``.git/shallow-tar.readme`` covering what to run
-  before trusting a tree that arrived over the network. See
-  grok-shallow-tar(1)
+  before trusting a tree that arrived over the network. ``--strip-prefix``
+  takes a shared leading directory off the published layout, so a set of
+  repositories under ``/pub/scm/linux/kernel/git`` can go out as
+  ``stable/``, ``torvalds/`` and ``next/`` instead of five levels of path
+  nobody reads. See grok-shallow-tar(1)
 - New ``--config-check`` flag for grok-pull, grok-fsck and grok-manifest.
   It reads the config file, reports every problem it can find and exits
   without doing anything else: a misspelled option name, a value that is

@@ -80,6 +80,71 @@ def test_the_branch_sits_between_the_repository_and_the_date(tmp_path: Path) -> 
     assert artifact.latest == 'linux.linux-6.18.y.shallow.latest.tar'
 
 
+def test_strip_prefix_lifts_the_shared_head_off_the_layout(tmp_path: Path) -> None:
+    """The point of the switch: "stable/linux..." instead of five dead levels.
+
+    The output directory already says what these files are, so repeating
+    "pub/scm/linux/kernel/git" inside it only makes the URL longer.
+    """
+    artifact = plan_artifact(
+        tmp_path / 'out',
+        REPO,
+        Branch('linux-6.18.y', 'linux-6.18.y', 'dafd9ab' + 'e' * 33),
+        NOW,
+        strip_prefix='/pub/scm/linux/kernel/git',
+    )
+    assert artifact.directory == tmp_path / 'out/stable'
+    # Only the directory moves. The filename still names the repository, the
+    # branch and the commit, because that is what makes it self-describing.
+    assert artifact.dated == 'linux.linux-6.18.y.shallow.20250911.dafd9ab.tar'
+
+
+@pytest.mark.parametrize('prefix', ['pub/scm/linux/kernel/git', '/pub/scm/linux/kernel/git/'])
+def test_the_prefix_is_read_the_same_with_or_without_its_slashes(tmp_path: Path, prefix: str) -> None:
+    """Manifest keys are absolute and operators type both spellings."""
+    artifact = plan_artifact(tmp_path / 'out', REPO, Branch('master', 'master', 'd' * 40), NOW, strip_prefix=prefix)
+    assert artifact.directory == tmp_path / 'out/stable'
+
+
+def test_a_repository_outside_the_prefix_keeps_its_full_path(tmp_path: Path) -> None:
+    """Publishing it somewhere odd beats not publishing it at all.
+
+    --branches named this repository explicitly, so silently dropping it
+    because a *layout* switch did not apply would lose an artifact somebody
+    asked for. Nothing here can tell a mistyped prefix from a repository that
+    genuinely lives elsewhere.
+    """
+    artifact = plan_artifact(
+        tmp_path / 'out',
+        '/pub/scm/git/git.git',
+        Branch('master', 'master', 'd' * 40),
+        NOW,
+        strip_prefix='/pub/scm/linux/kernel/git',
+    )
+    assert artifact.directory == tmp_path / 'out/pub/scm/git'
+
+
+def test_a_prefix_matching_the_whole_parent_leaves_the_tarball_at_the_top(tmp_path: Path) -> None:
+    """The fully-stripped case has no parent left to join, and must not crash."""
+    artifact = plan_artifact(
+        tmp_path / 'out',
+        '/pub/scm/linux.git',
+        Branch('master', 'master', 'd' * 40),
+        NOW,
+        strip_prefix='/pub/scm',
+    )
+    assert artifact.directory == tmp_path / 'out'
+    assert artifact.dated.startswith('linux.master.shallow.')
+
+
+def test_no_prefix_is_the_layout_we_had_before(tmp_path: Path) -> None:
+    """The default has to be inert, or every existing deployment moves."""
+    branch = Branch('master', 'master', 'd' * 40)
+    assert plan_artifact(tmp_path / 'out', REPO, branch, NOW) == plan_artifact(
+        tmp_path / 'out', REPO, branch, NOW, strip_prefix=''
+    )
+
+
 def test_a_slashed_branch_makes_no_directory_under_outdir(tmp_path: Path) -> None:
     bare = tmp_path / 'linux.git'
     git('init', '-q', '--bare', str(bare))
