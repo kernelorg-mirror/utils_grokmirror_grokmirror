@@ -28,7 +28,7 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
-.TH "GROK-SHALLOW-TAR" "1" "2026-09-11" "2.0.0"
+.TH "GROK-SHALLOW-TAR" "1" "2026-09-22" "2.0.0"
 .SH Name
 GROK-SHALLOW-TAR \- Publish shallow single-branch repos as tarballs
 .SH SYNOPSIS
@@ -54,8 +54,8 @@ The clone inside the tarball is not just history\-trimmed, it is also
 single\-branch and tagless: the clone is made with \fB\-\-no\-tags\fP, so no tag
 ships inside the archive even when one sits on the branch tip, and
 \fBremote.origin.tagOpt = \-\-no\-tags\fP is set so it stays that way. When a node
-untars it and runs \fBgit remote update\fP, it asks the origin about exactly
-one ref and does not drag in thousands of tags.
+untars it and fetches, it asks the origin about exactly one ref and does not
+drag in thousands of tags.
 .sp
 Publication is opt\-in. A repository that no \fB\-\-branches\fP pattern names
 produces nothing at all \-\- these artifacts are hundreds of megabytes each,
@@ -222,7 +222,7 @@ rm \-rf .git/hooks .git/config .git/objects/info/alternates
 git init \-q
 git remote add \-t linux\-6.18.y \-\-no\-tags origin https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
 git fsck
-git remote update
+git fetch \-\-depth=1 origin \(dq$WANTED_SHA\(dq
 git checkout \(dq$WANTED_SHA\(dq
 .EE
 .UNINDENT
@@ -252,12 +252,27 @@ object ID, from a source you trust, which is what \fB$WANTED_SHA\fP above is:
 an object ID is checked against the object it names, while a branch or tag
 inside the tarball is only whatever the tarball says it is.
 .sp
-\fBgit remote update\fP talks to \fB\-\-clone\-url\-base\fP plus the repository path,
-which is a public URL and not the path on the host that built the tarball.
-Because the clone is single\-branch and tagless, that fetch asks about one
-ref and transfers only the commits made since the tarball was cut \-\- which is
-the whole point, and the reason a slightly stale tarball costs almost
-nothing.
+The fetch must carry \fB\-\-depth=1\fP, and a job must not run \fBgit remote
+update\fP in an unpacked tarball at all \-\- that command takes no \fB\-\-depth\fP,
+so there is no safe way to spell it here.
+.sp
+The reason is that \fB\&.git/shallow\fP records \fIwhere\fP the history was cut, not
+\fIhow deep\fP it is. It holds a list of boundary commits, a fetch stops walking
+at exactly those and nowhere else, and nothing reapplies the original depth.
+On a linear branch that distinction never shows. On a branch built out of
+merges it is ruinous: each merged side branch forks \fIbelow\fP the boundary
+commit, is therefore never cut off, and gets walked to the bottom. A single
+ordinary fast\-forward \fBgit remote update\fP on torvalds/linux.git was
+measured pulling a 2.6 GiB pack after the server enumerated all 11.8 million
+objects \-\- while the equivalent \fB\-\-depth=1\fP fetch moved a few dozen.
+.sp
+\fB\-\-depth=1\fP accepts either form. Given a branch name it advances the tree
+to that branch\(aqs current tip; given a full object ID, as above, it brings
+back that one commit, which is how a job reaches a commit somewhere between
+the tarball\(aqs tip and the branch head. Asking for a raw object ID requires
+\fBuploadpack.allowReachableSHA1InWant\fP on the server; kernel.org sets it.
+Either way the origin contacted is \fB\-\-clone\-url\-base\fP plus the repository
+path, a public URL and not the path on the host that built the tarball.
 .sp
 If your job needs the tarball to be exactly reproducible, or wants to pin
 what it is running against, fetch the dated name rather than \fBlatest\fP and
@@ -279,7 +294,8 @@ was generated, in four lines, plus a pointer at the file below.
 .TP
 .B \fB\&.git/shallow\-tar.readme\fP
 What the tree is, the same reset\-and\-fsck steps as above, how to bring it
-up to date, and why not to unshallow or deepen it.
+up to date with \fB\-\-depth=1\fP, why \fBgit remote update\fP is the wrong
+command, and why not to unshallow or deepen it.
 .UNINDENT
 .SH DEPLOYMENT NOTES
 .sp

@@ -232,7 +232,7 @@ that wants a specific commit does:
    git remote add -t linux-6.18.y --no-tags origin \
        https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
    git fsck
-   git remote update
+   git fetch --depth=1 origin "$WANTED_SHA"
    git checkout "$WANTED_SHA"
 
 Throwing away ``.git/config`` is the load-bearing step, and it is not the
@@ -256,7 +256,26 @@ trust, which is what ``$WANTED_SHA`` is above. An object ID is checked
 against the object it names, while a branch or tag inside the tarball is
 only whatever the tarball says it is.
 
-Do not run ``git fetch --unshallow`` on an unpacked tarball. It asks the
-server to build the entire history as a single pack, which is heavier than
-the shallow clones these tarballs exist to replace. A job that genuinely
-needs full history should clone the repository normally.
+Never drop the ``--depth=1``, and never run ``git remote update`` in an
+unpacked tarball -- that command takes no ``--depth``, so there is no safe
+way to use it here.
+
+``.git/shallow`` records *where* the history was cut, not *how deep* it is.
+It is a list of boundary commits; a later fetch stops walking at exactly
+those commits and nowhere else, and nothing reapplies the depth the clone
+was made with. On a linear branch the difference never shows. On a
+merge-heavy branch it is ruinous, because every merged side branch forks
+below the boundary commit and so is never cut off. One ordinary fast-forward
+``git remote update`` on torvalds/linux.git was measured pulling a 2.6 GiB
+pack, after the server enumerated all 11.8 million objects to build it.
+
+``--depth=1`` takes either a branch name, which moves the tree to that
+branch's current tip, or a full object ID as above, which is how a job
+reaches a commit part-way between the tarball's tip and the branch head.
+The object-ID form needs ``uploadpack.allowReachableSHA1InWant`` enabled on
+the server.
+
+Do not run ``git fetch --unshallow`` on an unpacked tarball either. It asks
+the server to build the entire history as a single pack, which is heavier
+than the shallow clones these tarballs exist to replace. A job that
+genuinely needs full history should clone the repository normally.

@@ -12,15 +12,17 @@ v3.0 (TBD)
   one cycle so a node that read ``latest`` from one frontend can still
   fetch it from another. The clone inside is single-branch and tagless,
   and its origin is the public URL built from ``--clone-url-base``, so
-  the node's first ``git remote update`` asks about exactly one ref. Each
-  run also sweeps up the scratch directories a killed run left behind. An
+  the node's first fetch asks about exactly one ref. Each run also
+  sweeps up the scratch directories a killed run left behind. An
   unpacked tarball says what it is, in a ``.git/description`` recording
-  where it came from and a ``.git/shallow-tar.readme`` covering what to run
-  before trusting a tree that arrived over the network. ``--strip-prefix``
-  takes a shared leading directory off the published layout, so a set of
-  repositories under ``/pub/scm/linux/kernel/git`` can go out as
-  ``stable/``, ``torvalds/`` and ``next/`` instead of five levels of path
-  nobody reads. See grok-shallow-tar(1)
+  where it came from and a ``.git/shallow-tar.readme`` covering what to
+  run before trusting a tree that arrived over the network, and how to
+  catch it up with ``git fetch --depth=1`` rather than ``git remote
+  update``, which on a merge-heavy branch transfers most of the
+  repository. ``--strip-prefix`` takes a shared leading directory off
+  the published layout, so a set of repositories under
+  ``/pub/scm/linux/kernel/git`` can go out as ``stable/``, ``torvalds/``
+  and ``next/`` instead of five levels of path nobody reads. See grok-shallow-tar(1)
 - New ``--config-check`` flag for grok-pull, grok-fsck and grok-manifest.
   It reads the config file, reports every problem it can find and exits
   without doing anything else: a misspelled option name, a value that is

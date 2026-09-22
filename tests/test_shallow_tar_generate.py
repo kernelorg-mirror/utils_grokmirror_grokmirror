@@ -252,13 +252,56 @@ def test_the_readme_says_to_name_the_commit_by_object_id(origin_repo: Path, tmp_
 def test_the_safety_advice_comes_before_the_usage_advice(origin_repo: Path, tmp_path: Path) -> None:
     """Advice arriving after the command that needed it is decoration.
 
-    A reader skims until they find something to type. If "git remote update"
-    is above the config warning, that is what they run, and the warning may as
+    A reader skims until they find something to type. If the fetch command is
+    above the config warning, that is what they run, and the warning may as
     well not be in the file.
     """
     clone = extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x')
     readme = (clone / '.git' / README_NAME).read_text()
-    assert readme.index('rm -rf .git/hooks') < readme.index('git remote update')
+    assert readme.index('rm -rf .git/hooks') < readme.index('git fetch --depth=1')
+
+
+def test_every_fetch_the_readme_shows_is_depth_limited(origin_repo: Path, tmp_path: Path) -> None:
+    """The whole saving rests on this one flag, so no example may omit it.
+
+    .git/shallow says where the history was cut, not how deep it is, and a
+    fetch stops walking only at the commits on that list. In a merge-heavy
+    tree the merged side branches fork below the cut and are never reached by
+    it, so an undepth-limited fetch walks them to the bottom: one plain "git
+    remote update" on torvalds/linux.git pulled 2.6 GiB, which is the failure
+    this whole tool exists to prevent, arriving one step later than expected.
+
+    A "git fetch" in this file therefore either carries --depth=1 or is being
+    forbidden. --unshallow and --deepen are covered by their own test; this
+    one exists so that a future edit cannot add a fourth, friendlier example
+    that quietly drops the flag.
+    """
+    readme = prose(extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x'))
+    at = readme.find('git fetch')
+    assert at >= 0, 'the readme has to show a fetch at all'
+    while at >= 0:
+        after = readme[at : at + 40]
+        before = readme[max(0, at - 40) : at].lower()
+        assert '--depth=1' in after or 'not run' in before, readme[max(0, at - 40) : at + 40]
+        at = readme.find('git fetch', at + 1)
+
+
+def test_the_readme_forbids_git_remote_update_wherever_it_names_it(origin_repo: Path, tmp_path: Path) -> None:
+    """The command everyone reaches for is the expensive one here.
+
+    "git remote update" takes no --depth, so unlike an ordinary fetch there is
+    no way to spell it safely in a shallow tree -- the only correct advice is
+    not to run it. It stays in the file because a reader who does not see it
+    named will assume it is fine; it must never appear without a refusal
+    attached, which is what this pins.
+    """
+    readme = prose(extract(build(origin_repo, tmp_path / 'out'), tmp_path / 'x'))
+    at = readme.find('git remote update')
+    assert at >= 0, 'saying nothing about it leaves the reader to guess'
+    while at >= 0:
+        window = readme[max(0, at - 60) : at].lower()
+        assert 'never run' in window or 'not run' in window or 'do not' in window, readme[max(0, at - 60) : at + 20]
+        at = readme.find('git remote update', at + 1)
 
 
 def test_the_readme_steers_away_from_unshallowing(origin_repo: Path, tmp_path: Path) -> None:

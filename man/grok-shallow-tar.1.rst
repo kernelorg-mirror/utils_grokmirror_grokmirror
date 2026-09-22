@@ -5,7 +5,7 @@ Publish shallow single-branch repos as tarballs
 -------------------------------------------------
 
 :Author:    mricon@kernel.org
-:Date:      2026-09-11
+:Date:      2026-09-22
 :Copyright: The Linux Foundation and contributors
 :License:   GPLv3+
 :Version:   2.0.0
@@ -32,8 +32,8 @@ The clone inside the tarball is not just history-trimmed, it is also
 single-branch and tagless: the clone is made with ``--no-tags``, so no tag
 ships inside the archive even when one sits on the branch tip, and
 ``remote.origin.tagOpt = --no-tags`` is set so it stays that way. When a node
-untars it and runs ``git remote update``, it asks the origin about exactly
-one ref and does not drag in thousands of tags.
+untars it and fetches, it asks the origin about exactly one ref and does not
+drag in thousands of tags.
 
 Publication is opt-in. A repository that no ``--branches`` pattern names
 produces nothing at all -- these artifacts are hundreds of megabytes each,
@@ -166,7 +166,7 @@ A job that wants a specific commit does::
     git init -q
     git remote add -t linux-6.18.y --no-tags origin https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
     git fsck
-    git remote update
+    git fetch --depth=1 origin "$WANTED_SHA"
     git checkout "$WANTED_SHA"
 
 The three lines after ``cd`` are there because the tree arrived over the
@@ -193,12 +193,27 @@ object ID, from a source you trust, which is what ``$WANTED_SHA`` above is:
 an object ID is checked against the object it names, while a branch or tag
 inside the tarball is only whatever the tarball says it is.
 
-``git remote update`` talks to ``--clone-url-base`` plus the repository path,
-which is a public URL and not the path on the host that built the tarball.
-Because the clone is single-branch and tagless, that fetch asks about one
-ref and transfers only the commits made since the tarball was cut -- which is
-the whole point, and the reason a slightly stale tarball costs almost
-nothing.
+The fetch must carry ``--depth=1``, and a job must not run ``git remote
+update`` in an unpacked tarball at all -- that command takes no ``--depth``,
+so there is no safe way to spell it here.
+
+The reason is that ``.git/shallow`` records *where* the history was cut, not
+*how deep* it is. It holds a list of boundary commits, a fetch stops walking
+at exactly those and nowhere else, and nothing reapplies the original depth.
+On a linear branch that distinction never shows. On a branch built out of
+merges it is ruinous: each merged side branch forks *below* the boundary
+commit, is therefore never cut off, and gets walked to the bottom. A single
+ordinary fast-forward ``git remote update`` on torvalds/linux.git was
+measured pulling a 2.6 GiB pack after the server enumerated all 11.8 million
+objects -- while the equivalent ``--depth=1`` fetch moved a few dozen.
+
+``--depth=1`` accepts either form. Given a branch name it advances the tree
+to that branch's current tip; given a full object ID, as above, it brings
+back that one commit, which is how a job reaches a commit somewhere between
+the tarball's tip and the branch head. Asking for a raw object ID requires
+``uploadpack.allowReachableSHA1InWant`` on the server; kernel.org sets it.
+Either way the origin contacted is ``--clone-url-base`` plus the repository
+path, a public URL and not the path on the host that built the tarball.
 
 If your job needs the tarball to be exactly reproducible, or wants to pin
 what it is running against, fetch the dated name rather than ``latest`` and
@@ -219,7 +234,8 @@ directory later with no memory of having downloaded it:
 
 ``.git/shallow-tar.readme``
   What the tree is, the same reset-and-fsck steps as above, how to bring it
-  up to date, and why not to unshallow or deepen it.
+  up to date with ``--depth=1``, why ``git remote update`` is the wrong
+  command, and why not to unshallow or deepen it.
 
 DEPLOYMENT NOTES
 ----------------

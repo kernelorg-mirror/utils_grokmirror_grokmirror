@@ -15,11 +15,17 @@
 
 """Publish shallow single-branch repositories as tarballs, for CI systems.
 
-A CI node untars one of these, runs "git remote update", and checks out the
-sha it wants. The point of shipping it pre-made is that the tarball comes off
-a CDN instead of out of git-upload-pack, and that the clone inside it is
-single-branch, so the node's subsequent fetch asks the origin about exactly
-one ref.
+A CI node untars one of these, runs "git fetch --depth=1" for the sha it
+wants, and checks it out. The point of shipping it pre-made is that the
+tarball comes off a CDN instead of out of git-upload-pack, and that the clone
+inside it is single-branch, so the node's subsequent fetch asks the origin
+about exactly one ref.
+
+The --depth=1 on that fetch is not optional, and clone_readme() says so at
+length: .git/shallow records where the history was cut rather than how deep
+it is, so a plain "git remote update" walks straight past the boundary down
+every merged side branch. Depth-limiting the fetch is what keeps a node's
+catch-up cheap.
 """
 
 from __future__ import annotations
@@ -313,9 +319,18 @@ def clone_readme() -> str:
     rebuild a default one closes the entire class, and keeps the objects, the
     refs and the shallow boundary.
 
-    What none of it establishes is that the history is genuine, so the last
-    paragraph is the one that matters: a full object ID verifies itself, and a
-    ref that came in the tarball does not.
+    What none of it establishes is that the history is genuine, so a full
+    object ID verifies itself and a ref that came in the tarball does not.
+
+    The fetch advice is stated twice, in the instructions and again as its own
+    section, because it is the part people get wrong. "git remote update" is
+    the obvious command, it accepts no --depth, and .git/shallow does not save
+    anybody who runs it: that file lists the commits where the history was
+    cut, and a fetch stops walking there and nowhere else. In a tree built out
+    of merges the side branches fork below the cut and are never reached by
+    it, so a plain fast-forward fetch on torvalds/linux.git was measured
+    transferring 2.6 GiB. "git fetch --depth=1" does the same work for a few
+    dozen objects, whether it is given a branch name or one object ID.
 
     Nothing here is interpolated. Everything specific to this particular
     tarball -- origin, branch, tip, depth, when it was made -- lives in
@@ -350,18 +365,42 @@ which on a kernel-sized tree takes about ten seconds.
 
 Using it
 --------
-You should fetch any new commits:
+Always pass --depth=1 when you fetch, and never run "git remote update" in
+this tree -- it takes no --depth option, so there is no safe way to run it
+here. Use "git fetch --depth=1" in its place. To move to the current tip of
+the branch this tree holds:
 
-  git remote update
+  git fetch --depth=1 origin [branch]
+  git checkout [commit-id]
 
-Then, check out the commit you want:
+To pick up one specific commit instead of the tip, ask for it by name:
 
+  git fetch --depth=1 origin [commit-id]
   git checkout [commit-id]
 
 Name that commit by its full object ID, from somewhere you trust. An object
 ID is checked against the object it names, so it is the one thing here a
 tampered tarball cannot answer wrongly; a branch or tag in the tarball is
 only whatever the tarball says it is.
+
+Do NOT run "git remote update", or any fetch without --depth=1
+--------------------------------------------------------------
+This is the one instruction to take away from this file. Do not run "git
+remote update" here. It is the command most people reach for, it cannot be
+given a --depth, and in this tree it is the expensive thing to do.
+
+A plain fetch here is not the small one you would expect. The file
+.git/shallow is a list of the commits where the history was cut, and nothing
+more -- it is not a depth setting, and no later command reapplies one. A
+fetch stops walking at exactly the commits on that list and nowhere else, so
+in a tree built out of merges, which describes Linux, every merged side
+branch that began below the cut is walked all the way down.
+
+The result is not a near miss. On torvalds/linux.git one such fetch, across
+an ordinary fast-forward, was measured pulling a 2.6 GiB pack -- very nearly
+the whole repository -- while the server spent minutes enumerating 11.8
+million objects to build it. The same catch-up with "--depth=1" moves a few
+dozen objects.
 
 Do NOT run --deepen or --unshallow
 ----------------------------------
@@ -380,10 +419,11 @@ def prepare_clone(gitdir: Path, branch: Branch, cloneurl: str, now: int, depth: 
         ('remote.origin.url', cloneurl),
         # Set explicitly rather than left to "git clone --no-tags", which
         # happens to write the same key: this is the setting CI inherits, and
-        # it is what keeps the *node's* first "git remote update" from
-        # dragging in thousands of tags -- one of them pointing outside the
-        # shallow boundary pulls its history across, which is exactly the
-        # server load this tool exists to remove.
+        # it is what keeps the *node's* first fetch from dragging in
+        # thousands of tags -- one of them pointing outside the shallow
+        # boundary pulls its history across, which is exactly the server load
+        # this tool exists to remove. It is a backstop, not the main defence:
+        # see clone_readme() for why the node also has to pass --depth=1.
         ('remote.origin.tagOpt', '--no-tags'),
         # Stamped where a human can find it with one command, because a
         # tarball kept for months is the failure mode we cannot prevent, only
